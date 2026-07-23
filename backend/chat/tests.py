@@ -49,6 +49,27 @@ class PresenceVoiceTests(TestCase):
         peers = presence.join_voice(1, 100)  # повторный join тем же uid
         self.assertEqual(peers, [])
 
+    def test_voice_flags_default_to_false(self):
+        self.assertEqual(presence.voice_flags(1), {"muted": False, "deafened": False})
+
+    def test_voice_flags_roundtrip(self):
+        presence.set_voice_flags(1, muted=True, deafened=False)
+        self.assertEqual(presence.voice_flags(1), {"muted": True, "deafened": False})
+
+    def test_voice_members_flags_bulk(self):
+        presence.join_voice(1, 100)
+        presence.join_voice(2, 100)
+        presence.set_voice_flags(1, muted=True, deafened=True)
+        flags = presence.voice_members_flags(100)
+        self.assertEqual(flags["1"], {"muted": True, "deafened": True})
+        self.assertEqual(flags["2"], {"muted": False, "deafened": False})
+
+    def test_clear_voice_resets_flags(self):
+        presence.join_voice(1, 100)
+        presence.set_voice_flags(1, muted=True, deafened=True)
+        presence.clear_voice(1)
+        self.assertEqual(presence.voice_flags(1), {"muted": False, "deafened": False})
+
 
 class TurnCredentialsTests(TestCase):
     def test_credential_matches_hmac_sha1(self):
@@ -182,6 +203,32 @@ class GatewayVoiceSignalingTests(TransactionTestCase):
         offer = await self._receive_until(alice_ws, "voice_offer")
         self.assertEqual(offer["from_user_id"], self.bob.id)
         self.assertEqual(offer["sdp"], "fake-sdp")
+
+        await alice_ws.disconnect()
+        await bob_ws.disconnect()
+
+    async def test_mute_update_relayed_to_peer_and_seen_in_new_peer_flags(self):
+        alice_ws = await self._connect(self.alice)
+        bob_ws = await self._connect(self.bob)
+
+        await self._join_and_drain(alice_ws, self.voice_channel.id)
+
+        await alice_ws.send_json_to({
+            "op": "voice_mute_update", "muted": True, "deafened": False,
+        })
+        # bob ещё не в канале — рассылка идёт всем на сервере (не только
+        # участникам голосового канала), поэтому просто ждём нужный op.
+        seen = await self._receive_until(bob_ws, "voice_mute_update")
+        self.assertEqual(seen["user_id"], self.alice.id)
+        self.assertTrue(seen["muted"])
+        self.assertFalse(seen["deafened"])
+
+        # bob подключается позже — должен сразу увидеть актуальный статус alice.
+        bob_peers = await self._join_and_drain(bob_ws, self.voice_channel.id)
+        self.assertEqual(
+            bob_peers["peer_flags"][str(self.alice.id)],
+            {"muted": True, "deafened": False},
+        )
 
         await alice_ws.disconnect()
         await bob_ws.disconnect()

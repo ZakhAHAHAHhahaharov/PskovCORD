@@ -6,6 +6,7 @@ interface VoiceGateway {
   voiceOffer: (toUserId: number, sdp: string) => void
   voiceAnswer: (toUserId: number, sdp: string) => void
   voiceIceCandidate: (toUserId: number, candidate: RTCIceCandidateInit) => void
+  voiceMuteUpdate: (muted: boolean, deafened: boolean) => void
 }
 
 interface Peer {
@@ -15,20 +16,31 @@ interface Peer {
 
 export type VoiceStatus = 'connecting' | 'connected' | 'failed'
 
+export interface MicState {
+  muted: boolean
+  deafened: boolean
+}
+
 export interface VoiceMesh {
   remoteStreams: Map<number, MediaStream>
   muted: boolean
   toggleMute: () => void
+  deafened: boolean
+  toggleDeafen: () => void
   status: VoiceStatus
   speakingUserIds: Set<number>
+  peerMicState: Map<number, MicState>
 }
 
 const EMPTY_MESH: VoiceMesh = {
   remoteStreams: new Map(),
   muted: true,
   toggleMute: () => {},
+  deafened: false,
+  toggleDeafen: () => {},
   status: 'connecting',
   speakingUserIds: new Set(),
+  peerMicState: new Map(),
 }
 
 // Простой RMS-детектор активности голоса по реальному аудио-потоку (свой
@@ -55,10 +67,12 @@ export function useVoiceMesh(
     new Map(),
   )
   const [muted, setMuted] = useState(true)
+  const [deafened, setDeafened] = useState(false)
   // Честный статус — не "подключено" сразу после join, а по факту хотя бы
   // одного реально установленного RTCPeerConnection (или отсутствия пиров).
   const [status, setStatus] = useState<VoiceStatus>('connecting')
   const [speakingUserIds, setSpeakingUserIds] = useState<Set<number>>(new Set())
+  const [peerMicState, setPeerMicState] = useState<Map<number, MicState>>(new Map())
   const peers = useRef<Map<number, Peer>>(new Map())
   const localStream = useRef<MediaStream | null>(null)
   const remoteStreamsRef = useRef(remoteStreams)
@@ -79,6 +93,12 @@ export function useVoiceMesh(
     peer.pc.close()
     peers.current.delete(userId)
     setRemoteStreams((prev) => {
+      if (!prev.has(userId)) return prev
+      const next = new Map(prev)
+      next.delete(userId)
+      return next
+    })
+    setPeerMicState((prev) => {
       if (!prev.has(userId)) return prev
       const next = new Map(prev)
       next.delete(userId)
@@ -148,6 +168,16 @@ export function useVoiceMesh(
       if (cancelled) return
       const peerIds = d.peer_ids as number[]
       if (peerIds.length === 0) setStatus('connected') // некого ждать
+      const peerFlags = (d.peer_flags ?? {}) as Record<string, MicState>
+      if (Object.keys(peerFlags).length > 0) {
+        setPeerMicState((prev) => {
+          const next = new Map(prev)
+          for (const [uid, flags] of Object.entries(peerFlags)) {
+            next.set(Number(uid), flags)
+          }
+          return next
+        })
+      }
       for (const peerId of peerIds) {
         const peer = ensurePeer(peerId)
         const offer = await peer.pc.createOffer()
@@ -189,6 +219,14 @@ export function useVoiceMesh(
       if (peers.current.has(d.user_id)) closePeer(d.user_id)
     })
 
+    const offMute = gateway.on('voice_mute_update', (d) => {
+      setPeerMicState((prev) => {
+        const next = new Map(prev)
+        next.set(d.user_id, { muted: !!d.muted, deafened: !!d.deafened })
+        return next
+      })
+    })
+
     return () => {
       cancelled = true
       offPeers()
@@ -196,14 +234,25 @@ export function useVoiceMesh(
       offAnswer()
       offIce()
       offState()
+      offMute()
       for (const userId of Array.from(peers.current.keys())) closePeer(userId)
       localStream.current?.getTracks().forEach((t) => t.stop())
       localStream.current = null
       setMuted(true)
+      setDeafened(false)
       setStatus('connecting')
+      setPeerMicState(new Map())
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [voice?.channel.id])
+
+  // Рассылаем свой статус мьюта/дефена остальным участникам канала — им
+  // нужно рисовать значок у себя, а не только знать о самом факте.
+  useEffect(() => {
+    if (!voice) return
+    gateway.voiceMuteUpdate(muted, deafened)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [voice?.channel.id, muted, deafened])
 
   // VAD: анализируем реальные аудио-потоки (свой + remote), которые уже
   // текут через WebRTC, вместо того чтобы гонять "speaking"-события через
@@ -289,7 +338,30 @@ export function useVoiceMesh(
     const enabled = localStream.current.getAudioTracks().some((t) => t.enabled)
     localStream.current.getAudioTracks().forEach((t) => (t.enabled = !enabled))
     setMuted(enabled)
+    // Как в Discord: включение микрофона автоматически снимает дефен.
+    if (!enabled && deafened) setDeafened(false)
   }
 
-  return { remoteStreams, muted, toggleMute, status, speakingUserIds }
+  const toggleDeafen = () => {
+    setDeafened((prev) => {
+      const next = !prev
+      // Дефен глушит и свой микрофон — иначе странно "не слышать", но говорить.
+      if (next && localStream.current) {
+        localStream.current.getAudioTracks().forEach((t) => (t.enabled = false))
+        setMuted(true)
+      }
+      return next
+    })
+  }
+
+  return {
+    remoteStreams,
+    muted,
+    toggleMute,
+    deafened,
+    toggleDeafen,
+    status,
+    speakingUserIds,
+    peerMicState,
+  }
 }

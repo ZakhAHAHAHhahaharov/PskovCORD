@@ -1,6 +1,7 @@
 import { Channel, Member, Server, User } from '../api'
 import Avatar from './Avatar'
 import MicButton from './MicButton'
+import DeafenButton from './DeafenButton'
 import { useVoice } from '../voice'
 import { VoiceState } from './AppShell'
 import { VoiceStatus } from './VoiceProvider'
@@ -32,7 +33,11 @@ export default function ChannelSidebar({
   onCreateChannel: (kind: 'text' | 'voice') => void
   onLogout: () => void
 }) {
-  const { speakingUserIds } = useVoice()
+  const { speakingUserIds, muted, deafened, peerMicState } = useVoice()
+  const micStateOf = (memberId: number): { muted: boolean; deafened: boolean } =>
+    memberId === user.id
+      ? { muted, deafened }
+      : peerMicState.get(memberId) ?? { muted: false, deafened: false }
   const textChannels = channels.filter((c) => c.kind === 'text')
   const voiceChannels = channels.filter((c) => c.kind === 'voice')
 
@@ -98,10 +103,18 @@ export default function ChannelSidebar({
                   </button>
                   {inChannel.map((m) => {
                     const speaking = speakingUserIds.has(m.id)
+                    const mic = micStateOf(m.id)
                     return (
                       <div key={m.id} className="voice-user">
                         <Avatar name={m.username} color={m.avatar_color} size={20} speaking={speaking} />
                         <span className={speaking ? 'speaking' : ''}>{m.username}</span>
+                        <span className="voice-user-icons">
+                          {mic.deafened ? (
+                            <span title="Не слышит участников">🔕</span>
+                          ) : mic.muted ? (
+                            <span title="Микрофон выключен">🔇</span>
+                          ) : null}
+                        </span>
                       </div>
                     )
                   })}
@@ -143,11 +156,19 @@ export default function ChannelSidebar({
         </div>
         <div className="user-panel-actions">
           {voice ? (
-            <MicButton />
+            <>
+              <MicButton />
+              <DeafenButton />
+            </>
           ) : (
-            <button className="icon-btn" title="Микрофон (войдите в голосовой канал)" disabled>
-              🎙️
-            </button>
+            <>
+              <button className="icon-btn" title="Микрофон (войдите в голосовой канал)" disabled>
+                🎙️
+              </button>
+              <button className="icon-btn" title="Звук (войдите в голосовой канал)" disabled>
+                🎧
+              </button>
+            </>
           )}
           <button className="icon-btn" title="Выйти" onClick={onLogout}>
             ⏻

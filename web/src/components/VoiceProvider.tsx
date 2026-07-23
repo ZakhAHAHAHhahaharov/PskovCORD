@@ -30,6 +30,7 @@ export default function VoiceProvider({
         <audio
           key={uid}
           autoPlay
+          muted={mesh.deafened}
           ref={(el) => {
             if (el) el.srcObject = stream
           }}

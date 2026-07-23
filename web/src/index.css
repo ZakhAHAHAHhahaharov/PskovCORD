@@ -357,6 +357,14 @@ input {
   transition: color 100ms ease-out;
 }
 
+.voice-user-icons {
+  display: flex;
+  align-items: center;
+  margin-left: auto;
+  font-size: 12px;
+  opacity: 0.85;
+}
+
 /* ---- voice connected strip ---- */
 .voice-connected {
   display: flex;
