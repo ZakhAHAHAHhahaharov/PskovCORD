@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { api, Channel, Member, Message, Server } from '../api'
 import { useAuth } from '../auth'
 import { useGateway } from '../gateway'
+import { playJoinSound, playLeaveSound } from '../sounds'
 import ServerRail from './ServerRail'
 import ChannelSidebar from './ChannelSidebar'
 import MessageList from './MessageList'
@@ -277,6 +278,40 @@ export default function AppShell() {
     const t = setTimeout(() => handleVoiceStatus('failed'), 15000)
     return () => clearTimeout(t)
   }, [voice, voiceStatus, handleVoiceStatus])
+
+  // Ростер участников ТЕКУЩЕГО голосового канала — с чистого листа при
+  // каждом входе/выходе, чтобы не проигрывать "звук входа" для всех, кто
+  // уже был в канале до нас.
+  const voiceRosterRef = useRef<Set<number>>(new Set())
+  useEffect(() => {
+    voiceRosterRef.current = voice
+      ? new Set(
+          members
+            .filter((m) => m.voice_channel === String(voice.channel.id))
+            .map((m) => m.id),
+        )
+      : new Set()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [voice?.channel.id])
+
+  // Звук при входе/выходе участников звонка, в котором мы сейчас сами —
+  // слышат все, кто уже в этом звонке (не сам вошедший/вышедший).
+  useEffect(() => {
+    if (!voice || !user) return
+    const currentIds = new Set(
+      members
+        .filter((m) => m.voice_channel === String(voice.channel.id))
+        .map((m) => m.id),
+    )
+    const prevIds = voiceRosterRef.current
+    for (const id of currentIds) {
+      if (id !== user.id && !prevIds.has(id)) playJoinSound()
+    }
+    for (const id of prevIds) {
+      if (id !== user.id && !currentIds.has(id)) playLeaveSound()
+    }
+    voiceRosterRef.current = currentIds
+  }, [members, voice, user])
 
   return (
     <VoiceProvider voice={voice} onStatus={handleVoiceStatus}>
