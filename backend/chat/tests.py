@@ -6,11 +6,12 @@ import hashlib
 import hmac
 import time
 
+from asgiref.sync import sync_to_async
 from channels.testing import WebsocketCommunicator
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.test import TestCase, TransactionTestCase
-from rest_framework.test import APITestCase
+from rest_framework.test import APIClient, APITestCase
 from rest_framework_simplejwt.tokens import AccessToken
 
 from . import presence, turn
@@ -247,3 +248,58 @@ class GatewayVoiceSignalingTests(TransactionTestCase):
 
         await alice_ws.disconnect()
         await carol_ws.disconnect()
+
+
+class ChannelCreateBroadcastTests(TransactionTestCase):
+    """POST /channels должен живьём разослать новый канал участникам сервера,
+    а не только вернуть его в ответе создателю (иначе остальным нужно
+    перезагружать страницу, чтобы увидеть новый канал)."""
+
+    def setUp(self):
+        presence._r.flushdb()
+        self.alice = User.objects.create_user(username="alice3", password="pw12345")
+        self.bob = User.objects.create_user(username="bob3", password="pw12345")
+        self.server = Server.objects.create(name="s", owner=self.alice)
+        for u in (self.alice, self.bob):
+            Membership.objects.create(user=u, server=self.server)
+
+    def tearDown(self):
+        presence._r.flushdb()
+
+    async def _connect(self, user):
+        token = str(AccessToken.for_user(user))
+        comm = WebsocketCommunicator(
+            JWTAuthMiddleware(GatewayConsumer.as_asgi()),
+            f"/ws/gateway?token={token}")
+        connected, _ = await comm.connect()
+        self.assertTrue(connected)
+        return comm
+
+    @staticmethod
+    async def _receive_until(comm, op, timeout=2, max_messages=10):
+        """Пропускает "ready"/presence и т.п., пока не найдёт нужный op — как
+        в GatewayVoiceSignalingTests, порядок broadcast vs direct send не
+        гарантирован."""
+        for _ in range(max_messages):
+            msg = await comm.receive_json_from(timeout=timeout)
+            if msg.get("op") == op:
+                return msg
+        raise AssertionError(f"op={op!r} не пришёл за {max_messages} сообщений")
+
+    async def test_other_member_gets_new_channel_over_ws(self):
+        bob_ws = await self._connect(self.bob)
+
+        client = APIClient()
+        client.force_authenticate(self.alice)
+        resp = await sync_to_async(client.post)(
+            f"/api/servers/{self.server.id}/channels",
+            {"name": "новости", "kind": "text"},
+        )
+        self.assertEqual(resp.status_code, 201)
+
+        msg = await self._receive_until(bob_ws, "channel_create")
+        self.assertEqual(msg["server_id"], self.server.id)
+        self.assertEqual(msg["channel"]["name"], "новости")
+        self.assertEqual(msg["channel"]["kind"], "text")
+
+        await bob_ws.disconnect()

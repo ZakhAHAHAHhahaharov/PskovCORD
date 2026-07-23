@@ -1,3 +1,5 @@
+from asgiref.sync import async_to_sync
+from channels.layers import get_channel_layer
 from django.db import transaction
 from django.shortcuts import get_object_or_404
 from rest_framework import status
@@ -100,7 +102,18 @@ class ChannelCreate(APIView):
         position = server.channels.count()
         channel = Channel.objects.create(
             server=server, name=name, kind=kind, position=position)
-        return Response(ChannelSerializer(channel).data, status=201)
+        data = ChannelSerializer(channel).data
+        # Живое обновление списка каналов у остальных участников сервера —
+        # без этого им приходилось перезагружать страницу, чтобы увидеть
+        # новый канал (тот же паттерн, что и voice_state_update).
+        channel_layer = get_channel_layer()
+        async_to_sync(channel_layer.group_send)(
+            f"server_{server_id}", {"type": "broadcast", "payload": {
+                "op": "channel_create",
+                "server_id": server_id,
+                "channel": data,
+            }})
+        return Response(data, status=201)
 
 
 class ChannelMessages(APIView):
