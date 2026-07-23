@@ -12,16 +12,24 @@ GatewayConsumer — единственный WebSocket на клиента (по
     {"op": "voice_offer",         "to_user_id": <id>, "sdp": "..."}
     {"op": "voice_answer",        "to_user_id": <id>, "sdp": "..."}
     {"op": "voice_ice_candidate", "to_user_id": <id>, "candidate": {...}}
+    {"op": "voice_mute_update", "muted": bool, "deafened": bool}
 
 События сервер -> клиент:
     {"op": "ready", "user": {...}}
     {"op": "message_create", "message": {...}}
     {"op": "presence_update", "user_id": <id>, "online": bool}
     {"op": "voice_state_update", "user_id": <id>, "channel_id": <id|null>}
-    {"op": "voice_peers", "channel_id": <id>, "peer_ids": [<id>, ...]}
+    {"op": "voice_peers", "channel_id": <id>, "peer_ids": [<id>, ...],
+     "peer_flags": {<id>: {"muted": bool, "deafened": bool}, ...}}
     {"op": "voice_offer",         "from_user_id": <id>, "sdp": "..."}
     {"op": "voice_answer",        "from_user_id": <id>, "sdp": "..."}
     {"op": "voice_ice_candidate", "from_user_id": <id>, "candidate": {...}}
+    {"op": "voice_mute_update", "user_id": <id>, "muted": bool, "deafened": bool}
+
+voice_mute_update — статус своего микрофона/наушников (мьют, дефен), который
+клиент шлёт при каждом изменении, пока состоит в голосовом канале; сервер
+запоминает его в presence (voice_flags) и рассылает всем на сервере, чтобы
+у остальных участников канала загорался/гас значок мьюта прямо в списке.
 
 WebRTC-сигналинг (voice_offer/voice_answer/voice_ice_candidate) — прямой relay
 1:1 через персональную группу "user_{id}" (см. connect()/disconnect()).
@@ -102,6 +110,8 @@ class GatewayConsumer(AsyncWebsocketConsumer):
             await self._handle_voice_leave()
         elif op in ("voice_offer", "voice_answer", "voice_ice_candidate"):
             await self._handle_voice_relay(op, data)
+        elif op == "voice_mute_update":
+            await self._handle_voice_mute_update(data)
 
     # --- операции -----------------------------------------------------------
     async def _handle_send(self, data):
@@ -127,11 +137,17 @@ class GatewayConsumer(AsyncWebsocketConsumer):
             return
         peer_ids = await asyncio.to_thread(
             presence.join_voice, self.uid, channel_id)
+        peer_flags = await asyncio.to_thread(
+            presence.voice_members_flags, channel_id)
         await self._broadcast_voice(self.user.id, channel_id, server_id)
         await self._send({
             "op": "voice_peers",
             "channel_id": channel_id,
             "peer_ids": [int(p) for p in peer_ids],
+            "peer_flags": {
+                int(uid): flags for uid, flags in peer_flags.items()
+                if uid != self.uid
+            },
         })
 
     async def _handle_voice_leave(self):
@@ -139,6 +155,25 @@ class GatewayConsumer(AsyncWebsocketConsumer):
         if prev:
             server_id = await self._channel_server(prev)
             await self._broadcast_voice(self.user.id, None, server_id)
+
+    async def _handle_voice_mute_update(self, data):
+        muted = bool(data.get("muted"))
+        deafened = bool(data.get("deafened"))
+        channel_id = await asyncio.to_thread(presence.voice_channel, self.uid)
+        if not channel_id:
+            return
+        await asyncio.to_thread(
+            presence.set_voice_flags, self.uid, muted, deafened)
+        server_id = await self._channel_server(channel_id)
+        if not server_id:
+            return
+        await self.channel_layer.group_send(
+            f"server_{server_id}", {"type": "broadcast", "payload": {
+                "op": "voice_mute_update",
+                "user_id": self.user.id,
+                "muted": muted,
+                "deafened": deafened,
+            }})
 
     async def _handle_voice_relay(self, op, data):
         to_user_id = data.get("to_user_id")
