@@ -35,11 +35,12 @@ export default function ChannelSidebar({
   onCreateChannel: (kind: 'text' | 'voice') => void
   onLogout: () => void
 }) {
-  const { speakingUserIds, muted, deafened, peerMicState } = useVoice()
-  const micStateOf = (memberId: number): { muted: boolean; deafened: boolean } =>
-    memberId === user.id
-      ? { muted, deafened }
-      : peerMicState.get(memberId) ?? { muted: false, deafened: false }
+  const { speakingUserIds, muted, deafened } = useVoice()
+  // Для себя — локальное состояние mesh'а (мгновенный отклик на клик);
+  // для остальных — то, что пришло в members (видно всем, даже не
+  // подключённым к этому голосовому каналу вообще).
+  const micStateOf = (member: Member): { muted: boolean; deafened: boolean } =>
+    member.id === user.id ? { muted, deafened } : { muted: member.muted, deafened: member.deafened }
   const textChannels = channels.filter((c) => c.kind === 'text')
   const voiceChannels = channels.filter((c) => c.kind === 'voice')
 
@@ -125,7 +126,7 @@ export default function ChannelSidebar({
                   )}
                   {inChannel.map((m) => {
                     const speaking = speakingUserIds.has(m.id)
-                    const mic = micStateOf(m.id)
+                    const mic = micStateOf(m)
                     return (
                       <div key={m.id} className="voice-user">
                         <Avatar name={m.username} color={m.avatar_color} size={20} speaking={speaking} />

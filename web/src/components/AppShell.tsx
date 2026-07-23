@@ -120,9 +120,20 @@ export default function AppShell() {
             avatar_color: d.avatar_color,
             online: true,
             voice_channel: vc,
+            muted: false,
+            deafened: false,
           },
         ]
       })
+    })
+    // Статус мьюта/дефена — глобально для всех, не только для тех, кто сам
+    // в этом голосовом канале (иначе кольцо/значки видны только "изнутри").
+    const offMicStatus = gateway.on('voice_mute_update', (d) => {
+      setMembers((prev) =>
+        prev.map((m) =>
+          m.id === d.user_id ? { ...m, muted: !!d.muted, deafened: !!d.deafened } : m,
+        ),
+      )
     })
     const offChannelCreate = gateway.on('channel_create', (d) => {
       setServers((prev) =>
@@ -156,6 +167,7 @@ export default function AppShell() {
       offMsgUpdate()
       offPresence()
       offVoice()
+      offMicStatus()
       offChannelCreate()
       offCallState()
     }
