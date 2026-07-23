@@ -109,11 +109,8 @@ export default function ChannelSidebar({
                         <Avatar name={m.username} color={m.avatar_color} size={20} speaking={speaking} />
                         <span className={speaking ? 'speaking' : ''}>{m.username}</span>
                         <span className="voice-user-icons">
-                          {mic.deafened ? (
-                            <span title="Не слышит участников">🔕</span>
-                          ) : mic.muted ? (
-                            <span title="Микрофон выключен">🔇</span>
-                          ) : null}
+                          {mic.muted && <span title="Микрофон выключен">🔇</span>}
+                          {mic.deafened && <span title="Не слышит участников">🔕</span>}
                         </span>
                       </div>
                     )
