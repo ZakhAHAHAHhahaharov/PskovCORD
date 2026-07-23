@@ -78,10 +78,13 @@ class ServerMembers(APIView):
         members = [m.user for m in server.memberships.select_related("user")]
         data = []
         for u in members:
+            is_on = presence.is_online(u.id)
+            eff_status = presence.effective_status(u, is_on)
             flags = presence.voice_flags(u.id)
             data.append({
                 **UserSerializer(u).data,
-                "online": presence.is_online(u.id),
+                "online": eff_status != "offline",
+                "status": eff_status,
                 "voice_channel": presence.voice_channel(u.id),
                 "muted": flags["muted"],
                 "deafened": flags["deafened"],

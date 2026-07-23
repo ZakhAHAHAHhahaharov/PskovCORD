@@ -16,13 +16,14 @@ GatewayConsumer — единственный WebSocket на клиента (по
     {"op": "voice_ice_candidate", "to_user_id": <id>, "candidate": {...}}
     {"op": "voice_mute_update", "muted": bool, "deafened": bool}
     {"op": "voice_topic_update", "topic": "..."}
+    {"op": "set_status", "status": "online" | "dnd" | "invisible"}
 
 События сервер -> клиент:
     {"op": "ready", "user": {...}}
     {"op": "message_create", "message": {...}}
     {"op": "message_update", "message": {...}}
     {"op": "message_delete", "message_id": <id>, "channel_id": <id>}
-    {"op": "presence_update", "user_id": <id>, "online": bool}
+    {"op": "presence_update", "user_id": <id>, "online": bool, "status": "online"|"dnd"|"offline"}
     {"op": "voice_state_update", "user_id": <id>, "channel_id": <id|null>}
     {"op": "voice_peers", "channel_id": <id>, "peer_ids": [<id>, ...],
      "peer_flags": {<id>: {"muted": bool, "deafened": bool}, ...}}
@@ -47,6 +48,10 @@ target-канала — сервер сам берёт канал из presence 
 delete_message — удалить сообщение может автор ИЛИ владелец сервера (админ).
 edit_message — редактировать может ТОЛЬКО автор, даже владелец сервера не
 может править чужие сообщения (может только удалить).
+
+set_status — online/dnd/invisible, это ВЫБОР пользователя, а не факт его
+онлайн-статуса; реальная видимость другим считается отдельно через
+presence.effective_status (invisible всегда маскируется под offline).
 
 WebRTC-сигналинг (voice_offer/voice_answer/voice_ice_candidate) — прямой relay
 1:1 через персональную группу "user_{id}" (см. connect()/disconnect()).
@@ -137,6 +142,8 @@ class GatewayConsumer(AsyncWebsocketConsumer):
             await self._handle_voice_mute_update(data)
         elif op == "voice_topic_update":
             await self._handle_voice_topic_update(data)
+        elif op == "set_status":
+            await self._handle_set_status(data)
 
     # --- операции -----------------------------------------------------------
     async def _handle_send(self, data):
@@ -209,6 +216,15 @@ class GatewayConsumer(AsyncWebsocketConsumer):
             },
         })
 
+    async def _handle_set_status(self, data):
+        value = data.get("status")
+        if value not in (self.user.ONLINE, self.user.DND, self.user.INVISIBLE):
+            return
+        await self._save_status(value)
+        # Мы точно online (шлём через живой сокет) — broadcast пересчитает
+        # эффективный статус (invisible замаскируется под offline для других).
+        await self._broadcast_presence(True)
+
     async def _handle_voice_leave(self):
         prev = await asyncio.to_thread(presence.clear_voice, self.uid)
         if prev:
@@ -263,12 +279,14 @@ class GatewayConsumer(AsyncWebsocketConsumer):
 
     # --- рассылка -----------------------------------------------------------
     async def _broadcast_presence(self, online: bool):
+        eff_status = presence.effective_status(self.user, online)
         payload = {
             "op": "presence_update",
             "user_id": self.user.id,
             "username": self.user.username,
             "avatar_color": self.user.avatar_color,
-            "online": online,
+            "online": eff_status != "offline",
+            "status": eff_status,
         }
         for group in self.server_groups:
             await self.channel_layer.group_send(
@@ -391,3 +409,8 @@ class GatewayConsumer(AsyncWebsocketConsumer):
             return Channel.objects.get(id=channel_id).server_id
         except Channel.DoesNotExist:
             return None
+
+    @database_sync_to_async
+    def _save_status(self, value):
+        self.user.status = value
+        self.user.save(update_fields=["status"])

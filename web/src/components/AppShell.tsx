@@ -102,7 +102,9 @@ export default function AppShell() {
     })
     const offPresence = gateway.on('presence_update', (d) => {
       setMembers((prev) =>
-        prev.map((m) => (m.id === d.user_id ? { ...m, online: d.online } : m)),
+        prev.map((m) =>
+          m.id === d.user_id ? { ...m, online: d.online, status: d.status } : m,
+        ),
       )
     })
     const offVoice = gateway.on('voice_state_update', (d) => {
@@ -115,6 +117,8 @@ export default function AppShell() {
           )
         }
         // Участник, которого ещё не было в загруженном списке — добавляем сразу.
+        // Раз он в голосе — статус по умолчанию 'online' (voice_state_update
+        // не несёт эффективный статус; уточнится следующим presence_update).
         return [
           ...prev,
           {
@@ -122,6 +126,7 @@ export default function AppShell() {
             username: d.username,
             avatar_color: d.avatar_color,
             online: true,
+            status: 'online' as const,
             voice_channel: vc,
             muted: false,
             deafened: false,

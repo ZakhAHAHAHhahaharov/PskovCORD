@@ -147,6 +147,21 @@ def voice_member_ids(channel_id) -> set:
     return set(_r.smembers(_voice_members_key(channel_id)))
 
 
+# --- status -------------------------------------------------------------
+def effective_status(user, online: bool) -> str:
+    """Что видят ДРУГИЕ пользователи.
+
+    Не подключён -> всегда "offline". "invisible" маскируется под "offline"
+    (в этом весь смысл невидимки — реальное online-состояние не палим).
+    "dnd" и "online" видны как есть.
+    """
+    if not online:
+        return "offline"
+    if user.status == user.INVISIBLE:
+        return "offline"
+    return user.status
+
+
 # --- voice mic/deafen flags ---------------------------------------------
 def set_voice_flags(uid, muted: bool, deafened: bool):
     """Запоминает состояние микрофона/наушников — чтобы новый участник канала

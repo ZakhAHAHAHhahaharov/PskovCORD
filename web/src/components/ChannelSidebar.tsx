@@ -1,6 +1,7 @@
 import { Channel, Member, Server, User } from '../api'
 import Avatar from './Avatar'
 import MicButton from './MicButton'
+import StatusMenu from './StatusMenu'
 import DeafenButton from './DeafenButton'
 import CallDuration from './CallDuration'
 import CallTopic from './CallTopic'
@@ -170,20 +171,7 @@ export default function ChannelSidebar({
       )}
 
       <div className="user-panel">
-        <div className="user-panel-id">
-          <Avatar
-            name={user.username}
-            color={user.avatar_color}
-            size={32}
-            online
-            showStatus
-            speaking={speakingUserIds.has(user.id)}
-          />
-          <div className="user-panel-names">
-            <span className="user-panel-username">{user.username}</span>
-            <span className="user-panel-status">В сети</span>
-          </div>
-        </div>
+        <StatusMenu speaking={speakingUserIds.has(user.id)} />
         <div className="user-panel-actions">
           {voice ? (
             <>
