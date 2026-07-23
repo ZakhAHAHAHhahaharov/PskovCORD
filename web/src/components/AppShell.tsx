@@ -7,7 +7,7 @@ import ChannelSidebar from './ChannelSidebar'
 import MessageList from './MessageList'
 import MessageInput from './MessageInput'
 import MembersList from './MembersList'
-import VoiceProvider from './VoiceProvider'
+import VoiceProvider, { VoiceStatus } from './VoiceProvider'
 import DiscoverModal from './DiscoverModal'
 
 export interface VoiceState {
@@ -27,6 +27,7 @@ export default function AppShell() {
   const [members, setMembers] = useState<Member[]>([])
   const [messages, setMessages] = useState<Message[]>([])
   const [voice, setVoice] = useState<VoiceState | null>(null)
+  const [voiceStatus, setVoiceStatus] = useState<VoiceStatus>('connecting')
   const [showDiscover, setShowDiscover] = useState(false)
 
   const currentServer = servers.find((s) => s.id === serverId) || null
@@ -156,8 +157,9 @@ export default function AppShell() {
   const handleJoinVoice = async (ch: Channel) => {
     try {
       const { url, token, room } = await api.livekitToken(ch.id)
-      gateway.voiceJoin(ch.id)
+      setVoiceStatus('connecting')
       setVoice({ channel: ch, url, token, room })
+      // gateway.voiceJoin — только после реального подключения (см. onStatus).
     } catch (e) {
       alert('Не удалось подключиться к голосу: ' + (e as Error).message)
     }
@@ -168,8 +170,41 @@ export default function AppShell() {
     setVoice(null)
   }, [gateway])
 
+  // Реальный статус WebRTC-соединения (не оптимистичный).
+  const handleVoiceStatus = useCallback(
+    (status: VoiceStatus) => {
+      setVoiceStatus(status)
+      if (status === 'connected') {
+        setVoice((v) => {
+          if (v) gateway.voiceJoin(v.channel.id)
+          return v
+        })
+      }
+      if (status === 'failed') {
+        setVoice((v) => {
+          if (v) {
+            gateway.voiceLeave()
+            alert(
+              `Не удалось подключиться к голосовому каналу «${v.channel.name}». ` +
+                'Проверь интернет-соединение (возможна блокировка WebRTC на твоей сети/VPN) и попробуй снова.',
+            )
+          }
+          return null
+        })
+      }
+    },
+    [gateway],
+  )
+
+  // Если подключение зависло дольше 15с — считаем его неудавшимся.
+  useEffect(() => {
+    if (!voice || voiceStatus !== 'connecting') return
+    const t = setTimeout(() => handleVoiceStatus('failed'), 15000)
+    return () => clearTimeout(t)
+  }, [voice, voiceStatus, handleVoiceStatus])
+
   return (
-    <VoiceProvider voice={voice} onLeave={handleLeaveVoice}>
+    <VoiceProvider voice={voice} onLeave={handleLeaveVoice} onStatus={handleVoiceStatus}>
     <div className="app">
       <ServerRail
         servers={servers}
@@ -185,6 +220,7 @@ export default function AppShell() {
         activeChannelId={channelId}
         members={members}
         voice={voice}
+        voiceStatus={voiceStatus}
         user={user!}
         onSelectText={(c) => setChannelId(c.id)}
         onJoinVoice={handleJoinVoice}

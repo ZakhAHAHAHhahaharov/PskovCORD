@@ -2,6 +2,7 @@ import { Channel, Member, Server, User } from '../api'
 import Avatar from './Avatar'
 import MicButton from './MicButton'
 import { VoiceState } from './AppShell'
+import { VoiceStatus } from './VoiceProvider'
 
 export default function ChannelSidebar({
   server,
@@ -9,6 +10,7 @@ export default function ChannelSidebar({
   activeChannelId,
   members,
   voice,
+  voiceStatus,
   user,
   onSelectText,
   onJoinVoice,
@@ -21,6 +23,7 @@ export default function ChannelSidebar({
   activeChannelId: number | null
   members: Member[]
   voice: VoiceState | null
+  voiceStatus: VoiceStatus
   user: User
   onSelectText: (c: Channel) => void
   onJoinVoice: (c: Channel) => void
@@ -107,7 +110,9 @@ export default function ChannelSidebar({
       {voice && (
         <div className="voice-connected">
           <div className="voice-connected-info">
-            <span className="voice-signal">📶 Голос подключён</span>
+            <span className="voice-signal">
+              {voiceStatus === 'connected' ? '📶 Голос подключён' : '⏳ Подключение…'}
+            </span>
             <span className="voice-connected-channel">🔊 {voice.channel.name}</span>
           </div>
           <button className="voice-disconnect" title="Отключиться" onClick={onLeaveVoice}>
