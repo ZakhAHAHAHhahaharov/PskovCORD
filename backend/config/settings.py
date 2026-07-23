@@ -93,10 +93,10 @@ SIMPLE_JWT = {
     "REFRESH_TOKEN_LIFETIME": timedelta(days=7),
 }
 
-# LiveKit
-LIVEKIT_URL = os.getenv("LIVEKIT_URL", "ws://localhost:7880")
-LIVEKIT_API_KEY = os.getenv("LIVEKIT_API_KEY", "devkey")
-LIVEKIT_API_SECRET = os.getenv("LIVEKIT_API_SECRET", "secret")
+# TURN/STUN (coturn, REST shared-secret)
+TURN_SECRET = os.getenv("TURN_SECRET", "dev-insecure-turn-secret")
+TURN_HOST = os.getenv("TURN_HOST", "localhost")
+TURN_PORT = os.getenv("TURN_PORT", "3478")
 
 # CORS: в dev разрешаем всё (Vite :5173, Electron file://).
 CORS_ALLOW_ALL_ORIGINS = DEBUG
