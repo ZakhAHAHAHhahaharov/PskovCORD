@@ -622,11 +622,6 @@ input {
   color: var(--text-faint);
 }
 
-.member-name.speaking {
-  color: #fff;
-  transition: color 100ms ease-out;
-}
-
 .member-voice {
   font-size: 12px;
   color: var(--text-muted);

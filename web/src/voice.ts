@@ -77,6 +77,9 @@ export function useVoiceMesh(
   const localStream = useRef<MediaStream | null>(null)
   const remoteStreamsRef = useRef(remoteStreams)
   remoteStreamsRef.current = remoteStreams
+  // Состояние мьюта микрофона на момент включения дефена — чтобы при
+  // выключении дефена вернуть именно его, а не всегда размьючивать.
+  const mutedBeforeDeafen = useRef(false)
 
   const evaluateStatus = () => {
     const states = Array.from(peers.current.values()).map((p) => p.pc.connectionState)
@@ -238,6 +241,7 @@ export function useVoiceMesh(
       for (const userId of Array.from(peers.current.keys())) closePeer(userId)
       localStream.current?.getTracks().forEach((t) => t.stop())
       localStream.current = null
+      mutedBeforeDeafen.current = false
       setMuted(true)
       setDeafened(false)
       setStatus('connecting')
@@ -345,10 +349,19 @@ export function useVoiceMesh(
   const toggleDeafen = () => {
     setDeafened((prev) => {
       const next = !prev
-      // Дефен глушит и свой микрофон — иначе странно "не слышать", но говорить.
-      if (next && localStream.current) {
-        localStream.current.getAudioTracks().forEach((t) => (t.enabled = false))
+      if (next) {
+        // Дефен глушит и свой микрофон — иначе странно "не слышать", но
+        // говорить. Запоминаем, был ли микрофон замьючен вручную, чтобы
+        // при снятии дефена вернуть именно это состояние.
+        mutedBeforeDeafen.current = muted
+        localStream.current?.getAudioTracks().forEach((t) => (t.enabled = false))
         setMuted(true)
+      } else {
+        // Возвращаем микрофон в состояние, которое было до дефена: если он
+        // был замьючен вручную — остаётся замьюченным, иначе размьючивается.
+        const restoreMuted = mutedBeforeDeafen.current
+        localStream.current?.getAudioTracks().forEach((t) => (t.enabled = !restoreMuted))
+        setMuted(restoreMuted)
       }
       return next
     })
