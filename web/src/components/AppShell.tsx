@@ -31,6 +31,7 @@ export default function AppShell() {
   const currentServer = servers.find((s) => s.id === serverId) || null
   const channels = currentServer?.channels || []
   const currentChannel = channels.find((c) => c.id === channelId) || null
+  const isServerOwner = currentServer?.owner === user?.id
 
   const selectServer = useCallback((s: Server) => {
     setServerId(s.id)
@@ -83,6 +84,10 @@ export default function AppShell() {
           prev.some((m) => m.id === d.message.id) ? prev : [...prev, d.message],
         )
       }
+    })
+    const offMsgDelete = gateway.on('message_delete', (d) => {
+      if (d.channel_id !== channelId) return
+      setMessages((prev) => prev.filter((m) => m.id !== d.message_id))
     })
     const offPresence = gateway.on('presence_update', (d) => {
       setMembers((prev) =>
@@ -139,6 +144,7 @@ export default function AppShell() {
     })
     return () => {
       offMsg()
+      offMsgDelete()
       offPresence()
       offVoice()
       offChannelCreate()
@@ -178,6 +184,10 @@ export default function AppShell() {
 
   const handleSend = (content: string) => {
     if (channelId != null) gateway.sendMessage(channelId, content)
+  }
+
+  const handleDeleteMessage = (messageId: number) => {
+    gateway.deleteMessage(messageId)
   }
 
   const handleJoinVoice = async (ch: Channel) => {
@@ -261,7 +271,12 @@ export default function AppShell() {
               <span className="hash">#</span>
               <span className="chat-header-name">{currentChannel.name}</span>
             </header>
-            <MessageList messages={messages} />
+            <MessageList
+              messages={messages}
+              currentUserId={user!.id}
+              canModerate={isServerOwner}
+              onDelete={handleDeleteMessage}
+            />
             <MessageInput
               channelName={currentChannel.name}
               onSend={handleSend}

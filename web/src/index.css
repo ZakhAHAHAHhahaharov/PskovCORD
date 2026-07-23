@@ -565,6 +565,7 @@ input {
 }
 
 .message-row {
+  position: relative;
   display: flex;
   gap: 16px;
   padding: 6px 0;
@@ -577,6 +578,38 @@ input {
 
 .message-body {
   min-width: 0;
+  flex: 1;
+}
+
+.message-actions {
+  position: absolute;
+  top: -14px;
+  right: 8px;
+  display: none;
+  gap: 2px;
+  background: var(--chat-bg);
+  border: 1px solid var(--channel-hover);
+  border-radius: 6px;
+  padding: 2px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+}
+
+.message-row:hover .message-actions {
+  display: flex;
+}
+
+.message-action {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  font-size: 14px;
+}
+
+.message-action:hover {
+  background: var(--channel-hover);
 }
 
 .message-meta {

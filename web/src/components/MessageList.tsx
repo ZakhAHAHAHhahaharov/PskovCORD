@@ -12,7 +12,18 @@ function formatTime(iso: string): string {
   })
 }
 
-export default function MessageList({ messages }: { messages: Message[] }) {
+export default function MessageList({
+  messages,
+  currentUserId,
+  canModerate,
+  onDelete,
+}: {
+  messages: Message[]
+  currentUserId: number
+  /** Владелец сервера — может удалять чужие сообщения. */
+  canModerate: boolean
+  onDelete: (messageId: number) => void
+}) {
   const bottomRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -24,18 +35,32 @@ export default function MessageList({ messages }: { messages: Message[] }) {
       {messages.length === 0 && (
         <div className="message-empty">Пока нет сообщений. Напиши первым!</div>
       )}
-      {messages.map((m) => (
-        <div key={m.id} className="message-row">
-          <Avatar name={m.author.username} color={m.author.avatar_color} size={40} />
-          <div className="message-body">
-            <div className="message-meta">
-              <span className="message-author">{m.author.username}</span>
-              <span className="message-time">{formatTime(m.created_at)}</span>
+      {messages.map((m) => {
+        const isAuthor = m.author.id === currentUserId
+        return (
+          <div key={m.id} className="message-row">
+            <Avatar name={m.author.username} color={m.author.avatar_color} size={40} />
+            <div className="message-body">
+              <div className="message-meta">
+                <span className="message-author">{m.author.username}</span>
+                <span className="message-time">{formatTime(m.created_at)}</span>
+              </div>
+              <div className="message-content">{m.content}</div>
             </div>
-            <div className="message-content">{m.content}</div>
+            {(isAuthor || canModerate) && (
+              <div className="message-actions">
+                <button
+                  className="message-action"
+                  title="Удалить"
+                  onClick={() => onDelete(m.id)}
+                >
+                  🗑️
+                </button>
+              </div>
+            )}
           </div>
-        </div>
-      ))}
+        )
+      })}
       <div ref={bottomRef} />
     </div>
   )
