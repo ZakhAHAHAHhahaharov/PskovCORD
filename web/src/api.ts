@@ -37,6 +37,7 @@ export interface Message {
   content: string
   reply_to: MessageReply | null
   created_at: string
+  edited_at: string | null
 }
 
 export interface Member extends User {

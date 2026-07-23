@@ -14,6 +14,7 @@ interface GatewayCtx {
   on: (op: string, handler: Handler) => () => void
   sendMessage: (channelId: number, content: string, replyTo?: number | null) => void
   deleteMessage: (messageId: number) => void
+  editMessage: (messageId: number, content: string) => void
   voiceJoin: (channelId: number) => void
   voiceLeave: () => void
   voiceOffer: (toUserId: number, sdp: string) => void
@@ -93,6 +94,8 @@ export function GatewayProvider({ children }: { children: ReactNode }) {
     sendMessage: (channelId, content, replyTo) =>
       raw({ op: 'send_message', channel_id: channelId, content, reply_to: replyTo ?? null }),
     deleteMessage: (messageId) => raw({ op: 'delete_message', message_id: messageId }),
+    editMessage: (messageId, content) =>
+      raw({ op: 'edit_message', message_id: messageId, content }),
     voiceJoin: (channelId) => raw({ op: 'voice_join', channel_id: channelId }),
     voiceLeave: () => raw({ op: 'voice_leave' }),
     voiceOffer: (toUserId, sdp) =>

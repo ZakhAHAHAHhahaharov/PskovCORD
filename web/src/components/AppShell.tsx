@@ -91,6 +91,12 @@ export default function AppShell() {
       if (d.channel_id !== channelId) return
       setMessages((prev) => prev.filter((m) => m.id !== d.message_id))
     })
+    const offMsgUpdate = gateway.on('message_update', (d) => {
+      if (d.message.channel !== channelId) return
+      setMessages((prev) =>
+        prev.map((m) => (m.id === d.message.id ? d.message : m)),
+      )
+    })
     const offPresence = gateway.on('presence_update', (d) => {
       setMembers((prev) =>
         prev.map((m) => (m.id === d.user_id ? { ...m, online: d.online } : m)),
@@ -147,6 +153,7 @@ export default function AppShell() {
     return () => {
       offMsg()
       offMsgDelete()
+      offMsgUpdate()
       offPresence()
       offVoice()
       offChannelCreate()
@@ -192,6 +199,10 @@ export default function AppShell() {
 
   const handleDeleteMessage = (messageId: number) => {
     gateway.deleteMessage(messageId)
+  }
+
+  const handleEditMessage = (messageId: number, content: string) => {
+    gateway.editMessage(messageId, content)
   }
 
   const handleJoinVoice = async (ch: Channel) => {
@@ -280,6 +291,7 @@ export default function AppShell() {
               currentUserId={user!.id}
               canModerate={isServerOwner}
               onDelete={handleDeleteMessage}
+              onEdit={handleEditMessage}
               onReply={setReplyTarget}
             />
             <MessageInput
