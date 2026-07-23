@@ -1,10 +1,16 @@
-# Референсный конфиг (до certbot). Реальный файл на сервере:
-# /etc/nginx/sites-available/pskovcord — certbot дописывает в него SSL-блок
-# и редирект с 80 на 443 автоматически (certbot --nginx).
+# Реальный файл на сервере: /etc/nginx/sites-available/pskovcord
+# TLS — общий wildcard-сертификат *.zlgvpn.org, лежит на сервере в
+# /etc/letsencrypt/live/zlgvpn.org/ (выпускается/продлевается централизованно,
+# НЕ через certbot этого сервера — свой renewal-таймер сюда не относится).
 
 server {
-    listen 80;
+    listen 443 ssl;
     server_name pskord.zlgvpn.org;
+
+    ssl_certificate /etc/letsencrypt/live/zlgvpn.org/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/zlgvpn.org/privkey.pem;
+    include /etc/letsencrypt/options-ssl-nginx.conf;
+    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
 
     location / {
         proxy_pass http://127.0.0.1:8000;
@@ -24,4 +30,10 @@ server {
         proxy_set_header Host $host;
         proxy_read_timeout 3600s;
     }
+}
+
+server {
+    listen 80;
+    server_name pskord.zlgvpn.org;
+    return 301 https://$host$request_uri;
 }
