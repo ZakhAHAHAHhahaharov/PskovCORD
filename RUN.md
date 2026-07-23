@@ -13,7 +13,7 @@
 | Веб-клиент | — | собран в `web\dist`, отдаётся бэкендом (один адрес :8000) |
 | PostgreSQL | 5432 | служба Windows `postgresql-x64-18` |
 | Redis (presence + чат) | 6379 | служба `Memurai` |
-| LiveKit (голос, SFU) | 7880 | `tools\livekit-server.exe` |
+| coturn (голос, STUN/TURN) | 3478 | Docker/WSL2 (см. ниже) |
 
 Открывать приложение: **http://localhost:8000**
 
@@ -37,33 +37,33 @@ npm run build
 cd ..
 ```
 
-Redis (Memurai) и LiveKit ставились через `choco install memurai-developer redis-64`;
-`tools\livekit-server.exe` скачан с github.com/livekit/livekit/releases.
+Redis (Memurai) ставился через `choco install memurai-developer redis-64`.
+Голос (coturn) на этой машине поднимается через Docker/WSL2 — своего Windows-бинарника
+в проекте нет, см. `docker-compose.yml` за флагами запуска.
 
 ---
 
 ## Запуск (каждый раз)
 
 Убедись, что службы PostgreSQL и Memurai запущены (обычно стартуют сами при загрузке).
-Дальше — один скрипт поднимает LiveKit + backend:
+Голос требует свой coturn — на этой машине он поднимается отдельно через Docker/WSL2:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File D:\PSkovskiyCORD\start-native.ps1
+docker run --rm --network=host coturn/coturn --listening-port=3478 --min-port=49160 `
+  --max-port=49200 --realm=pskovcord.local --use-auth-secret `
+  --static-auth-secret=<TURN_SECRET из backend\.env>
+```
+
+Дальше — backend (применяет миграции и слушает :8000, отдаёт и собранный веб-клиент):
+
+```powershell
+cd D:\PSkovskiyCORD\backend
+.\.venv\Scripts\python.exe manage.py migrate --noinput
+.\.venv\Scripts\daphne.exe -b 0.0.0.0 -p 8000 config.asgi:application
 ```
 
 Открой **http://localhost:8000**, зарегистрируйся, создай сервер (кнопка **+**),
 добавь каналы, пиши в чат, заходи в голосовой канал.
-
-### Или вручную (если нужно видеть логи)
-
-```powershell
-# LiveKit (голос)
-D:\PSkovskiyCORD\tools\livekit-server.exe --dev --bind 0.0.0.0 --node-ip 127.0.0.1
-
-# Backend (в отдельном окне)
-cd D:\PSkovskiyCORD\backend
-.\.venv\Scripts\daphne.exe -b 0.0.0.0 -p 8000 config.asgi:application
-```
 
 > После изменений в коде фронта пересобери: `cd web; npm run build`.
 > Для разработки с hot-reload: `cd web; npm run dev` (откроется на :5173).
@@ -76,9 +76,13 @@ cd D:\PSkovskiyCORD\backend
 
 ---
 
-## Голос (LiveKit)
+## Голос (свой WebRTC mesh)
 
-- **Локально** (ты на этом ПК): работает сразу, `backend\.env` указывает на `ws://localhost:7880`.
+- **Локально** (ты на этом ПК) или в одной LAN без строгого NAT: обычно работает и без
+  запущенного coturn — браузеры находят друг друга по host/srflx ICE-кандидатам напрямую.
+- coturn нужен, когда прямое соединение не проходит (за NAT/фаерволом) — тогда
+  `backend\.env` должен указывать на реально запущенный `TURN_HOST`/`TURN_SECRET`,
+  иначе голос в таких случаях просто не подключится.
 - **Микрофон требует HTTPS** — браузеры дают доступ к микрофону только на `https://`
   или на `http://localhost`. Поэтому по `http://LAN-IP:8000` микрофон включить нельзя.
 
@@ -86,30 +90,42 @@ cd D:\PSkovskiyCORD\backend
 
 ## Доступ друзьям (через интернет)
 
-Нужны два условия: приложение по **HTTPS** и LiveKit по **WSS+TURN**.
+**Рекомендуется — реальный деплой** (см. [DEPLOY.md](DEPLOY.md)): `https://pskord.zlgvpn.org`
+уже поднят на сервере со своим coturn, портами наружу и постоянным TLS. Это самый
+надёжный вариант для друзей.
 
-1. **LiveKit Cloud** (cloud.livekit.io, бесплатно): в `backend\.env` уже прописаны
-   `LIVEKIT_URL=wss://...livekit.cloud`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`.
-   (Вернуть локальный LiveKit — поставить обратно `ws://localhost:7880` / `devkey` / `secret`.)
-2. **HTTPS-туннель** для приложения:
+Разовый ad-hoc запуск с этого ПК через HTTP-туннель (cloudflared и т.п.) теперь работает
+только частично: туннель прокидывает HTTPS-приложение, но **не** UDP-трафик голоса.
+С self-hosted mesh это значит:
+
+1. **HTTPS-туннель** для самого приложения — как раньше:
 
    ```powershell
    cloudflared tunnel --protocol http2 --url http://localhost:8000
    ```
 
-   Даст адрес `https://...trycloudflare.com`. Дай его другу.
+   Даст адрес `https://...trycloudflare.com`. Текстовый чат и вход в сервер по нему заработают.
 
-> ⚠️ На этой сети (через v2rayN) туннель нестабилен — рвётся соединение с Cloudflare
+2. **Голос через туннель отдельно не поедет** — тоннель не тащит UDP TURN-relay coturn.
+   Чтобы голос заработал с друзьями через интернет без реального сервера, нужно
+   пробросить на роутере `3478/udp+tcp` и `49160-49200/udp` на эту машину и указать
+   в `backend\.env` `TURN_HOST=<твой публичный IP>`. Это ощутимо больше телодвижений, чем
+   раньше с LiveKit Cloud (там TURN был вообще не нужен со стороны клиента) — поэтому
+   для разовых созвонов с друзьями практичнее задеплоить на реальный сервер.
+
+> ⚠️ На этой сети (через v2rayN) HTTP-туннель нестабилен — рвётся соединение с Cloudflare
 > (ошибка **1033**). Если отключить VPN и остаётся рабочий интернет — туннель станет
-> стабильным. Надёжное решение для друзей — деплой на реальный сервер (см. TODO.md, Шаг деплоя).
+> стабильным.
 
 ---
 
 ## Остановить
 
 ```powershell
-Get-Process livekit-server,daphne,cloudflared -ErrorAction SilentlyContinue | Stop-Process -Force
+Get-Process daphne,cloudflared -ErrorAction SilentlyContinue | Stop-Process -Force
 ```
+
+(coturn, если запущен через `docker run`, остановить через `docker stop`/Ctrl+C в его окне.)
 
 (PostgreSQL и Memurai — службы, останавливать не нужно.)
 
@@ -119,6 +135,7 @@ Get-Process livekit-server,daphne,cloudflared -ErrorAction SilentlyContinue | St
 
 - **Страница не грузится** — проверь, что бэкенд слушает: `Get-NetTCPConnection -LocalPort 8000 -State Listen`.
 - **Микрофон не включается у друзей** — это HTTPS-ограничение (см. выше), нужен https-адрес.
-- **Голос не соединяется** — проверь, что LiveKit слушает :7880 (локально) или что ключи
-  LiveKit Cloud в `backend\.env` верные. После правки `.env` — перезапусти backend.
+- **Голос не соединяется** — обычно NAT/фаервол без рабочего TURN. Проверь, что coturn
+  запущен и слушает :3478, а `TURN_HOST`/`TURN_SECRET` в `backend\.env` совпадают с тем,
+  что реально настроено у coturn. После правки `.env` — перезапусти backend.
 - **Ошибка 1033 у туннеля** — соединение cloudflared с Cloudflare оборвалось (сеть/VPN).
