@@ -1,0 +1,27 @@
+# Референсный конфиг (до certbot). Реальный файл на сервере:
+# /etc/nginx/sites-available/pskovcord — certbot дописывает в него SSL-блок
+# и редирект с 80 на 443 автоматически (certbot --nginx).
+
+server {
+    listen 80;
+    server_name pskord.zlgvpn.org;
+
+    location / {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # WebSocket-gateway — отдельный location с upgrade-заголовками
+    # и увеличенным read timeout (голосовые/чат-сессии живут долго).
+    location /ws/ {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_read_timeout 3600s;
+    }
+}
