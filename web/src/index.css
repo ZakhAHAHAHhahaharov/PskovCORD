@@ -637,7 +637,33 @@ input {
   white-space: pre-wrap;
 }
 
-.message-input {
+.message-reply-quote {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  margin-bottom: 2px;
+  padding-left: 10px;
+  border-left: 2px solid var(--text-faint);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.message-reply-author {
+  flex-shrink: 0;
+  font-weight: 600;
+  color: var(--text-normal);
+}
+
+.message-reply-content {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.message-input-wrap {
   padding: 0 16px 24px;
 }
 
@@ -654,6 +680,39 @@ input {
 
 .message-input input::placeholder {
   color: var(--text-faint);
+}
+
+.reply-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 16px;
+  margin-bottom: 4px;
+  background: #383a40;
+  border-radius: 8px 8px 0 0;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.reply-banner-text {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.reply-banner-cancel {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  font-size: 14px;
+  padding: 2px 4px;
+  border-radius: 3px;
+}
+
+.reply-banner-cancel:hover {
+  color: var(--text-normal);
+  background: var(--channel-hover);
 }
 
 /* ---- members ---- */

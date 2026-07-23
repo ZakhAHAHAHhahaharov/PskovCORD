@@ -17,12 +17,14 @@ export default function MessageList({
   currentUserId,
   canModerate,
   onDelete,
+  onReply,
 }: {
   messages: Message[]
   currentUserId: number
   /** Владелец сервера — может удалять чужие сообщения. */
   canModerate: boolean
   onDelete: (messageId: number) => void
+  onReply: (message: Message) => void
 }) {
   const bottomRef = useRef<HTMLDivElement>(null)
 
@@ -41,14 +43,27 @@ export default function MessageList({
           <div key={m.id} className="message-row">
             <Avatar name={m.author.username} color={m.author.avatar_color} size={40} />
             <div className="message-body">
+              {m.reply_to && (
+                <div className="message-reply-quote">
+                  <span className="message-reply-author">{m.reply_to.author.username}</span>
+                  <span className="message-reply-content">{m.reply_to.content}</span>
+                </div>
+              )}
               <div className="message-meta">
                 <span className="message-author">{m.author.username}</span>
                 <span className="message-time">{formatTime(m.created_at)}</span>
               </div>
               <div className="message-content">{m.content}</div>
             </div>
-            {(isAuthor || canModerate) && (
-              <div className="message-actions">
+            <div className="message-actions">
+              <button
+                className="message-action"
+                title="Ответить"
+                onClick={() => onReply(m)}
+              >
+                ↩️
+              </button>
+              {(isAuthor || canModerate) && (
                 <button
                   className="message-action"
                   title="Удалить"
@@ -56,8 +71,8 @@ export default function MessageList({
                 >
                   🗑️
                 </button>
-              </div>
-            )}
+              )}
+            </div>
           </div>
         )
       })}

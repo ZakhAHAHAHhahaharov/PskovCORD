@@ -24,11 +24,18 @@ export interface Server {
   channels: Channel[]
 }
 
+export interface MessageReply {
+  id: number
+  author: User
+  content: string
+}
+
 export interface Message {
   id: number
   channel: number
   author: User
   content: string
+  reply_to: MessageReply | null
   created_at: string
 }
 

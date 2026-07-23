@@ -27,6 +27,7 @@ export default function AppShell() {
   const [voice, setVoice] = useState<VoiceState | null>(null)
   const [voiceStatus, setVoiceStatus] = useState<VoiceStatus>('connecting')
   const [showDiscover, setShowDiscover] = useState(false)
+  const [replyTarget, setReplyTarget] = useState<Message | null>(null)
 
   const currentServer = servers.find((s) => s.id === serverId) || null
   const channels = currentServer?.channels || []
@@ -62,6 +63,7 @@ export default function AppShell() {
 
   // История сообщений при смене текстового канала.
   useEffect(() => {
+    setReplyTarget(null)
     if (!currentChannel || currentChannel.kind !== 'text') {
       setMessages([])
       return
@@ -183,7 +185,9 @@ export default function AppShell() {
   }
 
   const handleSend = (content: string) => {
-    if (channelId != null) gateway.sendMessage(channelId, content)
+    if (channelId == null) return
+    gateway.sendMessage(channelId, content, replyTarget?.id ?? null)
+    setReplyTarget(null)
   }
 
   const handleDeleteMessage = (messageId: number) => {
@@ -276,10 +280,13 @@ export default function AppShell() {
               currentUserId={user!.id}
               canModerate={isServerOwner}
               onDelete={handleDeleteMessage}
+              onReply={setReplyTarget}
             />
             <MessageInput
               channelName={currentChannel.name}
               onSend={handleSend}
+              replyTarget={replyTarget}
+              onCancelReply={() => setReplyTarget(null)}
             />
           </>
         ) : (
