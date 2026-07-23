@@ -93,6 +93,11 @@ class ChannelCreate(APIView):
         server = get_object_or_404(Server, id=server_id)
         if not is_member(request.user, server):
             return Response({"detail": "Вы не участник сервера."}, status=403)
+        if request.user.id != server.owner_id:
+            return Response(
+                {"detail": "Только владелец сервера может создавать каналы."},
+                status=403,
+            )
         name = (request.data.get("name") or "").strip()
         kind = request.data.get("kind", Channel.TEXT)
         if not name:
