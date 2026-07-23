@@ -16,6 +16,10 @@ export interface Channel {
   name: string
   kind: 'text' | 'voice'
   position: number
+  /** Момент начала текущего разговора (unix-секунды), null если пусто. Только voice. */
+  call_started_at: number | null
+  /** Статус звонка, который видят все; null если пусто. Только voice. */
+  topic: string | null
 }
 
 export interface Server {
@@ -26,18 +30,29 @@ export interface Server {
   channels: Channel[]
 }
 
+export interface MessageReply {
+  id: number
+  author: User
+  content: string
+}
+
 export interface Message {
   id: number
   channel: number
   author: User
   content: string
+  reply_to: MessageReply | null
   created_at: string
+  edited_at: string | null
 }
 
 export interface Member extends Omit<User, 'status'> {
   online: boolean
   voice_channel: string | null
   status: EffectiveStatus
+  /** Статус микрофона/наушников — виден всем, даже не подключённым к каналу. */
+  muted: boolean
+  deafened: boolean
 }
 
 export interface DiscoverServer {

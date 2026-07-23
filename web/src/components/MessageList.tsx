@@ -12,30 +12,94 @@ function formatTime(iso: string): string {
   })
 }
 
-export default function MessageList({ messages }: { messages: Message[] }) {
+export default function MessageList({
+  messages,
+  currentUserId,
+  canModerate,
+  editingId,
+  onDelete,
+  onEditRequest,
+  onReply,
+}: {
+  messages: Message[]
+  currentUserId: number
+  /** Владелец сервера — может удалять чужие сообщения (но не редактировать). */
+  canModerate: boolean
+  /** id сообщения, которое сейчас редактируется внизу в композере. */
+  editingId: number | null
+  onDelete: (messageId: number) => void
+  onEditRequest: (message: Message) => void
+  onReply: (message: Message) => void
+}) {
   const bottomRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
 
+  const confirmDelete = (m: Message) => {
+    if (window.confirm('Удалить это сообщение? Действие необратимо.')) {
+      onDelete(m.id)
+    }
+  }
+
   return (
     <div className="message-list">
       {messages.length === 0 && (
         <div className="message-empty">Пока нет сообщений. Напиши первым!</div>
       )}
-      {messages.map((m) => (
-        <div key={m.id} className="message-row">
-          <Avatar name={m.author.username} color={m.author.avatar_color} size={40} />
-          <div className="message-body">
-            <div className="message-meta">
-              <span className="message-author">{m.author.username}</span>
-              <span className="message-time">{formatTime(m.created_at)}</span>
+      {messages.map((m) => {
+        const isAuthor = m.author.id === currentUserId
+        return (
+          <div
+            key={m.id}
+            className={`message-row ${editingId === m.id ? 'editing' : ''}`}
+          >
+            <Avatar name={m.author.username} color={m.author.avatar_color} size={40} />
+            <div className="message-body">
+              {m.reply_to && (
+                <div className="message-reply-quote">
+                  <span className="message-reply-author">{m.reply_to.author.username}</span>
+                  <span className="message-reply-content">{m.reply_to.content}</span>
+                </div>
+              )}
+              <div className="message-meta">
+                <span className="message-author">{m.author.username}</span>
+                <span className="message-time">{formatTime(m.created_at)}</span>
+                {m.edited_at && <span className="message-edited">(изменено)</span>}
+              </div>
+              <div className="message-content">{m.content}</div>
             </div>
-            <div className="message-content">{m.content}</div>
+            <div className="message-actions">
+              <button
+                className="message-action"
+                title="Ответить"
+                onClick={() => onReply(m)}
+              >
+                ↩️
+              </button>
+              {isAuthor && (
+                <button
+                  className="message-action"
+                  title="Изменить"
+                  onClick={() => onEditRequest(m)}
+                >
+                  ✏️
+                </button>
+              )}
+              {(isAuthor || canModerate) && (
+                <button
+                  className="message-action"
+                  title="Удалить"
+                  onClick={() => confirmDelete(m)}
+                >
+                  🗑️
+                </button>
+              )}
+            </div>
           </div>
-        </div>
-      ))}
+        )
+      })}
       <div ref={bottomRef} />
     </div>
   )

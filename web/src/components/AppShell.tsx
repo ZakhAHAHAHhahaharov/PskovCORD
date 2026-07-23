@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { api, Channel, Member, Message, Server } from '../api'
 import { useAuth } from '../auth'
 import { useGateway } from '../gateway'
+import { playJoinSound, playLeaveSound } from '../sounds'
 import ServerRail from './ServerRail'
 import ChannelSidebar from './ChannelSidebar'
 import MessageList from './MessageList'
@@ -16,7 +17,7 @@ export interface VoiceState {
 }
 
 export default function AppShell() {
-  const { logout } = useAuth()
+  const { user, logout } = useAuth()
   const gateway = useGateway()
 
   const [servers, setServers] = useState<Server[]>([])
@@ -27,10 +28,13 @@ export default function AppShell() {
   const [voice, setVoice] = useState<VoiceState | null>(null)
   const [voiceStatus, setVoiceStatus] = useState<VoiceStatus>('connecting')
   const [showDiscover, setShowDiscover] = useState(false)
+  const [replyTarget, setReplyTarget] = useState<Message | null>(null)
+  const [editTarget, setEditTarget] = useState<Message | null>(null)
 
   const currentServer = servers.find((s) => s.id === serverId) || null
   const channels = currentServer?.channels || []
   const currentChannel = channels.find((c) => c.id === channelId) || null
+  const isServerOwner = currentServer?.owner === user?.id
 
   const selectServer = useCallback((s: Server) => {
     setServerId(s.id)
@@ -61,6 +65,8 @@ export default function AppShell() {
 
   // История сообщений при смене текстового канала.
   useEffect(() => {
+    setReplyTarget(null)
+    setEditTarget(null)
     if (!currentChannel || currentChannel.kind !== 'text') {
       setMessages([])
       return
@@ -83,6 +89,16 @@ export default function AppShell() {
           prev.some((m) => m.id === d.message.id) ? prev : [...prev, d.message],
         )
       }
+    })
+    const offMsgDelete = gateway.on('message_delete', (d) => {
+      if (d.channel_id !== channelId) return
+      setMessages((prev) => prev.filter((m) => m.id !== d.message_id))
+    })
+    const offMsgUpdate = gateway.on('message_update', (d) => {
+      if (d.message.channel !== channelId) return
+      setMessages((prev) =>
+        prev.map((m) => (m.id === d.message.id ? d.message : m)),
+      )
     })
     const offPresence = gateway.on('presence_update', (d) => {
       setMembers((prev) =>
@@ -112,14 +128,56 @@ export default function AppShell() {
             online: true,
             status: 'online' as const,
             voice_channel: vc,
+            muted: false,
+            deafened: false,
           },
         ]
       })
     })
+    // Статус мьюта/дефена — глобально для всех, не только для тех, кто сам
+    // в этом голосовом канале (иначе кольцо/значки видны только "изнутри").
+    const offMicStatus = gateway.on('voice_mute_update', (d) => {
+      setMembers((prev) =>
+        prev.map((m) =>
+          m.id === d.user_id ? { ...m, muted: !!d.muted, deafened: !!d.deafened } : m,
+        ),
+      )
+    })
+    const offChannelCreate = gateway.on('channel_create', (d) => {
+      setServers((prev) =>
+        prev.map((s) =>
+          s.id === d.server_id
+            ? {
+                ...s,
+                channels: s.channels.some((c) => c.id === d.channel.id)
+                  ? s.channels
+                  : [...s.channels, d.channel],
+              }
+            : s,
+        ),
+      )
+    })
+    const offCallState = gateway.on('voice_call_state', (d) => {
+      setServers((prev) =>
+        prev.map((s) => ({
+          ...s,
+          channels: s.channels.map((c) =>
+            c.id === d.channel_id
+              ? { ...c, call_started_at: d.call_started_at, topic: d.topic }
+              : c,
+          ),
+        })),
+      )
+    })
     return () => {
       offMsg()
+      offMsgDelete()
+      offMsgUpdate()
       offPresence()
       offVoice()
+      offMicStatus()
+      offChannelCreate()
+      offCallState()
     }
   }, [gateway, channelId, serverId])
 
@@ -154,7 +212,28 @@ export default function AppShell() {
   }
 
   const handleSend = (content: string) => {
-    if (channelId != null) gateway.sendMessage(channelId, content)
+    if (channelId == null) return
+    gateway.sendMessage(channelId, content, replyTarget?.id ?? null)
+    setReplyTarget(null)
+  }
+
+  const handleDeleteMessage = (messageId: number) => {
+    gateway.deleteMessage(messageId)
+  }
+
+  const handleReplyRequest = (m: Message) => {
+    setEditTarget(null)
+    setReplyTarget(m)
+  }
+
+  const handleEditRequest = (m: Message) => {
+    setReplyTarget(null)
+    setEditTarget(m)
+  }
+
+  const handleSaveEdit = (messageId: number, content: string) => {
+    gateway.editMessage(messageId, content)
+    setEditTarget(null)
   }
 
   const handleJoinVoice = async (ch: Channel) => {
@@ -205,6 +284,40 @@ export default function AppShell() {
     return () => clearTimeout(t)
   }, [voice, voiceStatus, handleVoiceStatus])
 
+  // Ростер участников ТЕКУЩЕГО голосового канала — с чистого листа при
+  // каждом входе/выходе, чтобы не проигрывать "звук входа" для всех, кто
+  // уже был в канале до нас.
+  const voiceRosterRef = useRef<Set<number>>(new Set())
+  useEffect(() => {
+    voiceRosterRef.current = voice
+      ? new Set(
+          members
+            .filter((m) => m.voice_channel === String(voice.channel.id))
+            .map((m) => m.id),
+        )
+      : new Set()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [voice?.channel.id])
+
+  // Звук при входе/выходе участников звонка, в котором мы сейчас сами —
+  // слышат все, кто уже в этом звонке (не сам вошедший/вышедший).
+  useEffect(() => {
+    if (!voice || !user) return
+    const currentIds = new Set(
+      members
+        .filter((m) => m.voice_channel === String(voice.channel.id))
+        .map((m) => m.id),
+    )
+    const prevIds = voiceRosterRef.current
+    for (const id of currentIds) {
+      if (id !== user.id && !prevIds.has(id)) playJoinSound()
+    }
+    for (const id of prevIds) {
+      if (id !== user.id && !currentIds.has(id)) playLeaveSound()
+    }
+    voiceRosterRef.current = currentIds
+  }, [members, voice, user])
+
   return (
     <VoiceProvider voice={voice} onStatus={handleVoiceStatus}>
     <div className="app">
@@ -223,6 +336,7 @@ export default function AppShell() {
         members={members}
         voice={voice}
         voiceStatus={voiceStatus}
+        user={user!}
         onSelectText={(c) => setChannelId(c.id)}
         onJoinVoice={handleJoinVoice}
         onLeaveVoice={handleLeaveVoice}
@@ -237,10 +351,23 @@ export default function AppShell() {
               <span className="hash">#</span>
               <span className="chat-header-name">{currentChannel.name}</span>
             </header>
-            <MessageList messages={messages} />
+            <MessageList
+              messages={messages}
+              currentUserId={user!.id}
+              canModerate={isServerOwner}
+              editingId={editTarget?.id ?? null}
+              onDelete={handleDeleteMessage}
+              onEditRequest={handleEditRequest}
+              onReply={handleReplyRequest}
+            />
             <MessageInput
               channelName={currentChannel.name}
               onSend={handleSend}
+              replyTarget={replyTarget}
+              onCancelReply={() => setReplyTarget(null)}
+              editTarget={editTarget}
+              onSaveEdit={handleSaveEdit}
+              onCancelEdit={() => setEditTarget(null)}
             />
           </>
         ) : (

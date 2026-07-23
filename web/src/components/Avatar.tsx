@@ -9,6 +9,7 @@ export default function Avatar({
   online,
   status,
   showStatus = false,
+  speaking = false,
 }: {
   name: string
   color: string
@@ -18,13 +19,14 @@ export default function Avatar({
   /** Предпочтительно: точный статус (online/dnd/offline/invisible). */
   status?: StatusDot
   showStatus?: boolean
+  speaking?: boolean
 }) {
   const initial = (name || '?').charAt(0).toUpperCase()
   const dotStatus: StatusDot = status ?? (online ? 'online' : 'offline')
   return (
     <div className="avatar-wrap" style={{ width: size, height: size }}>
       <div
-        className="avatar"
+        className={`avatar ${speaking ? 'speaking' : ''}`}
         style={{ background: color, width: size, height: size, fontSize: size * 0.42 }}
       >
         {initial}

@@ -352,6 +352,64 @@ input {
   font-size: 14px;
 }
 
+.voice-user span.speaking {
+  color: #fff;
+  transition: color 100ms ease-out;
+}
+
+.voice-user-icons {
+  display: flex;
+  align-items: center;
+  margin-left: auto;
+  font-size: 12px;
+  opacity: 0.85;
+}
+
+.voice-call-info {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px 4px 28px;
+  min-width: 0;
+}
+
+.call-duration {
+  flex-shrink: 0;
+  color: var(--green);
+  font-size: 12px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.call-topic {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.call-topic.editable {
+  cursor: pointer;
+}
+
+.call-topic.editable:hover {
+  color: var(--text-normal);
+  text-decoration: underline dotted;
+}
+
+.call-topic-input {
+  min-width: 0;
+  flex: 1;
+  background: #1e1f22;
+  border: 1px solid var(--blurple);
+  border-radius: 3px;
+  padding: 1px 5px;
+  color: var(--text-normal);
+  font-size: 12px;
+}
+
 /* ---- voice connected strip ---- */
 .voice-connected {
   display: flex;
@@ -371,6 +429,13 @@ input {
   color: var(--green);
   font-size: 13px;
   font-weight: 700;
+}
+
+.voice-ping {
+  margin-left: 6px;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 500;
 }
 
 .voice-connected-channel {
@@ -565,6 +630,7 @@ input {
 }
 
 .message-row {
+  position: relative;
   display: flex;
   gap: 16px;
   padding: 6px 0;
@@ -577,6 +643,7 @@ input {
 
 .message-body {
   min-width: 0;
+  flex: 1;
 }
 
 .message-meta {
@@ -596,6 +663,11 @@ input {
   color: var(--text-faint);
 }
 
+.message-edited {
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
 .message-content {
   color: var(--text-normal);
   font-size: 15px;
@@ -604,7 +676,69 @@ input {
   white-space: pre-wrap;
 }
 
-.message-input {
+.message-reply-quote {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  margin-bottom: 2px;
+  padding-left: 10px;
+  border-left: 2px solid var(--text-faint);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.message-reply-author {
+  flex-shrink: 0;
+  font-weight: 600;
+  color: var(--text-normal);
+}
+
+.message-reply-content {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.message-row.editing {
+  background: rgba(88, 101, 242, 0.08);
+  border-radius: 4px;
+}
+
+.message-actions {
+  position: absolute;
+  top: -14px;
+  right: 8px;
+  display: none;
+  gap: 2px;
+  background: var(--chat-bg);
+  border: 1px solid var(--channel-hover);
+  border-radius: 6px;
+  padding: 2px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+}
+
+.message-row:hover .message-actions {
+  display: flex;
+}
+
+.message-action {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  font-size: 14px;
+}
+
+.message-action:hover {
+  background: var(--channel-hover);
+}
+
+.message-input-wrap {
   padding: 0 16px 24px;
 }
 
@@ -621,6 +755,44 @@ input {
 
 .message-input input::placeholder {
   color: var(--text-faint);
+}
+
+.reply-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 16px;
+  margin-bottom: 4px;
+  background: #383a40;
+  border-radius: 8px 8px 0 0;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.reply-banner-text {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.edit-banner {
+  background: rgba(88, 101, 242, 0.15);
+  color: var(--text-normal);
+}
+
+.reply-banner-cancel {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  font-size: 14px;
+  padding: 2px 4px;
+  border-radius: 3px;
+}
+
+.reply-banner-cancel:hover {
+  color: var(--text-normal);
+  background: var(--channel-hover);
 }
 
 /* ---- members ---- */
@@ -685,6 +857,12 @@ input {
   align-items: center;
   justify-content: center;
   font-weight: 600;
+  box-shadow: 0 0 0 0 var(--green);
+  transition: box-shadow 100ms ease-out;
+}
+
+.avatar.speaking {
+  box-shadow: 0 0 0 3px var(--green);
 }
 
 .status-dot {

@@ -17,7 +17,7 @@ export const STATUS_LABELS: Record<UserStatus, string> = {
 }
 
 /** Клик по своему аватару/имени в панели — открывает выбор статуса. */
-export default function StatusMenu() {
+export default function StatusMenu({ speaking = false }: { speaking?: boolean }) {
   const { user, updateLocalStatus } = useAuth()
   const gateway = useGateway()
   const [open, setOpen] = useState(false)
@@ -54,6 +54,7 @@ export default function StatusMenu() {
           size={32}
           status={user.status}
           showStatus
+          speaking={speaking}
         />
         <div className="user-panel-names">
           <span className="user-panel-username">{user.username}</span>

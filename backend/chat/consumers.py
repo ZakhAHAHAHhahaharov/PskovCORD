@@ -6,23 +6,52 @@ GatewayConsumer — единственный WebSocket на клиента (по
     ws://host/ws/gateway?token=<access>
 
 Операции клиент -> сервер (JSON, поле "op"):
-    {"op": "send_message", "channel_id": <id>, "content": "..."}
+    {"op": "send_message", "channel_id": <id>, "content": "...", "reply_to": <id|null>}
+    {"op": "delete_message", "message_id": <id>}
+    {"op": "edit_message", "message_id": <id>, "content": "..."}
     {"op": "voice_join",   "channel_id": <id>}
     {"op": "voice_leave"}
     {"op": "voice_offer",         "to_user_id": <id>, "sdp": "..."}
     {"op": "voice_answer",        "to_user_id": <id>, "sdp": "..."}
     {"op": "voice_ice_candidate", "to_user_id": <id>, "candidate": {...}}
+    {"op": "voice_mute_update", "muted": bool, "deafened": bool}
+    {"op": "voice_topic_update", "topic": "..."}
     {"op": "set_status", "status": "online" | "dnd" | "invisible"}
 
 События сервер -> клиент:
     {"op": "ready", "user": {...}}
     {"op": "message_create", "message": {...}}
+    {"op": "message_update", "message": {...}}
+    {"op": "message_delete", "message_id": <id>, "channel_id": <id>}
     {"op": "presence_update", "user_id": <id>, "online": bool, "status": "online"|"dnd"|"offline"}
     {"op": "voice_state_update", "user_id": <id>, "channel_id": <id|null>}
-    {"op": "voice_peers", "channel_id": <id>, "peer_ids": [<id>, ...]}
+    {"op": "voice_peers", "channel_id": <id>, "peer_ids": [<id>, ...],
+     "peer_flags": {<id>: {"muted": bool, "deafened": bool}, ...}}
     {"op": "voice_offer",         "from_user_id": <id>, "sdp": "..."}
     {"op": "voice_answer",        "from_user_id": <id>, "sdp": "..."}
     {"op": "voice_ice_candidate", "from_user_id": <id>, "candidate": {...}}
+    {"op": "voice_mute_update", "user_id": <id>, "muted": bool, "deafened": bool}
+    {"op": "voice_call_state", "channel_id": <id>,
+     "call_started_at": <float|null>, "topic": "..."|null}
+
+voice_mute_update — статус своего микрофона/наушников (мьют, дефен), который
+клиент шлёт при каждом изменении, пока состоит в голосовом канале; сервер
+запоминает его в presence (voice_flags) и рассылает всем на сервере, чтобы
+у остальных участников канала загорался/гас значок мьюта прямо в списке.
+
+voice_call_state — момент начала текущего разговора в канале и его статус
+(topic). Живёт в presence, пока в канале хоть кто-то есть: появляется при
+входе первого участника, стирается когда выходит последний. Ставить topic
+может только тот, кто сейчас сам в этом канале (voice_topic_update без
+target-канала — сервер сам берёт канал из presence отправителя).
+
+delete_message — удалить сообщение может автор ИЛИ владелец сервера (админ).
+edit_message — редактировать может ТОЛЬКО автор, даже владелец сервера не
+может править чужие сообщения (может только удалить).
+
+set_status — online/dnd/invisible, это ВЫБОР пользователя, а не факт его
+онлайн-статуса; реальная видимость другим считается отдельно через
+presence.effective_status (invisible всегда маскируется под offline).
 
 WebRTC-сигналинг (voice_offer/voice_answer/voice_ice_candidate) — прямой relay
 1:1 через персональную группу "user_{id}" (см. connect()/disconnect()).
@@ -35,6 +64,7 @@ import json
 
 from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
+from django.utils import timezone
 
 from . import presence
 from .models import Channel, Membership, Message
@@ -86,6 +116,7 @@ class GatewayConsumer(AsyncWebsocketConsumer):
             if prev_voice:
                 server_id = await self._channel_server(prev_voice)
                 await self._broadcast_voice(self.user.id, None, server_id)
+                await self._broadcast_call_state(prev_voice, server_id)
             await self._broadcast_presence(False)
 
     async def receive(self, text_data=None, bytes_data=None):
@@ -97,12 +128,20 @@ class GatewayConsumer(AsyncWebsocketConsumer):
         op = data.get("op")
         if op == "send_message":
             await self._handle_send(data)
+        elif op == "delete_message":
+            await self._handle_delete_message(data)
+        elif op == "edit_message":
+            await self._handle_edit_message(data)
         elif op == "voice_join":
             await self._handle_voice_join(data)
         elif op == "voice_leave":
             await self._handle_voice_leave()
         elif op in ("voice_offer", "voice_answer", "voice_ice_candidate"):
             await self._handle_voice_relay(op, data)
+        elif op == "voice_mute_update":
+            await self._handle_voice_mute_update(data)
+        elif op == "voice_topic_update":
+            await self._handle_voice_topic_update(data)
         elif op == "set_status":
             await self._handle_set_status(data)
 
@@ -112,13 +151,44 @@ class GatewayConsumer(AsyncWebsocketConsumer):
         content = (data.get("content") or "").strip()
         if not channel_id or not content:
             return
-        result = await self._create_message(channel_id, content[:4000])
+        result = await self._create_message(
+            channel_id, content[:4000], data.get("reply_to"))
         if not result:
             return
         await self.channel_layer.group_send(
             f"server_{result['server_id']}",
             {"type": "broadcast", "payload": {
                 "op": "message_create", "message": result["data"]}},
+        )
+
+    async def _handle_delete_message(self, data):
+        message_id = data.get("message_id")
+        if not message_id:
+            return
+        result = await self._delete_message(message_id)
+        if not result:
+            return
+        await self.channel_layer.group_send(
+            f"server_{result['server_id']}",
+            {"type": "broadcast", "payload": {
+                "op": "message_delete",
+                "message_id": message_id,
+                "channel_id": result["channel_id"],
+            }},
+        )
+
+    async def _handle_edit_message(self, data):
+        message_id = data.get("message_id")
+        content = (data.get("content") or "").strip()
+        if not message_id or not content:
+            return
+        result = await self._edit_message(message_id, content[:4000])
+        if not result:
+            return
+        await self.channel_layer.group_send(
+            f"server_{result['server_id']}",
+            {"type": "broadcast", "payload": {
+                "op": "message_update", "message": result["data"]}},
         )
 
     async def _handle_voice_join(self, data):
@@ -128,13 +198,22 @@ class GatewayConsumer(AsyncWebsocketConsumer):
         server_id = await self._voice_channel_server(channel_id)
         if not server_id:
             return
-        peer_ids = await asyncio.to_thread(
+        peer_ids, emptied_channel = await asyncio.to_thread(
             presence.join_voice, self.uid, channel_id)
+        peer_flags = await asyncio.to_thread(
+            presence.voice_members_flags, channel_id)
         await self._broadcast_voice(self.user.id, channel_id, server_id)
+        await self._broadcast_call_state(channel_id, server_id)
+        if emptied_channel:
+            await self._broadcast_call_state(emptied_channel, server_id)
         await self._send({
             "op": "voice_peers",
             "channel_id": channel_id,
             "peer_ids": [int(p) for p in peer_ids],
+            "peer_flags": {
+                int(uid): flags for uid, flags in peer_flags.items()
+                if uid != self.uid
+            },
         })
 
     async def _handle_set_status(self, data):
@@ -151,6 +230,35 @@ class GatewayConsumer(AsyncWebsocketConsumer):
         if prev:
             server_id = await self._channel_server(prev)
             await self._broadcast_voice(self.user.id, None, server_id)
+            await self._broadcast_call_state(prev, server_id)
+
+    async def _handle_voice_topic_update(self, data):
+        topic = (data.get("topic") or "").strip()[:120]
+        channel_id = await asyncio.to_thread(presence.voice_channel, self.uid)
+        if not channel_id:
+            return
+        await asyncio.to_thread(presence.set_call_topic, channel_id, topic)
+        server_id = await self._channel_server(channel_id)
+        await self._broadcast_call_state(channel_id, server_id)
+
+    async def _handle_voice_mute_update(self, data):
+        muted = bool(data.get("muted"))
+        deafened = bool(data.get("deafened"))
+        channel_id = await asyncio.to_thread(presence.voice_channel, self.uid)
+        if not channel_id:
+            return
+        await asyncio.to_thread(
+            presence.set_voice_flags, self.uid, muted, deafened)
+        server_id = await self._channel_server(channel_id)
+        if not server_id:
+            return
+        await self.channel_layer.group_send(
+            f"server_{server_id}", {"type": "broadcast", "payload": {
+                "op": "voice_mute_update",
+                "user_id": self.user.id,
+                "muted": muted,
+                "deafened": deafened,
+            }})
 
     async def _handle_voice_relay(self, op, data):
         to_user_id = data.get("to_user_id")
@@ -199,6 +307,18 @@ class GatewayConsumer(AsyncWebsocketConsumer):
         await self.channel_layer.group_send(
             f"server_{server_id}", {"type": "broadcast", "payload": payload})
 
+    async def _broadcast_call_state(self, channel_id, server_id):
+        if not server_id:
+            return
+        state = await asyncio.to_thread(presence.call_state, channel_id)
+        await self.channel_layer.group_send(
+            f"server_{server_id}", {"type": "broadcast", "payload": {
+                "op": "voice_call_state",
+                "channel_id": int(channel_id),
+                "call_started_at": state["call_started_at"],
+                "topic": state["topic"],
+            }})
+
     async def broadcast(self, event):
         """Обработчик group_send(type="broadcast")."""
         await self._send(event["payload"])
@@ -215,7 +335,7 @@ class GatewayConsumer(AsyncWebsocketConsumer):
         )
 
     @database_sync_to_async
-    def _create_message(self, channel_id, content):
+    def _create_message(self, channel_id, content, reply_to_id=None):
         try:
             channel = Channel.objects.select_related("server").get(id=channel_id)
         except Channel.DoesNotExist:
@@ -224,9 +344,49 @@ class GatewayConsumer(AsyncWebsocketConsumer):
             user=self.user, server=channel.server
         ).exists():
             return None
+        reply_to = None
+        if reply_to_id:
+            # Разрешаем отвечать только на сообщение из ЭТОГО ЖЕ канала —
+            # иначе можно было бы подсунуть id из чужого канала.
+            reply_to = Message.objects.filter(
+                id=reply_to_id, channel_id=channel_id).first()
         msg = Message.objects.create(
-            channel=channel, author=self.user, content=content)
+            channel=channel, author=self.user, content=content, reply_to=reply_to)
         return {"server_id": channel.server_id, "data": MessageSerializer(msg).data}
+
+    @database_sync_to_async
+    def _delete_message(self, message_id):
+        try:
+            msg = Message.objects.select_related("channel__server").get(id=message_id)
+        except Message.DoesNotExist:
+            return None
+        server = msg.channel.server
+        if not Membership.objects.filter(user=self.user, server=server).exists():
+            return None
+        # Удалить может автор ИЛИ владелец сервера.
+        if msg.author_id != self.user.id and server.owner_id != self.user.id:
+            return None
+        channel_id, server_id = msg.channel_id, server.id
+        msg.delete()
+        return {"channel_id": channel_id, "server_id": server_id}
+
+    @database_sync_to_async
+    def _edit_message(self, message_id, content):
+        try:
+            msg = Message.objects.select_related(
+                "channel__server", "author", "reply_to__author").get(id=message_id)
+        except Message.DoesNotExist:
+            return None
+        # Редактировать может ТОЛЬКО автор — владелец сервера не исключение.
+        if msg.author_id != self.user.id:
+            return None
+        msg.content = content
+        msg.edited_at = timezone.now()
+        msg.save(update_fields=["content", "edited_at"])
+        return {
+            "server_id": msg.channel.server_id,
+            "data": MessageSerializer(msg).data,
+        }
 
     @database_sync_to_async
     def _voice_channel_server(self, channel_id):

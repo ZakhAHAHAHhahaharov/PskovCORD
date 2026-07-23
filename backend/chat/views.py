@@ -1,3 +1,5 @@
+from asgiref.sync import async_to_sync
+from channels.layers import get_channel_layer
 from django.db import transaction
 from django.shortcuts import get_object_or_404
 from rest_framework import status
@@ -78,11 +80,14 @@ class ServerMembers(APIView):
         for u in members:
             is_on = presence.is_online(u.id)
             eff_status = presence.effective_status(u, is_on)
+            flags = presence.voice_flags(u.id)
             data.append({
                 **UserSerializer(u).data,
                 "online": eff_status != "offline",
                 "status": eff_status,
                 "voice_channel": presence.voice_channel(u.id),
+                "muted": flags["muted"],
+                "deafened": flags["deafened"],
             })
         # Онлайн сверху, затем по имени.
         data.sort(key=lambda x: (not x["online"], x["username"].lower()))
@@ -94,6 +99,11 @@ class ChannelCreate(APIView):
         server = get_object_or_404(Server, id=server_id)
         if not is_member(request.user, server):
             return Response({"detail": "Вы не участник сервера."}, status=403)
+        if request.user.id != server.owner_id:
+            return Response(
+                {"detail": "Только владелец сервера может создавать каналы."},
+                status=403,
+            )
         name = (request.data.get("name") or "").strip()
         kind = request.data.get("kind", Channel.TEXT)
         if not name:
@@ -103,7 +113,18 @@ class ChannelCreate(APIView):
         position = server.channels.count()
         channel = Channel.objects.create(
             server=server, name=name, kind=kind, position=position)
-        return Response(ChannelSerializer(channel).data, status=201)
+        data = ChannelSerializer(channel).data
+        # Живое обновление списка каналов у остальных участников сервера —
+        # без этого им приходилось перезагружать страницу, чтобы увидеть
+        # новый канал (тот же паттерн, что и voice_state_update).
+        channel_layer = get_channel_layer()
+        async_to_sync(channel_layer.group_send)(
+            f"server_{server_id}", {"type": "broadcast", "payload": {
+                "op": "channel_create",
+                "server_id": server_id,
+                "channel": data,
+            }})
+        return Response(data, status=201)
 
 
 class ChannelMessages(APIView):
@@ -111,7 +132,8 @@ class ChannelMessages(APIView):
         channel = get_object_or_404(Channel, id=channel_id)
         if not is_member(request.user, channel.server):
             return Response({"detail": "Нет доступа."}, status=403)
-        qs = channel.messages.select_related("author").order_by("-created_at")[:50]
+        qs = channel.messages.select_related(
+            "author", "reply_to__author").order_by("-created_at")[:50]
         messages = list(reversed(qs))
         return Response(MessageSerializer(messages, many=True).data)
 
