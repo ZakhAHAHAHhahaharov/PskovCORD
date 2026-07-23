@@ -28,6 +28,7 @@ export default function AppShell() {
   const [voiceStatus, setVoiceStatus] = useState<VoiceStatus>('connecting')
   const [showDiscover, setShowDiscover] = useState(false)
   const [replyTarget, setReplyTarget] = useState<Message | null>(null)
+  const [editTarget, setEditTarget] = useState<Message | null>(null)
 
   const currentServer = servers.find((s) => s.id === serverId) || null
   const channels = currentServer?.channels || []
@@ -64,6 +65,7 @@ export default function AppShell() {
   // История сообщений при смене текстового канала.
   useEffect(() => {
     setReplyTarget(null)
+    setEditTarget(null)
     if (!currentChannel || currentChannel.kind !== 'text') {
       setMessages([])
       return
@@ -213,8 +215,19 @@ export default function AppShell() {
     gateway.deleteMessage(messageId)
   }
 
-  const handleEditMessage = (messageId: number, content: string) => {
+  const handleReplyRequest = (m: Message) => {
+    setEditTarget(null)
+    setReplyTarget(m)
+  }
+
+  const handleEditRequest = (m: Message) => {
+    setReplyTarget(null)
+    setEditTarget(m)
+  }
+
+  const handleSaveEdit = (messageId: number, content: string) => {
     gateway.editMessage(messageId, content)
+    setEditTarget(null)
   }
 
   const handleJoinVoice = async (ch: Channel) => {
@@ -302,15 +315,19 @@ export default function AppShell() {
               messages={messages}
               currentUserId={user!.id}
               canModerate={isServerOwner}
+              editingId={editTarget?.id ?? null}
               onDelete={handleDeleteMessage}
-              onEdit={handleEditMessage}
-              onReply={setReplyTarget}
+              onEditRequest={handleEditRequest}
+              onReply={handleReplyRequest}
             />
             <MessageInput
               channelName={currentChannel.name}
               onSend={handleSend}
               replyTarget={replyTarget}
               onCancelReply={() => setReplyTarget(null)}
+              editTarget={editTarget}
+              onSaveEdit={handleSaveEdit}
+              onCancelEdit={() => setEditTarget(null)}
             />
           </>
         ) : (

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef } from 'react'
 import { Message } from '../api'
 import Avatar from './Avatar'
 
@@ -16,36 +16,26 @@ export default function MessageList({
   messages,
   currentUserId,
   canModerate,
+  editingId,
   onDelete,
-  onEdit,
+  onEditRequest,
   onReply,
 }: {
   messages: Message[]
   currentUserId: number
   /** Владелец сервера — может удалять чужие сообщения (но не редактировать). */
   canModerate: boolean
+  /** id сообщения, которое сейчас редактируется внизу в композере. */
+  editingId: number | null
   onDelete: (messageId: number) => void
-  onEdit: (messageId: number, content: string) => void
+  onEditRequest: (message: Message) => void
   onReply: (message: Message) => void
 }) {
   const bottomRef = useRef<HTMLDivElement>(null)
-  const [editingId, setEditingId] = useState<number | null>(null)
-  const [editDraft, setEditDraft] = useState('')
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
-
-  const startEdit = (m: Message) => {
-    setEditingId(m.id)
-    setEditDraft(m.content)
-  }
-
-  const commitEdit = (m: Message) => {
-    const trimmed = editDraft.trim()
-    setEditingId(null)
-    if (trimmed && trimmed !== m.content) onEdit(m.id, trimmed)
-  }
 
   const confirmDelete = (m: Message) => {
     if (window.confirm('Удалить это сообщение? Действие необратимо.')) {
@@ -60,9 +50,11 @@ export default function MessageList({
       )}
       {messages.map((m) => {
         const isAuthor = m.author.id === currentUserId
-        const isEditing = editingId === m.id
         return (
-          <div key={m.id} className="message-row">
+          <div
+            key={m.id}
+            className={`message-row ${editingId === m.id ? 'editing' : ''}`}
+          >
             <Avatar name={m.author.username} color={m.author.avatar_color} size={40} />
             <div className="message-body">
               {m.reply_to && (
@@ -76,21 +68,7 @@ export default function MessageList({
                 <span className="message-time">{formatTime(m.created_at)}</span>
                 {m.edited_at && <span className="message-edited">(изменено)</span>}
               </div>
-              {isEditing ? (
-                <input
-                  className="message-edit-input"
-                  autoFocus
-                  value={editDraft}
-                  onChange={(e) => setEditDraft(e.target.value)}
-                  onBlur={() => commitEdit(m)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') commitEdit(m)
-                    if (e.key === 'Escape') setEditingId(null)
-                  }}
-                />
-              ) : (
-                <div className="message-content">{m.content}</div>
-              )}
+              <div className="message-content">{m.content}</div>
             </div>
             <div className="message-actions">
               <button
@@ -104,7 +82,7 @@ export default function MessageList({
                 <button
                   className="message-action"
                   title="Изменить"
-                  onClick={() => startEdit(m)}
+                  onClick={() => onEditRequest(m)}
                 >
                   ✏️
                 </button>
