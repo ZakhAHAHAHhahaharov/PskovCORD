@@ -5,7 +5,7 @@
 | Что | Значение |
 |-----|----------|
 | Сервер | Ubuntu 26.04, 1 vCPU / 4GB RAM, IP `94.26.90.101` |
-| Домен | https://pskord.zlgvpn.org (Let's Encrypt, автопродление certbot) |
+| Домен | https://pskord.zlgvpn.org (TLS — общий wildcard `*.zlgvpn.org`) |
 | Путь на сервере | `/opt/pskovcord` (git-репозиторий, ветка `main`) |
 | Пользователь деплоя | `deploy` (группа `docker`, вход только по SSH-ключу) |
 | Голос | LiveKit Cloud (не self-hosted — не требует TURN/UDP-проброса) |
@@ -63,10 +63,15 @@ docker compose --env-file .env -f deploy/docker-compose.prod.yml logs -f backend
 bash /opt/pskovcord/deploy/deploy.sh
 ```
 
-## Продление сертификата
+## TLS-сертификат
 
-Настроено автоматически (`certbot` systemd timer). Проверить:
+Используется **общий wildcard-сертификат `*.zlgvpn.org`**, лежит на сервере в
+`/etc/letsencrypt/live/zlgvpn.org/` и покрывает все поддомены `zlgvpn.org`, не только
+`pskord`. Выпускается/продлевается **централизованно, не через certbot этого сервера**
+(wildcard требует DNS-01 challenge, а не HTTP-01, который умеет certbot-nginx плагин) —
+`certbot certificates` на этом сервере его не увидит и продлевать не будет. Обновление
+сертификата — вне зоны ответственности этого репозитория; если истечёт, nginx нужно
+просто перечитать конфиг (`systemctl reload nginx`) после обновления файлов в
+`/etc/letsencrypt/live/zlgvpn.org/`.
 
-```bash
-ssh deploy@94.26.90.101 "sudo certbot renew --dry-run"
-```
+nginx-конфиг: `/etc/nginx/sites-available/pskovcord` (референс — `deploy/nginx.conf.example`).
