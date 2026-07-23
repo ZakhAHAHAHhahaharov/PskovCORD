@@ -12,9 +12,7 @@ import DiscoverModal from './DiscoverModal'
 
 export interface VoiceState {
   channel: Channel
-  url: string
-  token: string
-  room: string
+  iceServers: RTCIceServer[]
 }
 
 export default function AppShell() {
@@ -156,10 +154,15 @@ export default function AppShell() {
 
   const handleJoinVoice = async (ch: Channel) => {
     try {
-      const { url, token, room } = await api.livekitToken(ch.id)
+      const { ice_servers } = await api.voiceCredentials(ch.id)
       setVoiceStatus('connecting')
-      setVoice({ channel: ch, url, token, room })
-      // gateway.voiceJoin — только после реального подключения (см. onStatus).
+      // gateway.voiceJoin шлём сразу (не после подключения, как раньше для
+      // LiveKit): в mesh это же сообщение приносит список пиров, без него
+      // соединяться не с кем. Честный статус ('connecting'/'failed') теперь
+      // считается по фактическому состоянию RTCPeerConnection'ов внутри
+      // VoiceProvider (onStatus), а не по факту join.
+      gateway.voiceJoin(ch.id)
+      setVoice({ channel: ch, iceServers: ice_servers })
     } catch (e) {
       alert('Не удалось подключиться к голосу: ' + (e as Error).message)
     }
@@ -170,23 +173,17 @@ export default function AppShell() {
     setVoice(null)
   }, [gateway])
 
-  // Реальный статус WebRTC-соединения (не оптимистичный).
+  // Реальный статус mesh-соединения (не оптимистичный).
   const handleVoiceStatus = useCallback(
     (status: VoiceStatus) => {
       setVoiceStatus(status)
-      if (status === 'connected') {
-        setVoice((v) => {
-          if (v) gateway.voiceJoin(v.channel.id)
-          return v
-        })
-      }
       if (status === 'failed') {
         setVoice((v) => {
           if (v) {
             gateway.voiceLeave()
             alert(
               `Не удалось подключиться к голосовому каналу «${v.channel.name}». ` +
-                'Проверь интернет-соединение (возможна блокировка WebRTC на твоей сети/VPN) и попробуй снова.',
+                'Проверь интернет-соединение (возможна блокировка WebRTC/UDP на твоей сети/VPN) и попробуй снова.',
             )
           }
           return null
@@ -204,7 +201,7 @@ export default function AppShell() {
   }, [voice, voiceStatus, handleVoiceStatus])
 
   return (
-    <VoiceProvider voice={voice} onLeave={handleLeaveVoice} onStatus={handleVoiceStatus}>
+    <VoiceProvider voice={voice} onStatus={handleVoiceStatus}>
     <div className="app">
       <ServerRail
         servers={servers}

@@ -1,16 +1,15 @@
-import { useLocalParticipant } from '@livekit/components-react'
+import { useVoice } from '../voice'
 
-/** Реальная кнопка микрофона — работает только внутри LiveKitRoom (когда в голосе). */
+/** Реальная кнопка микрофона — работает только внутри VoiceProvider (когда в голосе). */
 export default function MicButton() {
-  const { localParticipant, isMicrophoneEnabled } = useLocalParticipant()
-  const toggle = () => localParticipant.setMicrophoneEnabled(!isMicrophoneEnabled)
+  const { muted, toggleMute } = useVoice()
   return (
     <button
-      className={`icon-btn ${isMicrophoneEnabled ? '' : 'muted'}`}
-      onClick={toggle}
-      title={isMicrophoneEnabled ? 'Выключить микрофон' : 'Включить микрофон'}
+      className={`icon-btn ${muted ? 'muted' : ''}`}
+      onClick={toggleMute}
+      title={muted ? 'Включить микрофон' : 'Выключить микрофон'}
     >
-      {isMicrophoneEnabled ? '🎙️' : '🔇'}
+      {muted ? '🔇' : '🎙️'}
     </button>
   )
 }
