@@ -38,10 +38,21 @@ class ServerSerializer(serializers.ModelSerializer):
         read_only_fields = ["owner", "created_at"]
 
 
-class MessageSerializer(serializers.ModelSerializer):
+class MessageReplySerializer(serializers.ModelSerializer):
+    """Компактный превью сообщения, на которое отвечают — без вложенности."""
     author = UserSerializer(read_only=True)
 
     class Meta:
         model = Message
-        fields = ["id", "channel", "author", "content", "created_at"]
-        read_only_fields = ["author", "created_at"]
+        fields = ["id", "author", "content"]
+
+
+class MessageSerializer(serializers.ModelSerializer):
+    author = UserSerializer(read_only=True)
+    reply_to = MessageReplySerializer(read_only=True)
+
+    class Meta:
+        model = Message
+        fields = ["id", "channel", "author", "content", "reply_to",
+                  "created_at", "edited_at"]
+        read_only_fields = ["author", "created_at", "edited_at"]

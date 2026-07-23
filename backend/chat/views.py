@@ -126,7 +126,8 @@ class ChannelMessages(APIView):
         channel = get_object_or_404(Channel, id=channel_id)
         if not is_member(request.user, channel.server):
             return Response({"detail": "Нет доступа."}, status=403)
-        qs = channel.messages.select_related("author").order_by("-created_at")[:50]
+        qs = channel.messages.select_related(
+            "author", "reply_to__author").order_by("-created_at")[:50]
         messages = list(reversed(qs))
         return Response(MessageSerializer(messages, many=True).data)
 
