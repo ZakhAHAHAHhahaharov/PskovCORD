@@ -10,6 +10,11 @@ export type VoiceStatus = SfuStatus
 
 export interface VoiceMesh {
   remoteStreams: Map<number, MediaStream>
+  /** Демонстрации экрана участников (userId → поток видео+звук). */
+  screenShares: Map<number, MediaStream>
+  /** Демонстрирую ли я сейчас свой экран. */
+  isSharingScreen: boolean
+  toggleScreenShare: () => void
   muted: boolean
   toggleMute: () => void
   deafened: boolean
@@ -22,6 +27,9 @@ export interface VoiceMesh {
 
 const EMPTY_MESH: VoiceMesh = {
   remoteStreams: new Map(),
+  screenShares: new Map(),
+  isSharingScreen: false,
+  toggleScreenShare: () => {},
   muted: true,
   toggleMute: () => {},
   deafened: false,
@@ -54,6 +62,10 @@ export function useVoiceMesh(
   const [remoteStreams, setRemoteStreams] = useState<Map<number, MediaStream>>(
     new Map(),
   )
+  const [screenShares, setScreenShares] = useState<Map<number, MediaStream>>(
+    new Map(),
+  )
+  const [isSharingScreen, setIsSharingScreen] = useState(false)
   const [muted, setMuted] = useState(true)
   const [deafened, setDeafened] = useState(false)
   // Честный статус — по факту установленного WebRTC-транспорта к SFU.
@@ -62,6 +74,8 @@ export function useVoiceMesh(
   const [speakingUserIds, setSpeakingUserIds] = useState<Set<number>>(new Set())
   const client = useRef<SfuClient | null>(null)
   const localStream = useRef<MediaStream | null>(null)
+  // Локальный поток захвата экрана — чтобы остановить его дорожки при завершении.
+  const displayStream = useRef<MediaStream | null>(null)
   const remoteStreamsRef = useRef(remoteStreams)
   remoteStreamsRef.current = remoteStreams
   // Состояние мьюта на момент включения дефена — чтобы при выключении дефена
@@ -84,6 +98,21 @@ export function useVoiceMesh(
       },
       onRemoteRemoved: (userId) => {
         setRemoteStreams((prev) => {
+          if (!prev.has(userId)) return prev
+          const next = new Map(prev)
+          next.delete(userId)
+          return next
+        })
+      },
+      onScreenStream: (userId, stream) => {
+        setScreenShares((prev) => {
+          const next = new Map(prev)
+          next.set(userId, stream)
+          return next
+        })
+      },
+      onScreenRemoved: (userId) => {
+        setScreenShares((prev) => {
           if (!prev.has(userId)) return prev
           const next = new Map(prev)
           next.delete(userId)
@@ -131,12 +160,16 @@ export function useVoiceMesh(
       client.current = null
       localStream.current?.getTracks().forEach((t) => t.stop())
       localStream.current = null
+      displayStream.current?.getTracks().forEach((t) => t.stop())
+      displayStream.current = null
       mutedBeforeDeafen.current = false
       setMuted(true)
       setDeafened(false)
+      setIsSharingScreen(false)
       setStatus('connecting')
       setPingMs(null)
       setRemoteStreams(new Map())
+      setScreenShares(new Map())
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [voice?.channel.id])
@@ -259,8 +292,42 @@ export function useVoiceMesh(
     })
   }
 
+  const stopSharing = () => {
+    client.current?.stopScreen()
+    displayStream.current?.getTracks().forEach((t) => t.stop())
+    displayStream.current = null
+    setIsSharingScreen(false)
+  }
+
+  const toggleScreenShare = () => {
+    if (isSharingScreen) {
+      stopSharing()
+      return
+    }
+    if (!client.current) return
+    // Системный звук берём вместе с картинкой, если браузер даёт (вкладка/экран).
+    void navigator.mediaDevices
+      .getDisplayMedia({ video: true, audio: true })
+      .then(async (stream) => {
+        displayStream.current = stream
+        // Пользователь может остановить показ нативной кнопкой браузера —
+        // ловим конец видеодорожки и синхронизируем состояние.
+        const videoTrack = stream.getVideoTracks()[0]
+        if (videoTrack) videoTrack.addEventListener('ended', stopSharing)
+        await client.current!.startScreen(stream.getTracks())
+        setIsSharingScreen(true)
+      })
+      .catch(() => {
+        // Пользователь отменил выбор экрана — ничего не делаем.
+        displayStream.current = null
+      })
+  }
+
   return {
     remoteStreams,
+    screenShares,
+    isSharingScreen,
+    toggleScreenShare,
     muted,
     toggleMute,
     deafened,

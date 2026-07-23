@@ -87,15 +87,32 @@ export class Room {
   }
 
   /** Все продюсеры комнаты, кроме принадлежащих указанному пиру. */
-  otherProducers(except: Peer): { producerId: string; userId: number }[] {
-    const out: { producerId: string; userId: number }[] = []
+  otherProducers(
+    except: Peer,
+  ): { producerId: string; userId: number; source: string }[] {
+    const out: { producerId: string; userId: number; source: string }[] = []
     for (const peer of this.peers.values()) {
       if (peer.id === except.id) continue
       for (const producer of peer.producers.values()) {
-        out.push({ producerId: producer.id, userId: peer.userId })
+        out.push({
+          producerId: producer.id,
+          userId: peer.userId,
+          source: (producer.appData as { source?: string }).source ?? 'mic',
+        })
       }
     }
     return out
+  }
+
+  /** Найти продюсера по id и его владельца (для consume/закрытия). */
+  findProducer(
+    producerId: string,
+  ): { producer: types.Producer; userId: number } | null {
+    for (const peer of this.peers.values()) {
+      const producer = peer.producers.get(producerId)
+      if (producer) return { producer, userId: peer.userId }
+    }
+    return null
   }
 
   /** Разослать уведомление всем пирам комнаты, кроме одного. */

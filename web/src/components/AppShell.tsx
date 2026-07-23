@@ -9,6 +9,7 @@ import MessageList from './MessageList'
 import MessageInput from './MessageInput'
 import MembersList from './MembersList'
 import VoiceProvider, { VoiceStatus } from './VoiceProvider'
+import ScreenStage from './ScreenStage'
 import DiscoverModal from './DiscoverModal'
 
 export interface VoiceState {
@@ -346,6 +347,7 @@ export default function AppShell() {
       />
 
       <main className="chat">
+        <ScreenStage members={members} />
         {currentChannel && currentChannel.kind === 'text' ? (
           <>
             <header className="chat-header">

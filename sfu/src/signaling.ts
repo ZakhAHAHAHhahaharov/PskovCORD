@@ -44,21 +44,40 @@ export async function handleRequest(
     case 'produce': {
       const transport = peer.transport(data.transportId)
       if (!transport) throw new Error('transport not found')
+      // source отличает микрофон от демонстрации экрана ('mic' | 'screen').
+      const source: string = data.source === 'screen' ? 'screen' : 'mic'
       const producer = await transport.produce({
         kind: data.kind as types.MediaKind,
         rtpParameters: data.rtpParameters,
-        appData: { userId: peer.userId, peerId: peer.id },
+        appData: { userId: peer.userId, peerId: peer.id, source },
       })
       peer.producers.set(producer.id, producer)
       // Оповещаем остальных — пусть создадут consumer на этот producer.
       room.broadcast(peer, 'newProducer', {
         producerId: producer.id,
         userId: peer.userId,
+        source,
       })
       producer.on('transportclose', () => {
         peer.producers.delete(producer.id)
       })
       return { id: producer.id }
+    }
+
+    case 'closeProducer': {
+      // Явная остановка продюсера (например, конец демонстрации экрана) —
+      // закрываем и уведомляем остальных, чтобы убрали тайл/поток.
+      const producer = peer.producers.get(data.producerId)
+      if (!producer) return {}
+      const source = (producer.appData as { source?: string }).source ?? 'mic'
+      producer.close()
+      peer.producers.delete(producer.id)
+      room.broadcast(peer, 'producerClosed', {
+        producerId: producer.id,
+        userId: peer.userId,
+        source,
+      })
+      return {}
     }
 
     case 'getProducers':
@@ -73,7 +92,10 @@ export async function handleRequest(
       })) {
         throw new Error('cannot consume')
       }
-      const owner = findProducerOwner(room, data.producerId)
+      const found = room.findProducer(data.producerId)
+      const owner = found ? found.userId : null
+      const source =
+        (found?.producer.appData as { source?: string } | undefined)?.source ?? 'mic'
       const consumer = await transport.consume({
         producerId: data.producerId,
         rtpCapabilities: data.rtpCapabilities,
@@ -94,6 +116,7 @@ export async function handleRequest(
         kind: consumer.kind,
         rtpParameters: consumer.rtpParameters,
         producerUserId: owner,
+        source,
       }
     }
 
@@ -107,12 +130,4 @@ export async function handleRequest(
     default:
       throw new Error(`unknown action: ${action}`)
   }
-}
-
-/** Найти userId владельца продюсера (для ключа remoteStreams на клиенте). */
-function findProducerOwner(room: Room, producerId: string): number | null {
-  for (const p of room.peers.values()) {
-    if (p.producers.has(producerId)) return p.userId
-  }
-  return null
 }
