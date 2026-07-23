@@ -18,6 +18,6 @@ urlpatterns = [
          views.ChannelMessages.as_view(), name="channel-messages"),
     path("channels/<int:channel_id>/voice-members",
          views.ChannelVoiceMembers.as_view(), name="channel-voice-members"),
-    path("channels/<int:channel_id>/livekit-token",
-         views.LiveKitToken.as_view(), name="livekit-token"),
+    path("channels/<int:channel_id>/voice-credentials",
+         views.VoiceCredentials.as_view(), name="voice-credentials"),
 ]

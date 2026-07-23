@@ -15,6 +15,9 @@ interface GatewayCtx {
   sendMessage: (channelId: number, content: string) => void
   voiceJoin: (channelId: number) => void
   voiceLeave: () => void
+  voiceOffer: (toUserId: number, sdp: string) => void
+  voiceAnswer: (toUserId: number, sdp: string) => void
+  voiceIceCandidate: (toUserId: number, candidate: RTCIceCandidateInit) => void
 }
 
 const Ctx = createContext<GatewayCtx>(null as unknown as GatewayCtx)
@@ -88,6 +91,12 @@ export function GatewayProvider({ children }: { children: ReactNode }) {
       raw({ op: 'send_message', channel_id: channelId, content }),
     voiceJoin: (channelId) => raw({ op: 'voice_join', channel_id: channelId }),
     voiceLeave: () => raw({ op: 'voice_leave' }),
+    voiceOffer: (toUserId, sdp) =>
+      raw({ op: 'voice_offer', to_user_id: toUserId, sdp }),
+    voiceAnswer: (toUserId, sdp) =>
+      raw({ op: 'voice_answer', to_user_id: toUserId, sdp }),
+    voiceIceCandidate: (toUserId, candidate) =>
+      raw({ op: 'voice_ice_candidate', to_user_id: toUserId, candidate }),
   }
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>

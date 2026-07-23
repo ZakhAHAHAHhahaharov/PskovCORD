@@ -8,7 +8,7 @@ from rest_framework.views import APIView
 
 from accounts.serializers import UserSerializer
 
-from . import livekit, presence
+from . import presence, turn
 from .models import Channel, Membership, Message, Server
 from .serializers import ChannelSerializer, MessageSerializer, ServerSerializer
 
@@ -121,24 +121,17 @@ class ChannelVoiceMembers(APIView):
         return Response({"user_ids": list(presence.voice_member_ids(channel_id))})
 
 
-class LiveKitToken(APIView):
+class VoiceCredentials(APIView):
     def post(self, request, channel_id):
         channel = get_object_or_404(Channel, id=channel_id)
         if channel.kind != Channel.VOICE:
             return Response({"detail": "Не голосовой канал."}, status=400)
         if not is_member(request.user, channel.server):
             return Response({"detail": "Нет доступа."}, status=403)
-        room = livekit.room_name(channel_id)
-        token = livekit.create_access_token(
-            identity=str(request.user.id),
-            name=request.user.username,
-            room=room,
-        )
-        from django.conf import settings
+        ttl = 3600
         return Response({
-            "url": settings.LIVEKIT_URL,
-            "token": token,
-            "room": room,
+            "ice_servers": turn.ice_servers(request.user.id, ttl=ttl),
+            "ttl": ttl,
         })
 
 
@@ -146,4 +139,4 @@ class LiveKitToken(APIView):
 @permission_classes([IsAuthenticated])
 def config_view(request):
     from django.conf import settings
-    return Response({"app_name": settings.APP_NAME, "livekit_url": settings.LIVEKIT_URL})
+    return Response({"app_name": settings.APP_NAME})

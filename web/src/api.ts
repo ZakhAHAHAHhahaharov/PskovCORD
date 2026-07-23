@@ -107,6 +107,8 @@ export const api = {
 
   messages: (channelId: number): Promise<Message[]> =>
     req(`/api/channels/${channelId}/messages`),
-  livekitToken: (channelId: number): Promise<{ url: string; token: string; room: string }> =>
-    req(`/api/channels/${channelId}/livekit-token`, { method: 'POST' }),
+  voiceCredentials: (
+    channelId: number,
+  ): Promise<{ ice_servers: RTCIceServer[]; ttl: number }> =>
+    req(`/api/channels/${channelId}/voice-credentials`, { method: 'POST' }),
 }

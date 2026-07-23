@@ -8,7 +8,7 @@
 | Домен | https://pskord.zlgvpn.org (TLS — общий wildcard `*.zlgvpn.org`) |
 | Путь на сервере | `/opt/pskovcord` (git-репозиторий, ветка `main`) |
 | Пользователь деплоя | `deploy` (группа `docker`, вход только по SSH-ключу) |
-| Голос | LiveKit Cloud (не self-hosted — не требует TURN/UDP-проброса) |
+| Голос | Свой WebRTC P2P mesh + coturn (self-hosted STUN/TURN, UDP 3478 + 49160-49200) |
 
 ## Архитектура
 
@@ -24,6 +24,12 @@
 - nginx стоит на хосте (не в контейнере) — проще управлять сертификатом и не
   тратить лишние ресурсы контейнера на 1 vCPU машине.
 - Postgres/Redis доступны только из docker-сети — портов наружу нет.
+- `coturn` (STUN/TURN) работает в `network_mode: host` — слушает 3478/udp+tcp
+  и relay-диапазон 49160-49200/udp напрямую на публичном IP сервера, мимо nginx
+  и docker NAT. Голосовой сигналинг (SDP/ICE) идёт через тот же `/ws/gateway`,
+  что и остальной realtime — отдельный location в nginx не нужен. Сам аудиопоток
+  в mesh-схеме идёт напрямую между браузерами клиентов (через coturn как relay
+  только когда прямой P2P невозможен из-за NAT).
 
 ## CI/CD
 
@@ -45,7 +51,12 @@
   `/home/deploy/.ssh/authorized_keys` на сервере).
 - **`/opt/pskovcord/.env`** и **`/opt/pskovcord/backend/.env`** на сервере (права 600,
   не в git) — Postgres-пароль, `DJANGO_SECRET_KEY`, `DJANGO_DEBUG=0`,
-  `DJANGO_ALLOWED_HOSTS=pskord.zlgvpn.org`, ключи LiveKit Cloud.
+  `DJANGO_ALLOWED_HOSTS=pskord.zlgvpn.org`, `TURN_SECRET` (одинаковый в обоих
+  файлах — coturn читает его через compose-подстановку из корневого `.env`,
+  Django — из `backend/.env`; сгенерировать `openssl rand -hex 32`).
+
+**Firewall на сервере** (вручную, не через docker — `coturn` в `network_mode: host`):
+открыть `3478/udp`, `3478/tcp`, `49160-49200/udp`.
 
 ## Ручные операции на сервере
 

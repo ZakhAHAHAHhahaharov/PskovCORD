@@ -32,14 +32,19 @@ services:
       timeout: 5s
       retries: 10
 
-  livekit:
-    image: livekit/livekit-server:latest
-    # dev-режим: встроенные ключи devkey/secret, TURN не нужен для локалки
-    command: ["--dev", "--bind", "0.0.0.0"]
-    ports:
-      - "7880:7880"      # WebSocket / API
-      - "7881:7881"      # RTC TCP
-      - "7882:7882/udp"  # RTC UDP
+  coturn:
+    image: coturn/coturn:latest
+    network_mode: host
+    command:
+      - "--listening-port=3478"
+      - "--min-port=49160"
+      - "--max-port=49200"
+      - "--realm=pskovcord.local"
+      - "--use-auth-secret"
+      - "--static-auth-secret=${TURN_SECRET}"
+      - "--no-cli"
+      - "--no-tls"
+      - "--no-dtls"
 
   backend:
     build: ./backend
