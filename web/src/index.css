@@ -753,3 +753,15 @@ input {
 ::-webkit-scrollbar-track {
   background: transparent;
 }
+
+.version-badge {
+  position: fixed;
+  right: 8px;
+  bottom: 6px;
+  font-size: 11px;
+  color: var(--text-faint);
+  opacity: 0.6;
+  pointer-events: none;
+  user-select: none;
+  z-index: 1000;
+}

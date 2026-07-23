@@ -2,6 +2,7 @@ import { AuthProvider, useAuth } from './auth'
 import { GatewayProvider } from './gateway'
 import LoginScreen from './components/LoginScreen'
 import AppShell from './components/AppShell'
+import VersionBadge from './components/VersionBadge'
 
 function Inner() {
   const { user, loading } = useAuth()
@@ -18,6 +19,7 @@ export default function App() {
   return (
     <AuthProvider>
       <Inner />
+      <VersionBadge />
     </AuthProvider>
   )
 }
