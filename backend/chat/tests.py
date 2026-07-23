@@ -124,6 +124,40 @@ class VoiceCredentialsViewTests(APITestCase):
         self.assertEqual(resp.status_code, 400)
 
 
+class ChannelCreatePermissionTests(APITestCase):
+    def setUp(self):
+        self.owner = User.objects.create_user(username="owner1", password="pw12345")
+        self.member = User.objects.create_user(username="member1", password="pw12345")
+        self.stranger = User.objects.create_user(username="stranger1", password="pw12345")
+        self.server = Server.objects.create(name="s", owner=self.owner)
+        Membership.objects.create(user=self.owner, server=self.server)
+        Membership.objects.create(user=self.member, server=self.server)
+
+    def test_owner_can_create_channel(self):
+        self.client.force_authenticate(self.owner)
+        resp = self.client.post(
+            f"/api/servers/{self.server.id}/channels",
+            {"name": "объявления", "kind": "text"},
+        )
+        self.assertEqual(resp.status_code, 201)
+
+    def test_regular_member_forbidden(self):
+        self.client.force_authenticate(self.member)
+        resp = self.client.post(
+            f"/api/servers/{self.server.id}/channels",
+            {"name": "объявления", "kind": "text"},
+        )
+        self.assertEqual(resp.status_code, 403)
+
+    def test_non_member_forbidden(self):
+        self.client.force_authenticate(self.stranger)
+        resp = self.client.post(
+            f"/api/servers/{self.server.id}/channels",
+            {"name": "объявления", "kind": "text"},
+        )
+        self.assertEqual(resp.status_code, 403)
+
+
 class GatewayVoiceSignalingTests(TransactionTestCase):
     """WS-уровень: join отдаёт peers, relay работает 1:1 только внутри канала.
 

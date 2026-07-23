@@ -44,6 +44,8 @@ export default function ChannelSidebar({
   const voiceMembersOf = (channelId: number) =>
     members.filter((m) => m.voice_channel === String(channelId))
 
+  const isOwner = server?.owner === user.id
+
   return (
     <aside className="channel-sidebar">
       <header className="sidebar-header">
@@ -54,16 +56,21 @@ export default function ChannelSidebar({
         {server && (
           <>
             <div className="channel-category">
-              <span onClick={() => onCreateChannel('text')} className="cat-label">
+              <span
+                className="cat-label"
+                onClick={isOwner ? () => onCreateChannel('text') : undefined}
+              >
                 Текстовые каналы
               </span>
-              <button
-                className="cat-add"
-                title="Создать текстовый канал"
-                onClick={() => onCreateChannel('text')}
-              >
-                +
-              </button>
+              {isOwner && (
+                <button
+                  className="cat-add"
+                  title="Создать текстовый канал"
+                  onClick={() => onCreateChannel('text')}
+                >
+                  +
+                </button>
+              )}
             </div>
             {textChannels.map((c) => (
               <button
@@ -77,16 +84,21 @@ export default function ChannelSidebar({
             ))}
 
             <div className="channel-category">
-              <span onClick={() => onCreateChannel('voice')} className="cat-label">
+              <span
+                className="cat-label"
+                onClick={isOwner ? () => onCreateChannel('voice') : undefined}
+              >
                 Голосовые каналы
               </span>
-              <button
-                className="cat-add"
-                title="Создать голосовой канал"
-                onClick={() => onCreateChannel('voice')}
-              >
-                +
-              </button>
+              {isOwner && (
+                <button
+                  className="cat-add"
+                  title="Создать голосовой канал"
+                  onClick={() => onCreateChannel('voice')}
+                >
+                  +
+                </button>
+              )}
             </div>
             {voiceChannels.map((c) => {
               const inChannel = voiceMembersOf(c.id)
