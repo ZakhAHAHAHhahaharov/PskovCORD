@@ -3,6 +3,14 @@ import Avatar from './Avatar'
 import MicButton from './MicButton'
 import { VoiceState } from './AppShell'
 import { VoiceStatus } from './VoiceProvider'
+import { useVoice } from '../voice'
+
+function pingLabel(ms: number | null): string {
+  if (ms == null) return ''
+  if (ms < 80) return `🟢 ${ms} мс`
+  if (ms < 180) return `🟡 ${ms} мс`
+  return `🔴 ${ms} мс`
+}
 
 export default function ChannelSidebar({
   server,
@@ -36,6 +44,8 @@ export default function ChannelSidebar({
 
   const voiceMembersOf = (channelId: number) =>
     members.filter((m) => m.voice_channel === String(channelId))
+
+  const { pingMs } = useVoice()
 
   return (
     <aside className="channel-sidebar">
@@ -112,6 +122,9 @@ export default function ChannelSidebar({
           <div className="voice-connected-info">
             <span className="voice-signal">
               {voiceStatus === 'connected' ? '📶 Голос подключён' : '⏳ Подключение…'}
+              {voiceStatus === 'connected' && pingMs != null && (
+                <span className="voice-ping">{pingLabel(pingMs)}</span>
+              )}
             </span>
             <span className="voice-connected-channel">🔊 {voice.channel.name}</span>
           </div>

@@ -20,6 +20,8 @@ export interface VoiceMesh {
   muted: boolean
   toggleMute: () => void
   status: VoiceStatus
+  /** Средний RTT (мс) по действующим WebRTC-соединениям, null пока нет данных. */
+  pingMs: number | null
 }
 
 const EMPTY_MESH: VoiceMesh = {
@@ -27,6 +29,27 @@ const EMPTY_MESH: VoiceMesh = {
   muted: true,
   toggleMute: () => {},
   status: 'connecting',
+  pingMs: null,
+}
+
+/** currentRoundTripTime (сек) активной candidate-pair из getStats(), в мс. */
+async function peerRttMs(pc: RTCPeerConnection): Promise<number | null> {
+  try {
+    const stats = await pc.getStats()
+    let rtt: number | null = null
+    stats.forEach((report) => {
+      if (
+        report.type === 'candidate-pair' &&
+        (report.nominated ?? report.state === 'succeeded') &&
+        typeof report.currentRoundTripTime === 'number'
+      ) {
+        rtt = report.currentRoundTripTime * 1000
+      }
+    })
+    return rtt
+  } catch {
+    return null
+  }
 }
 
 export const VoiceMeshCtx = createContext<VoiceMesh>(EMPTY_MESH)
@@ -49,6 +72,7 @@ export function useVoiceMesh(
   // Честный статус — не "подключено" сразу после join, а по факту хотя бы
   // одного реально установленного RTCPeerConnection (или отсутствия пиров).
   const [status, setStatus] = useState<VoiceStatus>('connecting')
+  const [pingMs, setPingMs] = useState<number | null>(null)
   const peers = useRef<Map<number, Peer>>(new Map())
   const localStream = useRef<MediaStream | null>(null)
 
@@ -177,8 +201,25 @@ export function useVoiceMesh(
       if (peers.current.has(d.user_id)) closePeer(d.user_id)
     })
 
+    // Опрос RTT раз в 2.5с по всем действующим соединениям — среднее округлённое.
+    const pingInterval = setInterval(async () => {
+      const active = Array.from(peers.current.values()).filter(
+        (p) => p.pc.connectionState === 'connected',
+      )
+      if (active.length === 0) {
+        setPingMs(null)
+        return
+      }
+      const rtts = (await Promise.all(active.map((p) => peerRttMs(p.pc)))).filter(
+        (v): v is number => v !== null,
+      )
+      if (cancelled) return
+      setPingMs(rtts.length ? Math.round(rtts.reduce((a, b) => a + b, 0) / rtts.length) : null)
+    }, 2500)
+
     return () => {
       cancelled = true
+      clearInterval(pingInterval)
       offPeers()
       offOffer()
       offAnswer()
@@ -189,6 +230,7 @@ export function useVoiceMesh(
       localStream.current = null
       setMuted(true)
       setStatus('connecting')
+      setPingMs(null)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [voice?.channel.id])
@@ -200,5 +242,5 @@ export function useVoiceMesh(
     setMuted(enabled)
   }
 
-  return { remoteStreams, muted, toggleMute, status }
+  return { remoteStreams, muted, toggleMute, status, pingMs }
 }
