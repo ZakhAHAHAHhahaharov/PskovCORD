@@ -352,6 +352,11 @@ input {
   font-size: 14px;
 }
 
+.voice-user span.speaking {
+  color: #fff;
+  transition: color 100ms ease-out;
+}
+
 /* ---- voice connected strip ---- */
 .voice-connected {
   display: flex;
@@ -607,6 +612,11 @@ input {
 
 .member-name.dim {
   color: var(--text-faint);
+}
+
+.member-name.speaking {
+  color: #fff;
+  transition: color 100ms ease-out;
 }
 
 .member-voice {

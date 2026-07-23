@@ -101,7 +101,7 @@ export default function ChannelSidebar({
                     return (
                       <div key={m.id} className="voice-user">
                         <Avatar name={m.username} color={m.avatar_color} size={20} speaking={speaking} />
-                        <span>{m.username}</span>
+                        <span className={speaking ? 'speaking' : ''}>{m.username}</span>
                       </div>
                     )
                   })}
