@@ -373,6 +373,13 @@ input {
   font-weight: 700;
 }
 
+.voice-ping {
+  margin-left: 6px;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 500;
+}
+
 .voice-connected-channel {
   color: var(--text-muted);
   font-size: 12px;
