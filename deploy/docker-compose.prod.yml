@@ -1,7 +1,7 @@
 # Продовый стек. Запускать из корня репозитория:
 #   docker compose -f deploy/docker-compose.prod.yml up -d --build
 # Переменные POSTGRES_* / APP_NAME берутся из корневого .env (не в git).
-# backend/.env (не в git) содержит Django/LiveKit секреты.
+# backend/.env (не в git) содержит Django/TURN секреты.
 name: pskovcord
 
 services:
@@ -30,6 +30,23 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+    restart: unless-stopped
+
+  coturn:
+    image: coturn/coturn:latest
+    # host-сеть: relay-порты нужно принимать напрямую на публичном IP,
+    # без docker NAT — иначе пришлось бы прокидывать весь диапазон через iptables.
+    network_mode: host
+    command:
+      - "--listening-port=3478"
+      - "--min-port=49160"
+      - "--max-port=49200"
+      - "--realm=pskord.zlgvpn.org"
+      - "--use-auth-secret"
+      - "--static-auth-secret=${TURN_SECRET}"
+      - "--external-ip=94.26.90.101"
+      - "--fingerprint"
+      - "--no-cli"
     restart: unless-stopped
 
   backend:

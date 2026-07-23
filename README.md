@@ -9,10 +9,10 @@
 
 | Слой | Технологии |
 |------|-----------|
-| Фронт | React + Vite + TypeScript, `@livekit/components-react` |
+| Фронт | React + Vite + TypeScript |
 | Бэкенд | Django + Django Channels (WebSocket) + DRF, SimpleJWT |
 | БД / кэш | PostgreSQL, Redis (presence + Channels layer) |
-| Голос/видео/экран | LiveKit (open-source SFU; на бэке только генерим токены) |
+| Голос | Свой WebRTC P2P mesh: сигналинг через `/ws/gateway`, STUN/TURN — свой coturn |
 | Десктоп | Electron (тонкая обёртка над веб-билдом) |
 | Инфра | Docker Compose (локально и на сервере) |
 
@@ -23,10 +23,10 @@
 ├── backend/            # Django: accounts (auth), chat (серверы/каналы/чат/voice)
 │   ├── config/         # settings, urls, asgi (Channels), wsgi
 │   ├── accounts/       # кастомный User + JWT-регистрация/логин
-│   └── chat/           # модели, REST, WebSocket-gateway, presence, LiveKit
+│   └── chat/           # модели, REST, WebSocket-gateway, presence, voice-сигналинг/TURN
 ├── web/                # React-клиент (Discord-раскладка)
 ├── desktop/            # Electron-обёртка
-├── docker-compose.yml  # postgres, redis, livekit, backend, web
+├── docker-compose.yml  # postgres, redis, coturn, backend, web
 ├── .env.example        # переменные, включая APP_NAME
 └── TODO.md             # исходный план
 ```
@@ -40,8 +40,8 @@ cp .env.example .env
 docker compose up --build
 ```
 
-Поднимутся: PostgreSQL, Redis, LiveKit, Django (миграции применятся автоматически)
-и Vite dev-сервер веб-клиента.
+Поднимутся: PostgreSQL, Redis, coturn (STUN/TURN), Django (миграции применятся
+автоматически) и Vite dev-сервер веб-клиента.
 
 - Веб-клиент: http://localhost:5173
 - Бэкенд: http://localhost:8000/ и http://localhost:8000/healthz
@@ -57,7 +57,7 @@ docker compose up --build
 | backend | 8000 | Django API + WebSocket (`/ws/gateway`) |
 | postgres | 5432 | БД |
 | redis | 6379 | presence + Channels layer |
-| livekit | 7880 | голос (dev-режим, ключи `devkey`/`secret`) |
+| coturn | 3478 (udp/tcp), 49160-49200/udp | STUN/TURN для голоса (dev-секрет из `.env`) |
 
 ## API (кратко)
 
@@ -72,10 +72,11 @@ docker compose up --build
 | GET | `/api/servers/{id}/members` | участники + presence |
 | POST | `/api/servers/{id}/channels` | создать канал |
 | GET | `/api/channels/{id}/messages` | история сообщений |
-| POST | `/api/channels/{id}/livekit-token` | токен для голоса |
+| POST | `/api/channels/{id}/voice-credentials` | STUN/TURN ICE-servers для входа в голос |
 
 WebSocket-gateway: `ws://localhost:8000/ws/gateway?token=<access>` — realtime-чат,
-presence (online/offline) и voice-state (кто в голосовом канале).
+presence (online/offline), voice-state (кто в голосовом канале) и WebRTC-сигналинг
+(SDP offer/answer, ICE-кандидаты) для P2P-mesh голоса.
 
 ## Десктоп (Electron)
 
@@ -94,19 +95,24 @@ py -3.11 -m venv backend\.venv
 backend\.venv\Scripts\python.exe -m pip install -r backend\requirements.txt
 cd web; npm install; npm run build; cd ..
 
-# запуск всего стека (LiveKit + backend, backend отдаёт и web)
-powershell -ExecutionPolicy Bypass -File start-native.ps1
+# запуск backend (применяет миграции, слушает :8000, отдаёт и собранный web)
+backend\.venv\Scripts\python.exe backend\manage.py migrate --noinput
+backend\.venv\Scripts\daphne.exe -b 0.0.0.0 -p 8000 config.asgi:application
 ```
 
-Открыть: **http://localhost:8000**. Голос: `tools\livekit-server.exe` (dev-режим,
-ключи `devkey`/`secret`) — качается отдельно с github.com/livekit/livekit/releases.
+Открыть: **http://localhost:8000**. Голос требует свой STUN/TURN (coturn) — под Windows
+без Docker проще всего поднять его через WSL2/Docker Desktop (`docker run --network=host
+coturn/coturn ...`, см. флаги в `docker-compose.yml`), нативного `coturn.exe` в проекте нет.
 
 `backend\.env` для нативного режима указывает на `127.0.0.1` (Postgres/Redis) и
-`ws://localhost:7880` (LiveKit). Веб собирается в single-origin (`web\.env.production`
-с пустыми URL) и отдаётся самим бэкендом.
+на `TURN_HOST`/`TURN_SECRET` своего coturn. Веб собирается в single-origin
+(`web\.env.production` с пустыми URL) и отдаётся самим бэкендом.
 
-> Голос: LiveKit в dev-режиме использует `--node-ip 127.0.0.1` для локали. Для LAN/удалёнки
-> нужен реальный IP/хост и проброс UDP-порта `7882` — через простой HTTP-туннель голос не пойдёт.
+> Голос: для локальных тестов на одной машине/LAN TURN обычно не нужен (прямые
+> host-кандидаты уже работают). Для доступа через интернет — нужны реальный
+> IP/хост и проброс `3478/udp+tcp` + relay-диапазона `49160-49200/udp` — через
+> простой HTTP-туннель (cloudflared и т.п.) голос не пойдёт, TURN тоже нужно
+> прокидывать отдельно.
 
 ## Заметки
 
@@ -116,5 +122,5 @@ powershell -ExecutionPolicy Bypass -File start-native.ps1
 - Миграции закоммичены; на старте контейнера backend применяются
   (`entrypoint.sh` → `migrate`). После правок моделей — `makemigrations`.
 - CORS в DEBUG открыт для всех источников — сузить перед боевым деплоем.
-- LiveKit в dev-режиме использует встроенные ключи; для сервера задать реальные
-  `LIVEKIT_API_KEY`/`LIVEKIT_API_SECRET` и внешний `LIVEKIT_URL`.
+- coturn в dev-режиме использует секрет из `.env` (`TURN_SECRET`); для сервера
+  сгенерировать свой (`openssl rand -hex 32`) и задать реальный `TURN_HOST`.

@@ -9,12 +9,25 @@ GatewayConsumer — единственный WebSocket на клиента (по
     {"op": "send_message", "channel_id": <id>, "content": "..."}
     {"op": "voice_join",   "channel_id": <id>}
     {"op": "voice_leave"}
+    {"op": "voice_offer",         "to_user_id": <id>, "sdp": "..."}
+    {"op": "voice_answer",        "to_user_id": <id>, "sdp": "..."}
+    {"op": "voice_ice_candidate", "to_user_id": <id>, "candidate": {...}}
 
 События сервер -> клиент:
     {"op": "ready", "user": {...}}
     {"op": "message_create", "message": {...}}
     {"op": "presence_update", "user_id": <id>, "online": bool}
     {"op": "voice_state_update", "user_id": <id>, "channel_id": <id|null>}
+    {"op": "voice_peers", "channel_id": <id>, "peer_ids": [<id>, ...]}
+    {"op": "voice_offer",         "from_user_id": <id>, "sdp": "..."}
+    {"op": "voice_answer",        "from_user_id": <id>, "sdp": "..."}
+    {"op": "voice_ice_candidate", "from_user_id": <id>, "candidate": {...}}
+
+WebRTC-сигналинг (voice_offer/voice_answer/voice_ice_candidate) — прямой relay
+1:1 через персональную группу "user_{id}" (см. connect()/disconnect()).
+Сервер релеит только между участниками одного и того же voice-канала (см.
+_handle_voice_relay); mesh — новый участник всегда инициирует offer ко всем,
+кого получил в voice_peers, остальные только отвечают.
 """
 import asyncio
 import json
@@ -44,6 +57,9 @@ class GatewayConsumer(AsyncWebsocketConsumer):
             self.server_groups.append(group)
             await self.channel_layer.group_add(group, self.channel_name)
 
+        self.user_group = f"user_{self.uid}"
+        await self.channel_layer.group_add(self.user_group, self.channel_name)
+
         await asyncio.to_thread(presence.user_connected, self.uid)
         await self._broadcast_presence(True)
 
@@ -62,6 +78,8 @@ class GatewayConsumer(AsyncWebsocketConsumer):
 
         for group in getattr(self, "server_groups", []):
             await self.channel_layer.group_discard(group, self.channel_name)
+        if getattr(self, "user_group", None):
+            await self.channel_layer.group_discard(self.user_group, self.channel_name)
 
         if remaining == 0:
             if prev_voice:
@@ -82,6 +100,8 @@ class GatewayConsumer(AsyncWebsocketConsumer):
             await self._handle_voice_join(data)
         elif op == "voice_leave":
             await self._handle_voice_leave()
+        elif op in ("voice_offer", "voice_answer", "voice_ice_candidate"):
+            await self._handle_voice_relay(op, data)
 
     # --- операции -----------------------------------------------------------
     async def _handle_send(self, data):
@@ -105,14 +125,37 @@ class GatewayConsumer(AsyncWebsocketConsumer):
         server_id = await self._voice_channel_server(channel_id)
         if not server_id:
             return
-        await asyncio.to_thread(presence.set_voice, self.uid, channel_id)
+        peer_ids = await asyncio.to_thread(
+            presence.join_voice, self.uid, channel_id)
         await self._broadcast_voice(self.user.id, channel_id, server_id)
+        await self._send({
+            "op": "voice_peers",
+            "channel_id": channel_id,
+            "peer_ids": [int(p) for p in peer_ids],
+        })
 
     async def _handle_voice_leave(self):
         prev = await asyncio.to_thread(presence.clear_voice, self.uid)
         if prev:
             server_id = await self._channel_server(prev)
             await self._broadcast_voice(self.user.id, None, server_id)
+
+    async def _handle_voice_relay(self, op, data):
+        to_user_id = data.get("to_user_id")
+        if not to_user_id:
+            return
+        my_channel = await asyncio.to_thread(presence.voice_channel, self.uid)
+        their_channel = await asyncio.to_thread(
+            presence.voice_channel, str(to_user_id))
+        if not my_channel or my_channel != their_channel:
+            return
+        payload = {"op": op, "from_user_id": self.user.id}
+        if op == "voice_ice_candidate":
+            payload["candidate"] = data.get("candidate")
+        else:
+            payload["sdp"] = data.get("sdp")
+        await self.channel_layer.group_send(
+            f"user_{to_user_id}", {"type": "broadcast", "payload": payload})
 
     # --- рассылка -----------------------------------------------------------
     async def _broadcast_presence(self, online: bool):

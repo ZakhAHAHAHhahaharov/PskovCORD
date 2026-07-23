@@ -68,3 +68,5 @@ jobs:
         working-directory: backend
       - run: python manage.py migrate --noinput
         working-directory: backend
+      - run: python manage.py test
+        working-directory: backend

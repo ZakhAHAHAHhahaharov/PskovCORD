@@ -12,6 +12,21 @@ _r = redis.from_url(settings.REDIS_URL, decode_responses=True)
 
 ONLINE_SET = "presence:online"
 
+# Атомарно: переносит uid в новый voice-канал и возвращает участников,
+# которые были там ДО него. Без этого два одновременных join гонятся за
+# отдельными SMEMBERS/SADD и оба видят пустой список пиров.
+_JOIN_VOICE_SCRIPT = """
+local prev = redis.call('GET', KEYS[1])
+if prev and prev ~= ARGV[2] then
+    redis.call('SREM', 'voice:' .. prev, ARGV[1])
+end
+redis.call('SET', KEYS[1], ARGV[2])
+local peers = redis.call('SMEMBERS', KEYS[2])
+redis.call('SADD', KEYS[2], ARGV[1])
+return peers
+"""
+_join_voice = _r.register_script(_JOIN_VOICE_SCRIPT)
+
 
 def _conn_key(uid) -> str:
     return f"presence:conns:{uid}"
@@ -64,6 +79,21 @@ def set_voice(uid, channel_id):
     _r.set(_voice_key(uid), channel_id)
     _r.sadd(_voice_members_key(channel_id), uid)
     return prev
+
+
+def join_voice(uid, channel_id) -> list:
+    """Атомарно ставит пользователя в голосовой канал.
+
+    Возвращает id участников, которые уже были в канале ДО этого вызова
+    (используется как список пиров для инициации WebRTC-соединений).
+    """
+    uid = str(uid)
+    channel_id = str(channel_id)
+    peers = _join_voice(
+        keys=[_voice_key(uid), _voice_members_key(channel_id)],
+        args=[uid, channel_id],
+    )
+    return [p for p in peers if p != uid]
 
 
 def clear_voice(uid):
