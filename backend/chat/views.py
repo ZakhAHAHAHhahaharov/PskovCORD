@@ -1,5 +1,6 @@
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
+from django.conf import settings
 from django.db import transaction
 from django.shortcuts import get_object_or_404
 from rest_framework import status
@@ -10,7 +11,7 @@ from rest_framework.views import APIView
 
 from accounts.serializers import UserSerializer
 
-from . import presence, turn
+from . import presence, sfu
 from .models import Channel, Membership, Message, Server
 from .serializers import ChannelSerializer, MessageSerializer, ServerSerializer
 
@@ -153,9 +154,14 @@ class VoiceCredentials(APIView):
             return Response({"detail": "Не голосовой канал."}, status=400)
         if not is_member(request.user, channel.server):
             return Response({"detail": "Нет доступа."}, status=403)
+        # Медиа идёт через собственный SFU (mediasoup). Клиенту нужен адрес
+        # сигналинга SFU и короткоживущий токен доступа (uid + room в нём).
         ttl = 3600
+        token = sfu.access_token(
+            request.user.id, channel_id, request.user.username, ttl=ttl)
         return Response({
-            "ice_servers": turn.ice_servers(request.user.id, ttl=ttl),
+            "sfu_url": settings.SFU_PUBLIC_URL,
+            "sfu_token": token,
             "ttl": ttl,
         })
 
@@ -163,5 +169,4 @@ class VoiceCredentials(APIView):
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def config_view(request):
-    from django.conf import settings
     return Response({"app_name": settings.APP_NAME})

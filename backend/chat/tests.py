@@ -1,11 +1,14 @@
 """
-Тесты голосового сигналинга и TURN-credentials (замена LiveKit).
+Тесты голосовой «меты» (presence/peers/mute), SFU access-токена и TURN-хелпера.
+Медиа-транспорт голоса вынесен в отдельный SFU-сервис (mediasoup), поэтому
+mesh-сигналинга offer/answer/ice в gateway больше нет.
 """
 import base64
 import hashlib
 import hmac
 import time
 
+import jwt
 from asgiref.sync import sync_to_async
 from channels.testing import WebsocketCommunicator
 from django.conf import settings
@@ -14,7 +17,7 @@ from django.test import TestCase, TransactionTestCase
 from rest_framework.test import APIClient, APITestCase
 from rest_framework_simplejwt.tokens import AccessToken
 
-from . import presence, turn
+from . import presence, sfu, turn
 from .consumers import GatewayConsumer
 from .middleware import JWTAuthMiddleware
 from .models import Channel, Membership, Message, Server
@@ -229,11 +232,17 @@ class VoiceCredentialsViewTests(APITestCase):
         self.text_channel = Channel.objects.create(
             server=self.server, name="t", kind=Channel.TEXT, position=1)
 
-    def test_member_gets_ice_servers(self):
+    def test_member_gets_sfu_credentials(self):
         self.client.force_authenticate(self.member)
         resp = self.client.post(f"/api/channels/{self.voice_channel.id}/voice-credentials")
         self.assertEqual(resp.status_code, 200)
-        self.assertIn("ice_servers", resp.data)
+        self.assertIn("sfu_url", resp.data)
+        self.assertIn("sfu_token", resp.data)
+        # Токен подписан SFU_SECRET и несёт, кто и в какой канал заходит.
+        claims = jwt.decode(
+            resp.data["sfu_token"], settings.SFU_SECRET, algorithms=["HS256"])
+        self.assertEqual(claims["uid"], self.member.id)
+        self.assertEqual(claims["room"], str(self.voice_channel.id))
 
     def test_non_member_forbidden(self):
         self.client.force_authenticate(self.stranger)
@@ -382,7 +391,10 @@ class GatewayVoiceSignalingTests(TransactionTestCase):
                 return peers_msg
         raise AssertionError("voice_peers/voice_state_update/voice_call_state не пришли за join")
 
-    async def test_join_peers_and_offer_relay(self):
+    async def test_join_reports_existing_peers(self):
+        # voice_peers — UI-роутер участников канала: первый входящий видит
+        # пустой список, следующий — уже присутствующих. Медиа между ними
+        # устанавливается не здесь, а через отдельный SFU.
         alice_ws = await self._connect(self.alice)
         bob_ws = await self._connect(self.bob)
 
@@ -391,16 +403,6 @@ class GatewayVoiceSignalingTests(TransactionTestCase):
 
         bob_peers = await self._join_and_drain(bob_ws, self.voice_channel.id)
         self.assertEqual(bob_peers["peer_ids"], [self.alice.id])
-        # у alice ещё висит voice_state_update про вход bob — вычитываем,
-        # чтобы не мешал следующей проверке relay.
-        await self._receive_until(alice_ws, "voice_state_update")
-
-        await bob_ws.send_json_to({
-            "op": "voice_offer", "to_user_id": self.alice.id, "sdp": "fake-sdp",
-        })
-        offer = await self._receive_until(alice_ws, "voice_offer")
-        self.assertEqual(offer["from_user_id"], self.bob.id)
-        self.assertEqual(offer["sdp"], "fake-sdp")
 
         await alice_ws.disconnect()
         await bob_ws.disconnect()
@@ -430,21 +432,6 @@ class GatewayVoiceSignalingTests(TransactionTestCase):
 
         await alice_ws.disconnect()
         await bob_ws.disconnect()
-
-    async def test_relay_dropped_outside_shared_voice_channel(self):
-        alice_ws = await self._connect(self.alice)
-        carol_ws = await self._connect(self.carol)
-
-        # alice в голосовом канале, carol — нет (не шлёт voice_join).
-        await self._join_and_drain(alice_ws, self.voice_channel.id)
-
-        await carol_ws.send_json_to({
-            "op": "voice_offer", "to_user_id": self.alice.id, "sdp": "should-not-arrive",
-        })
-        self.assertTrue(await alice_ws.receive_nothing(timeout=0.3))
-
-        await alice_ws.disconnect()
-        await carol_ws.disconnect()
 
     async def test_set_status_broadcasts_effective_status(self):
         alice_ws = await self._connect(self.alice)

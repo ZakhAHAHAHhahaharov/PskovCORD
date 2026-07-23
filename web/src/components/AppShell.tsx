@@ -13,7 +13,9 @@ import DiscoverModal from './DiscoverModal'
 
 export interface VoiceState {
   channel: Channel
-  iceServers: RTCIceServer[]
+  /** WS-адрес сигналинга SFU и токен доступа (из voice-credentials). */
+  sfuUrl: string
+  sfuToken: string
 }
 
 export default function AppShell() {
@@ -238,15 +240,14 @@ export default function AppShell() {
 
   const handleJoinVoice = async (ch: Channel) => {
     try {
-      const { ice_servers } = await api.voiceCredentials(ch.id)
+      const { sfu_url, sfu_token } = await api.voiceCredentials(ch.id)
       setVoiceStatus('connecting')
-      // gateway.voiceJoin шлём сразу (не после подключения, как раньше для
-      // LiveKit): в mesh это же сообщение приносит список пиров, без него
-      // соединяться не с кем. Честный статус ('connecting'/'failed') теперь
-      // считается по фактическому состоянию RTCPeerConnection'ов внутри
-      // VoiceProvider (onStatus), а не по факту join.
+      // gateway.voiceJoin — это «мета» голоса (presence/roster/call-state) в
+      // Django; медиа идёт отдельно через SFU по sfu_url/sfu_token. Честный
+      // статус ('connecting'/'failed') считается по факту подключения
+      // WebRTC-транспорта к SFU внутри VoiceProvider (onStatus).
       gateway.voiceJoin(ch.id)
-      setVoice({ channel: ch, iceServers: ice_servers })
+      setVoice({ channel: ch, sfuUrl: sfu_url, sfuToken: sfu_token })
     } catch (e) {
       alert('Не удалось подключиться к голосу: ' + (e as Error).message)
     }

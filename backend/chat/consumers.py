@@ -11,9 +11,6 @@ GatewayConsumer — единственный WebSocket на клиента (по
     {"op": "edit_message", "message_id": <id>, "content": "..."}
     {"op": "voice_join",   "channel_id": <id>}
     {"op": "voice_leave"}
-    {"op": "voice_offer",         "to_user_id": <id>, "sdp": "..."}
-    {"op": "voice_answer",        "to_user_id": <id>, "sdp": "..."}
-    {"op": "voice_ice_candidate", "to_user_id": <id>, "candidate": {...}}
     {"op": "voice_mute_update", "muted": bool, "deafened": bool}
     {"op": "voice_topic_update", "topic": "..."}
     {"op": "set_status", "status": "online" | "dnd" | "invisible"}
@@ -27,9 +24,6 @@ GatewayConsumer — единственный WebSocket на клиента (по
     {"op": "voice_state_update", "user_id": <id>, "channel_id": <id|null>}
     {"op": "voice_peers", "channel_id": <id>, "peer_ids": [<id>, ...],
      "peer_flags": {<id>: {"muted": bool, "deafened": bool}, ...}}
-    {"op": "voice_offer",         "from_user_id": <id>, "sdp": "..."}
-    {"op": "voice_answer",        "from_user_id": <id>, "sdp": "..."}
-    {"op": "voice_ice_candidate", "from_user_id": <id>, "candidate": {...}}
     {"op": "voice_mute_update", "user_id": <id>, "muted": bool, "deafened": bool}
     {"op": "voice_call_state", "channel_id": <id>,
      "call_started_at": <float|null>, "topic": "..."|null}
@@ -53,11 +47,10 @@ set_status — online/dnd/invisible, это ВЫБОР пользователя,
 онлайн-статуса; реальная видимость другим считается отдельно через
 presence.effective_status (invisible всегда маскируется под offline).
 
-WebRTC-сигналинг (voice_offer/voice_answer/voice_ice_candidate) — прямой relay
-1:1 через персональную группу "user_{id}" (см. connect()/disconnect()).
-Сервер релеит только между участниками одного и того же voice-канала (см.
-_handle_voice_relay); mesh — новый участник всегда инициирует offer ко всем,
-кого получил в voice_peers, остальные только отвечают.
+Медиа голоса (аудио/видео) идёт НЕ через этот gateway, а через отдельный
+SFU-сервис (mediasoup) — клиент открывает к нему свой WebRTC-транспорт по
+токену из voice-credentials. Здесь остаётся только «мета» голоса: presence,
+кто в каком канале (voice_state_update/voice_peers), флаги мьюта и call-state.
 """
 import asyncio
 import json
@@ -88,9 +81,6 @@ class GatewayConsumer(AsyncWebsocketConsumer):
             self.server_groups.append(group)
             await self.channel_layer.group_add(group, self.channel_name)
 
-        self.user_group = f"user_{self.uid}"
-        await self.channel_layer.group_add(self.user_group, self.channel_name)
-
         await asyncio.to_thread(presence.user_connected, self.uid)
         await self._broadcast_presence(True)
 
@@ -109,8 +99,6 @@ class GatewayConsumer(AsyncWebsocketConsumer):
 
         for group in getattr(self, "server_groups", []):
             await self.channel_layer.group_discard(group, self.channel_name)
-        if getattr(self, "user_group", None):
-            await self.channel_layer.group_discard(self.user_group, self.channel_name)
 
         if remaining == 0:
             if prev_voice:
@@ -136,8 +124,6 @@ class GatewayConsumer(AsyncWebsocketConsumer):
             await self._handle_voice_join(data)
         elif op == "voice_leave":
             await self._handle_voice_leave()
-        elif op in ("voice_offer", "voice_answer", "voice_ice_candidate"):
-            await self._handle_voice_relay(op, data)
         elif op == "voice_mute_update":
             await self._handle_voice_mute_update(data)
         elif op == "voice_topic_update":
@@ -259,23 +245,6 @@ class GatewayConsumer(AsyncWebsocketConsumer):
                 "muted": muted,
                 "deafened": deafened,
             }})
-
-    async def _handle_voice_relay(self, op, data):
-        to_user_id = data.get("to_user_id")
-        if not to_user_id:
-            return
-        my_channel = await asyncio.to_thread(presence.voice_channel, self.uid)
-        their_channel = await asyncio.to_thread(
-            presence.voice_channel, str(to_user_id))
-        if not my_channel or my_channel != their_channel:
-            return
-        payload = {"op": op, "from_user_id": self.user.id}
-        if op == "voice_ice_candidate":
-            payload["candidate"] = data.get("candidate")
-        else:
-            payload["sdp"] = data.get("sdp")
-        await self.channel_layer.group_send(
-            f"user_{to_user_id}", {"type": "broadcast", "payload": payload})
 
     # --- рассылка -----------------------------------------------------------
     async def _broadcast_presence(self, online: bool):
