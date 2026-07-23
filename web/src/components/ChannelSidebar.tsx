@@ -1,9 +1,10 @@
 import { Channel, Member, Server, User } from '../api'
 import Avatar from './Avatar'
 import MicButton from './MicButton'
+import DeafenButton from './DeafenButton'
+import { useVoice } from '../voice'
 import { VoiceState } from './AppShell'
 import { VoiceStatus } from './VoiceProvider'
-import { useVoice } from '../voice'
 
 function pingLabel(ms: number | null): string {
   if (ms == null) return ''
@@ -39,13 +40,16 @@ export default function ChannelSidebar({
   onCreateChannel: (kind: 'text' | 'voice') => void
   onLogout: () => void
 }) {
+  const { speakingUserIds, muted, deafened, peerMicState, pingMs } = useVoice()
+  const micStateOf = (memberId: number): { muted: boolean; deafened: boolean } =>
+    memberId === user.id
+      ? { muted, deafened }
+      : peerMicState.get(memberId) ?? { muted: false, deafened: false }
   const textChannels = channels.filter((c) => c.kind === 'text')
   const voiceChannels = channels.filter((c) => c.kind === 'voice')
 
   const voiceMembersOf = (channelId: number) =>
     members.filter((m) => m.voice_channel === String(channelId))
-
-  const { pingMs } = useVoice()
 
   return (
     <aside className="channel-sidebar">
@@ -104,12 +108,23 @@ export default function ChannelSidebar({
                     <span className="channel-icon">🔊</span>
                     <span className="channel-name">{c.name}</span>
                   </button>
-                  {inChannel.map((m) => (
-                    <div key={m.id} className="voice-user">
-                      <Avatar name={m.username} color={m.avatar_color} size={20} />
-                      <span>{m.username}</span>
-                    </div>
-                  ))}
+                  {inChannel.map((m) => {
+                    const speaking = speakingUserIds.has(m.id)
+                    const mic = micStateOf(m.id)
+                    return (
+                      <div key={m.id} className="voice-user">
+                        <Avatar name={m.username} color={m.avatar_color} size={20} speaking={speaking} />
+                        <span className={speaking ? 'speaking' : ''}>{m.username}</span>
+                        <span className="voice-user-icons">
+                          {mic.deafened ? (
+                            <span title="Не слышит участников">🔕</span>
+                          ) : mic.muted ? (
+                            <span title="Микрофон выключен">🔇</span>
+                          ) : null}
+                        </span>
+                      </div>
+                    )
+                  })}
                 </div>
               )
             })}
@@ -136,7 +151,14 @@ export default function ChannelSidebar({
 
       <div className="user-panel">
         <div className="user-panel-id">
-          <Avatar name={user.username} color={user.avatar_color} size={32} online showStatus />
+          <Avatar
+            name={user.username}
+            color={user.avatar_color}
+            size={32}
+            online
+            showStatus
+            speaking={speakingUserIds.has(user.id)}
+          />
           <div className="user-panel-names">
             <span className="user-panel-username">{user.username}</span>
             <span className="user-panel-status">В сети</span>
@@ -144,11 +166,19 @@ export default function ChannelSidebar({
         </div>
         <div className="user-panel-actions">
           {voice ? (
-            <MicButton />
+            <>
+              <MicButton />
+              <DeafenButton />
+            </>
           ) : (
-            <button className="icon-btn" title="Микрофон (войдите в голосовой канал)" disabled>
-              🎙️
-            </button>
+            <>
+              <button className="icon-btn" title="Микрофон (войдите в голосовой канал)" disabled>
+                🎙️
+              </button>
+              <button className="icon-btn" title="Звук (войдите в голосовой канал)" disabled>
+                🎧
+              </button>
+            </>
           )}
           <button className="icon-btn" title="Выйти" onClick={onLogout}>
             ⏻
