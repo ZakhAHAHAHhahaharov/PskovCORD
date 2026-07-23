@@ -6,11 +6,12 @@ import hashlib
 import hmac
 import time
 
+from asgiref.sync import sync_to_async
 from channels.testing import WebsocketCommunicator
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.test import TestCase, TransactionTestCase
-from rest_framework.test import APITestCase
+from rest_framework.test import APIClient, APITestCase
 from rest_framework_simplejwt.tokens import AccessToken
 
 from . import presence, turn
@@ -29,24 +30,26 @@ class PresenceVoiceTests(TestCase):
         presence._r.flushdb()
 
     def test_first_member_has_no_peers(self):
-        peers = presence.join_voice(1, 100)
+        peers, emptied = presence.join_voice(1, 100)
         self.assertEqual(peers, [])
+        self.assertIsNone(emptied)
         self.assertEqual(presence.voice_member_ids(100), {"1"})
 
     def test_second_member_sees_first_as_peer(self):
         presence.join_voice(1, 100)
-        peers = presence.join_voice(2, 100)
+        peers, _ = presence.join_voice(2, 100)
         self.assertEqual(peers, ["1"])
 
     def test_join_moves_between_channels(self):
         presence.join_voice(1, 100)
-        presence.join_voice(1, 200)
+        peers, emptied = presence.join_voice(1, 200)
         self.assertEqual(presence.voice_member_ids(100), set())
         self.assertEqual(presence.voice_member_ids(200), {"1"})
+        self.assertEqual(emptied, "100")
 
     def test_peers_never_include_self(self):
         presence.join_voice(1, 100)
-        peers = presence.join_voice(1, 100)  # повторный join тем же uid
+        peers, _ = presence.join_voice(1, 100)  # повторный join тем же uid
         self.assertEqual(peers, [])
 
     def test_voice_flags_default_to_false(self):
@@ -69,6 +72,63 @@ class PresenceVoiceTests(TestCase):
         presence.set_voice_flags(1, muted=True, deafened=True)
         presence.clear_voice(1)
         self.assertEqual(presence.voice_flags(1), {"muted": False, "deafened": False})
+
+
+class CallStateTests(TestCase):
+    """Длительность разговора и статус канала (voice_call_state) — живут в
+    presence только пока в голосовом канале хоть кто-то есть."""
+
+    def setUp(self):
+        presence._r.flushdb()
+
+    def tearDown(self):
+        presence._r.flushdb()
+
+    def test_first_join_starts_call(self):
+        self.assertIsNone(presence.call_started_at(100))
+        presence.join_voice(1, 100)
+        self.assertIsNotNone(presence.call_started_at(100))
+
+    def test_second_join_does_not_reset_start_time(self):
+        presence.join_voice(1, 100)
+        started = presence.call_started_at(100)
+        presence.join_voice(2, 100)
+        self.assertEqual(presence.call_started_at(100), started)
+
+    def test_last_leave_clears_call_state(self):
+        presence.join_voice(1, 100)
+        presence.set_call_topic(100, "болтаем")
+        presence.clear_voice(1)
+        self.assertIsNone(presence.call_started_at(100))
+        self.assertIsNone(presence.call_topic(100))
+
+    def test_leave_with_others_remaining_keeps_call_state(self):
+        presence.join_voice(1, 100)
+        presence.join_voice(2, 100)
+        presence.set_call_topic(100, "болтаем")
+        presence.clear_voice(1)
+        self.assertIsNotNone(presence.call_started_at(100))
+        self.assertEqual(presence.call_topic(100), "болтаем")
+
+    def test_switching_channel_clears_old_if_emptied(self):
+        presence.join_voice(1, 100)
+        presence.set_call_topic(100, "было")
+        presence.join_voice(1, 200)  # переключился, 100 опустел
+        self.assertIsNone(presence.call_started_at(100))
+        self.assertIsNone(presence.call_topic(100))
+        self.assertIsNotNone(presence.call_started_at(200))
+
+    def test_switching_channel_keeps_old_if_not_emptied(self):
+        presence.join_voice(1, 100)
+        presence.join_voice(2, 100)
+        presence.join_voice(1, 200)  # 100 всё ещё не пуст (там #2)
+        self.assertIsNotNone(presence.call_started_at(100))
+
+    def test_empty_topic_clears_it(self):
+        presence.join_voice(1, 100)
+        presence.set_call_topic(100, "тема")
+        presence.set_call_topic(100, "")
+        self.assertIsNone(presence.call_topic(100))
 
 
 class TurnCredentialsTests(TestCase):
@@ -123,6 +183,40 @@ class VoiceCredentialsViewTests(APITestCase):
         self.assertEqual(resp.status_code, 400)
 
 
+class ChannelCreatePermissionTests(APITestCase):
+    def setUp(self):
+        self.owner = User.objects.create_user(username="owner1", password="pw12345")
+        self.member = User.objects.create_user(username="member1", password="pw12345")
+        self.stranger = User.objects.create_user(username="stranger1", password="pw12345")
+        self.server = Server.objects.create(name="s", owner=self.owner)
+        Membership.objects.create(user=self.owner, server=self.server)
+        Membership.objects.create(user=self.member, server=self.server)
+
+    def test_owner_can_create_channel(self):
+        self.client.force_authenticate(self.owner)
+        resp = self.client.post(
+            f"/api/servers/{self.server.id}/channels",
+            {"name": "объявления", "kind": "text"},
+        )
+        self.assertEqual(resp.status_code, 201)
+
+    def test_regular_member_forbidden(self):
+        self.client.force_authenticate(self.member)
+        resp = self.client.post(
+            f"/api/servers/{self.server.id}/channels",
+            {"name": "объявления", "kind": "text"},
+        )
+        self.assertEqual(resp.status_code, 403)
+
+    def test_non_member_forbidden(self):
+        self.client.force_authenticate(self.stranger)
+        resp = self.client.post(
+            f"/api/servers/{self.server.id}/channels",
+            {"name": "объявления", "kind": "text"},
+        )
+        self.assertEqual(resp.status_code, 403)
+
+
 class GatewayVoiceSignalingTests(TransactionTestCase):
     """WS-уровень: join отдаёт peers, relay работает 1:1 только внутри канала.
 
@@ -168,21 +262,26 @@ class GatewayVoiceSignalingTests(TransactionTestCase):
         raise AssertionError(f"op={op!r} не пришёл за {max_messages} сообщений")
 
     async def _join_and_drain(self, comm, channel_id, timeout=2, max_messages=10):
-        """voice_join + дожидается СВОЕГО voice_peers и voice_state_update —
-        второй идёт через group_send (Redis) и может прийти позже voice_peers
-        (прямой self._send), иначе он "протекает" в последующие проверки."""
+        """voice_join + дожидается СВОЕГО voice_peers, voice_state_update и
+        voice_call_state — идут через group_send (Redis) и могут прийти
+        позже voice_peers (прямой self._send), иначе "протекают" в
+        последующие проверки (в т.ч. leftover "ready" от connect())."""
         await comm.send_json_to({"op": "voice_join", "channel_id": channel_id})
         peers_msg = None
         seen_own_state = False
+        seen_call_state = False
         for _ in range(max_messages):
             msg = await comm.receive_json_from(timeout=timeout)
-            if msg.get("op") == "voice_peers":
+            op = msg.get("op")
+            if op == "voice_peers":
                 peers_msg = msg
-            elif msg.get("op") == "voice_state_update" and msg.get("channel_id") == channel_id:
+            elif op == "voice_state_update" and msg.get("channel_id") == channel_id:
                 seen_own_state = True
-            if peers_msg is not None and seen_own_state:
+            elif op == "voice_call_state" and msg.get("channel_id") == channel_id:
+                seen_call_state = True
+            if peers_msg is not None and seen_own_state and seen_call_state:
                 return peers_msg
-        raise AssertionError("voice_peers/voice_state_update не пришли за join")
+        raise AssertionError("voice_peers/voice_state_update/voice_call_state не пришли за join")
 
     async def test_join_peers_and_offer_relay(self):
         alice_ws = await self._connect(self.alice)
@@ -247,3 +346,113 @@ class GatewayVoiceSignalingTests(TransactionTestCase):
 
         await alice_ws.disconnect()
         await carol_ws.disconnect()
+
+    async def test_join_broadcasts_call_start_to_everyone(self):
+        alice_ws = await self._connect(self.alice)
+        bob_ws = await self._connect(self.bob)
+
+        await self._join_and_drain(alice_ws, self.voice_channel.id)
+        started = await self._receive_until(bob_ws, "voice_call_state")
+        self.assertEqual(started["channel_id"], self.voice_channel.id)
+        self.assertIsNotNone(started["call_started_at"])
+        self.assertIsNone(started["topic"])
+
+        await alice_ws.disconnect()
+        await bob_ws.disconnect()
+
+    async def test_topic_update_by_participant_is_broadcast(self):
+        alice_ws = await self._connect(self.alice)
+        bob_ws = await self._connect(self.bob)
+
+        await self._join_and_drain(alice_ws, self.voice_channel.id)
+        await self._receive_until(bob_ws, "voice_call_state")  # старт разговора
+
+        await alice_ws.send_json_to({"op": "voice_topic_update", "topic": "обсуждаем релиз"})
+        seen = await self._receive_until(bob_ws, "voice_call_state")
+        self.assertEqual(seen["topic"], "обсуждаем релиз")
+
+        await alice_ws.disconnect()
+        await bob_ws.disconnect()
+
+    async def test_topic_update_ignored_when_not_in_voice(self):
+        bob_ws = await self._connect(self.bob)  # bob нигде не в голосе
+        # connect() шлёт bob'у и "ready" (direct), и его собственный
+        # presence_update (он тоже участник server_groups) — порядок между
+        # ними не гарантирован, но их ровно два.
+        await bob_ws.receive_json_from(timeout=2)
+        await bob_ws.receive_json_from(timeout=2)
+
+        await bob_ws.send_json_to({"op": "voice_topic_update", "topic": "не должно пройти"})
+        self.assertTrue(await bob_ws.receive_nothing(timeout=0.3))
+
+        await bob_ws.disconnect()
+
+    async def test_last_leave_broadcasts_cleared_call_state(self):
+        alice_ws = await self._connect(self.alice)
+        bob_ws = await self._connect(self.bob)
+
+        await self._join_and_drain(alice_ws, self.voice_channel.id)
+        await self._receive_until(bob_ws, "voice_call_state")  # старт
+
+        await alice_ws.send_json_to({"op": "voice_leave"})
+        ended = await self._receive_until(bob_ws, "voice_call_state")
+        self.assertIsNone(ended["call_started_at"])
+        self.assertIsNone(ended["topic"])
+
+        await alice_ws.disconnect()
+        await bob_ws.disconnect()
+
+
+class ChannelCreateBroadcastTests(TransactionTestCase):
+    """POST /channels должен живьём разослать новый канал участникам сервера,
+    а не только вернуть его в ответе создателю (иначе остальным нужно
+    перезагружать страницу, чтобы увидеть новый канал)."""
+
+    def setUp(self):
+        presence._r.flushdb()
+        self.alice = User.objects.create_user(username="alice3", password="pw12345")
+        self.bob = User.objects.create_user(username="bob3", password="pw12345")
+        self.server = Server.objects.create(name="s", owner=self.alice)
+        for u in (self.alice, self.bob):
+            Membership.objects.create(user=u, server=self.server)
+
+    def tearDown(self):
+        presence._r.flushdb()
+
+    async def _connect(self, user):
+        token = str(AccessToken.for_user(user))
+        comm = WebsocketCommunicator(
+            JWTAuthMiddleware(GatewayConsumer.as_asgi()),
+            f"/ws/gateway?token={token}")
+        connected, _ = await comm.connect()
+        self.assertTrue(connected)
+        return comm
+
+    @staticmethod
+    async def _receive_until(comm, op, timeout=2, max_messages=10):
+        """Пропускает "ready"/presence и т.п., пока не найдёт нужный op — как
+        в GatewayVoiceSignalingTests, порядок broadcast vs direct send не
+        гарантирован."""
+        for _ in range(max_messages):
+            msg = await comm.receive_json_from(timeout=timeout)
+            if msg.get("op") == op:
+                return msg
+        raise AssertionError(f"op={op!r} не пришёл за {max_messages} сообщений")
+
+    async def test_other_member_gets_new_channel_over_ws(self):
+        bob_ws = await self._connect(self.bob)
+
+        client = APIClient()
+        client.force_authenticate(self.alice)
+        resp = await sync_to_async(client.post)(
+            f"/api/servers/{self.server.id}/channels",
+            {"name": "новости", "kind": "text"},
+        )
+        self.assertEqual(resp.status_code, 201)
+
+        msg = await self._receive_until(bob_ws, "channel_create")
+        self.assertEqual(msg["server_id"], self.server.id)
+        self.assertEqual(msg["channel"]["name"], "новости")
+        self.assertEqual(msg["channel"]["kind"], "text")
+
+        await bob_ws.disconnect()

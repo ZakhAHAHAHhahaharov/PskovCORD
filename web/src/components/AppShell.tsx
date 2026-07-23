@@ -111,10 +111,38 @@ export default function AppShell() {
         ]
       })
     })
+    const offChannelCreate = gateway.on('channel_create', (d) => {
+      setServers((prev) =>
+        prev.map((s) =>
+          s.id === d.server_id
+            ? {
+                ...s,
+                channels: s.channels.some((c) => c.id === d.channel.id)
+                  ? s.channels
+                  : [...s.channels, d.channel],
+              }
+            : s,
+        ),
+      )
+    })
+    const offCallState = gateway.on('voice_call_state', (d) => {
+      setServers((prev) =>
+        prev.map((s) => ({
+          ...s,
+          channels: s.channels.map((c) =>
+            c.id === d.channel_id
+              ? { ...c, call_started_at: d.call_started_at, topic: d.topic }
+              : c,
+          ),
+        })),
+      )
+    })
     return () => {
       offMsg()
       offPresence()
       offVoice()
+      offChannelCreate()
+      offCallState()
     }
   }, [gateway, channelId, serverId])
 

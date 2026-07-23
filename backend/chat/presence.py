@@ -4,7 +4,11 @@ Presence через Redis.
 - online: пользователь считается онлайн, пока у него есть хотя бы одно
   активное WebSocket-подключение (счётчик коннектов на юзера).
 - voice: в каком голосовом канале сейчас находится пользователь.
+- call state (call_started_at/topic): живёт только пока в голосовом канале
+  кто-то есть — появляется при первом входе, стирается когда канал пустеет.
 """
+import time
+
 import redis
 from django.conf import settings
 
@@ -42,6 +46,14 @@ def _voice_members_key(channel_id) -> str:
 
 def _voice_flags_key(uid) -> str:
     return f"presence:voice_flags:{uid}"
+
+
+def _call_started_key(channel_id) -> str:
+    return f"presence:call_started:{channel_id}"
+
+
+def _call_topic_key(channel_id) -> str:
+    return f"presence:call_topic:{channel_id}"
 
 
 # --- online -----------------------------------------------------------------
@@ -85,19 +97,34 @@ def set_voice(uid, channel_id):
     return prev
 
 
-def join_voice(uid, channel_id) -> list:
+def join_voice(uid, channel_id):
     """Атомарно ставит пользователя в голосовой канал.
 
-    Возвращает id участников, которые уже были в канале ДО этого вызова
-    (используется как список пиров для инициации WebRTC-соединений).
+    Возвращает (peers, emptied_channel):
+    - peers — id участников, которые уже были в канале ДО этого вызова
+      (используется как список пиров для инициации WebRTC-соединений);
+    - emptied_channel — id канала, который пользователь только что покинул
+      переключением (если тот в итоге опустел), иначе None.
     """
     uid = str(uid)
     channel_id = str(channel_id)
+    prev = _r.get(_voice_key(uid))
     peers = _join_voice(
         keys=[_voice_key(uid), _voice_members_key(channel_id)],
         args=[uid, channel_id],
     )
-    return [p for p in peers if p != uid]
+    peers = [p for p in peers if p != uid]
+
+    emptied_channel = None
+    if prev and prev != channel_id and not _r.scard(_voice_members_key(prev)):
+        _clear_call_state(prev)
+        emptied_channel = prev
+
+    if not peers:
+        # Мы первые в канале — начинается новый разговор.
+        _r.set(_call_started_key(channel_id), time.time(), nx=True)
+
+    return peers, emptied_channel
 
 
 def clear_voice(uid):
@@ -106,6 +133,8 @@ def clear_voice(uid):
     if prev:
         _r.srem(_voice_members_key(prev), uid)
         _r.delete(_voice_key(uid))
+        if not _r.scard(_voice_members_key(prev)):
+            _clear_call_state(prev)
     _r.delete(_voice_flags_key(uid))
     return prev
 
@@ -138,3 +167,36 @@ def voice_flags(uid) -> dict:
 
 def voice_members_flags(channel_id) -> dict:
     return {uid: voice_flags(uid) for uid in voice_member_ids(channel_id)}
+
+
+# --- call state (длительность разговора + статус канала) --------------------
+def _clear_call_state(channel_id):
+    _r.delete(_call_started_key(channel_id))
+    _r.delete(_call_topic_key(channel_id))
+
+
+def call_started_at(channel_id):
+    """Unix-время (float, секунды) начала текущего разговора, либо None."""
+    val = _r.get(_call_started_key(str(channel_id)))
+    return float(val) if val is not None else None
+
+
+def call_topic(channel_id):
+    return _r.get(_call_topic_key(str(channel_id)))
+
+
+def set_call_topic(channel_id, topic: str | None):
+    """Тему может ставить только тот, кто сейчас в канале (проверяется
+    вызывающей стороной через voice_channel(uid)). Пустая/None — очищает."""
+    channel_id = str(channel_id)
+    if topic:
+        _r.set(_call_topic_key(channel_id), topic)
+    else:
+        _r.delete(_call_topic_key(channel_id))
+
+
+def call_state(channel_id) -> dict:
+    return {
+        "call_started_at": call_started_at(channel_id),
+        "topic": call_topic(channel_id),
+    }

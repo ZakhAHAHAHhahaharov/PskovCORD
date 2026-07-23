@@ -2,14 +2,31 @@ from rest_framework import serializers
 
 from accounts.serializers import UserSerializer
 
+from . import presence
 from .models import Channel, Message, Server
 
 
 class ChannelSerializer(serializers.ModelSerializer):
+    # Длительность текущего разговора и статус — только для голосовых
+    # каналов, живут в presence (Redis), пока в канале кто-то есть.
+    call_started_at = serializers.SerializerMethodField()
+    topic = serializers.SerializerMethodField()
+
     class Meta:
         model = Channel
-        fields = ["id", "server", "name", "kind", "position"]
+        fields = ["id", "server", "name", "kind", "position",
+                  "call_started_at", "topic"]
         read_only_fields = ["server"]
+
+    def get_call_started_at(self, obj):
+        if obj.kind != Channel.VOICE:
+            return None
+        return presence.call_started_at(obj.id)
+
+    def get_topic(self, obj):
+        if obj.kind != Channel.VOICE:
+            return None
+        return presence.call_topic(obj.id)
 
 
 class ServerSerializer(serializers.ModelSerializer):
