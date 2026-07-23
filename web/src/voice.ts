@@ -6,6 +6,7 @@ interface VoiceGateway {
   voiceOffer: (toUserId: number, sdp: string) => void
   voiceAnswer: (toUserId: number, sdp: string) => void
   voiceIceCandidate: (toUserId: number, candidate: RTCIceCandidateInit) => void
+  voiceMuteUpdate: (muted: boolean, deafened: boolean) => void
 }
 
 interface Peer {
@@ -15,21 +16,34 @@ interface Peer {
 
 export type VoiceStatus = 'connecting' | 'connected' | 'failed'
 
+export interface MicState {
+  muted: boolean
+  deafened: boolean
+}
+
 export interface VoiceMesh {
   remoteStreams: Map<number, MediaStream>
   muted: boolean
   toggleMute: () => void
+  deafened: boolean
+  toggleDeafen: () => void
   status: VoiceStatus
   /** Средний RTT (мс) по действующим WebRTC-соединениям, null пока нет данных. */
   pingMs: number | null
+  speakingUserIds: Set<number>
+  peerMicState: Map<number, MicState>
 }
 
 const EMPTY_MESH: VoiceMesh = {
   remoteStreams: new Map(),
   muted: true,
   toggleMute: () => {},
+  deafened: false,
+  toggleDeafen: () => {},
   status: 'connecting',
   pingMs: null,
+  speakingUserIds: new Set(),
+  peerMicState: new Map(),
 }
 
 /** currentRoundTripTime (сек) активной candidate-pair из getStats(), в мс. */
@@ -52,6 +66,12 @@ async function peerRttMs(pc: RTCPeerConnection): Promise<number | null> {
   }
 }
 
+// Простой RMS-детектор активности голоса по реальному аудио-потоку (свой
+// микрофон + все remote-треки уже есть в mesh — сигналить о "говорю" через
+// WS не нужно). HANGOVER сглаживает мигание кольца в паузах между словами.
+const SPEAKING_THRESHOLD = 0.035
+const SPEAKING_HANGOVER_MS = 300
+
 export const VoiceMeshCtx = createContext<VoiceMesh>(EMPTY_MESH)
 export const useVoice = () => useContext(VoiceMeshCtx)
 
@@ -64,17 +84,23 @@ export const useVoice = () => useContext(VoiceMeshCtx)
 export function useVoiceMesh(
   voice: VoiceState | null,
   gateway: VoiceGateway,
+  selfUserId: number | null,
 ): VoiceMesh {
   const [remoteStreams, setRemoteStreams] = useState<Map<number, MediaStream>>(
     new Map(),
   )
   const [muted, setMuted] = useState(true)
+  const [deafened, setDeafened] = useState(false)
   // Честный статус — не "подключено" сразу после join, а по факту хотя бы
   // одного реально установленного RTCPeerConnection (или отсутствия пиров).
   const [status, setStatus] = useState<VoiceStatus>('connecting')
   const [pingMs, setPingMs] = useState<number | null>(null)
+  const [speakingUserIds, setSpeakingUserIds] = useState<Set<number>>(new Set())
+  const [peerMicState, setPeerMicState] = useState<Map<number, MicState>>(new Map())
   const peers = useRef<Map<number, Peer>>(new Map())
   const localStream = useRef<MediaStream | null>(null)
+  const remoteStreamsRef = useRef(remoteStreams)
+  remoteStreamsRef.current = remoteStreams
 
   const evaluateStatus = () => {
     const states = Array.from(peers.current.values()).map((p) => p.pc.connectionState)
@@ -91,6 +117,12 @@ export function useVoiceMesh(
     peer.pc.close()
     peers.current.delete(userId)
     setRemoteStreams((prev) => {
+      if (!prev.has(userId)) return prev
+      const next = new Map(prev)
+      next.delete(userId)
+      return next
+    })
+    setPeerMicState((prev) => {
       if (!prev.has(userId)) return prev
       const next = new Map(prev)
       next.delete(userId)
@@ -160,6 +192,16 @@ export function useVoiceMesh(
       if (cancelled) return
       const peerIds = d.peer_ids as number[]
       if (peerIds.length === 0) setStatus('connected') // некого ждать
+      const peerFlags = (d.peer_flags ?? {}) as Record<string, MicState>
+      if (Object.keys(peerFlags).length > 0) {
+        setPeerMicState((prev) => {
+          const next = new Map(prev)
+          for (const [uid, flags] of Object.entries(peerFlags)) {
+            next.set(Number(uid), flags)
+          }
+          return next
+        })
+      }
       for (const peerId of peerIds) {
         const peer = ensurePeer(peerId)
         const offer = await peer.pc.createOffer()
@@ -201,6 +243,14 @@ export function useVoiceMesh(
       if (peers.current.has(d.user_id)) closePeer(d.user_id)
     })
 
+    const offMute = gateway.on('voice_mute_update', (d) => {
+      setPeerMicState((prev) => {
+        const next = new Map(prev)
+        next.set(d.user_id, { muted: !!d.muted, deafened: !!d.deafened })
+        return next
+      })
+    })
+
     // Опрос RTT раз в 2.5с по всем действующим соединениям — среднее округлённое.
     const pingInterval = setInterval(async () => {
       const active = Array.from(peers.current.values()).filter(
@@ -225,22 +275,136 @@ export function useVoiceMesh(
       offAnswer()
       offIce()
       offState()
+      offMute()
       for (const userId of Array.from(peers.current.keys())) closePeer(userId)
       localStream.current?.getTracks().forEach((t) => t.stop())
       localStream.current = null
       setMuted(true)
+      setDeafened(false)
       setStatus('connecting')
       setPingMs(null)
+      setPeerMicState(new Map())
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [voice?.channel.id])
+
+  // Рассылаем свой статус мьюта/дефена остальным участникам канала — им
+  // нужно рисовать значок у себя, а не только знать о самом факте.
+  useEffect(() => {
+    if (!voice) return
+    gateway.voiceMuteUpdate(muted, deafened)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [voice?.channel.id, muted, deafened])
+
+  // VAD: анализируем реальные аудио-потоки (свой + remote), которые уже
+  // текут через WebRTC, вместо того чтобы гонять "speaking"-события через
+  // сигнальный сервер.
+  useEffect(() => {
+    if (!voice) return
+
+    const AudioCtx = window.AudioContext ?? (window as any).webkitAudioContext
+    if (!AudioCtx) return
+    const audioCtx: AudioContext = new AudioCtx()
+    const analysers = new Map<
+      number,
+      { analyser: AnalyserNode; data: Uint8Array<ArrayBuffer> }
+    >()
+    const lastLoudAt = new Map<number, number>()
+    let rafId: number
+    let cancelled = false
+
+    const ensureAnalyser = (userId: number, stream: MediaStream) => {
+      if (analysers.has(userId)) return
+      const source = audioCtx.createMediaStreamSource(stream)
+      const analyser = audioCtx.createAnalyser()
+      analyser.fftSize = 512
+      analyser.smoothingTimeConstant = 0.6
+      source.connect(analyser)
+      analysers.set(userId, {
+        analyser,
+        data: new Uint8Array(new ArrayBuffer(analyser.fftSize)),
+      })
+    }
+
+    const tick = () => {
+      if (cancelled) return
+
+      const active: [number, MediaStream][] = []
+      if (localStream.current && selfUserId != null) {
+        active.push([selfUserId, localStream.current])
+      }
+      for (const entry of remoteStreamsRef.current) active.push(entry)
+
+      for (const [userId, stream] of active) ensureAnalyser(userId, stream)
+      for (const userId of Array.from(analysers.keys())) {
+        if (!active.some(([id]) => id === userId)) analysers.delete(userId)
+      }
+
+      const now = performance.now()
+      for (const [userId, { analyser, data }] of analysers) {
+        analyser.getByteTimeDomainData(data)
+        let sumSquares = 0
+        for (let i = 0; i < data.length; i++) {
+          const v = (data[i] - 128) / 128
+          sumSquares += v * v
+        }
+        if (Math.sqrt(sumSquares / data.length) > SPEAKING_THRESHOLD) {
+          lastLoudAt.set(userId, now)
+        }
+      }
+
+      setSpeakingUserIds((prev) => {
+        const next = new Set<number>()
+        for (const [userId, t] of lastLoudAt) {
+          if (now - t < SPEAKING_HANGOVER_MS) next.add(userId)
+        }
+        if (next.size === prev.size && Array.from(next).every((id) => prev.has(id))) {
+          return prev
+        }
+        return next
+      })
+
+      rafId = requestAnimationFrame(tick)
+    }
+    rafId = requestAnimationFrame(tick)
+
+    return () => {
+      cancelled = true
+      cancelAnimationFrame(rafId)
+      audioCtx.close().catch(() => {})
+    }
+  }, [voice?.channel.id, selfUserId])
 
   const toggleMute = () => {
     if (!localStream.current) return
     const enabled = localStream.current.getAudioTracks().some((t) => t.enabled)
     localStream.current.getAudioTracks().forEach((t) => (t.enabled = !enabled))
     setMuted(enabled)
+    // Как в Discord: включение микрофона автоматически снимает дефен.
+    if (!enabled && deafened) setDeafened(false)
   }
 
-  return { remoteStreams, muted, toggleMute, status, pingMs }
+  const toggleDeafen = () => {
+    setDeafened((prev) => {
+      const next = !prev
+      // Дефен глушит и свой микрофон — иначе странно "не слышать", но говорить.
+      if (next && localStream.current) {
+        localStream.current.getAudioTracks().forEach((t) => (t.enabled = false))
+        setMuted(true)
+      }
+      return next
+    })
+  }
+
+  return {
+    remoteStreams,
+    muted,
+    toggleMute,
+    deafened,
+    toggleDeafen,
+    status,
+    pingMs,
+    speakingUserIds,
+    peerMicState,
+  }
 }

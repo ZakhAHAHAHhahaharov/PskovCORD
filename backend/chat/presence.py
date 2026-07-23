@@ -40,6 +40,10 @@ def _voice_members_key(channel_id) -> str:
     return f"voice:{channel_id}"
 
 
+def _voice_flags_key(uid) -> str:
+    return f"presence:voice_flags:{uid}"
+
+
 # --- online -----------------------------------------------------------------
 def user_connected(uid) -> int:
     uid = str(uid)
@@ -102,6 +106,7 @@ def clear_voice(uid):
     if prev:
         _r.srem(_voice_members_key(prev), uid)
         _r.delete(_voice_key(uid))
+    _r.delete(_voice_flags_key(uid))
     return prev
 
 
@@ -111,3 +116,25 @@ def voice_channel(uid):
 
 def voice_member_ids(channel_id) -> set:
     return set(_r.smembers(_voice_members_key(channel_id)))
+
+
+# --- voice mic/deafen flags ---------------------------------------------
+def set_voice_flags(uid, muted: bool, deafened: bool):
+    """Запоминает состояние микрофона/наушников — чтобы новый участник канала
+    сразу видел актуальный статус остальных, не дожидаясь их следующего
+    voice_mute_update."""
+    _r.hset(_voice_flags_key(str(uid)), mapping={
+        "muted": int(bool(muted)), "deafened": int(bool(deafened)),
+    })
+
+
+def voice_flags(uid) -> dict:
+    raw = _r.hgetall(_voice_flags_key(str(uid)))
+    return {
+        "muted": raw.get("muted") == "1",
+        "deafened": raw.get("deafened") == "1",
+    }
+
+
+def voice_members_flags(channel_id) -> dict:
+    return {uid: voice_flags(uid) for uid in voice_member_ids(channel_id)}
