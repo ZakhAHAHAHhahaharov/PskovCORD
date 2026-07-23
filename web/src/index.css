@@ -365,6 +365,51 @@ input {
   opacity: 0.85;
 }
 
+.voice-call-info {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px 4px 28px;
+  min-width: 0;
+}
+
+.call-duration {
+  flex-shrink: 0;
+  color: var(--green);
+  font-size: 12px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.call-topic {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.call-topic.editable {
+  cursor: pointer;
+}
+
+.call-topic.editable:hover {
+  color: var(--text-normal);
+  text-decoration: underline dotted;
+}
+
+.call-topic-input {
+  min-width: 0;
+  flex: 1;
+  background: #1e1f22;
+  border: 1px solid var(--blurple);
+  border-radius: 3px;
+  padding: 1px 5px;
+  color: var(--text-normal);
+  font-size: 12px;
+}
+
 /* ---- voice connected strip ---- */
 .voice-connected {
   display: flex;

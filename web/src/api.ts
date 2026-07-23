@@ -10,6 +10,10 @@ export interface Channel {
   name: string
   kind: 'text' | 'voice'
   position: number
+  /** Момент начала текущего разговора (unix-секунды), null если пусто. Только voice. */
+  call_started_at: number | null
+  /** Статус звонка, который видят все; null если пусто. Только voice. */
+  topic: string | null
 }
 
 export interface Server {
