@@ -25,7 +25,7 @@ export default function MembersList({
           name={m.username}
           color={m.avatar_color}
           size={32}
-          online={m.online}
+          status={m.status}
           showStatus
         />
         <div className="member-info">

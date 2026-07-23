@@ -50,6 +50,69 @@ class PresenceVoiceTests(TestCase):
         self.assertEqual(peers, [])
 
 
+class EffectiveStatusTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(username="statususer", password="pw12345")
+
+    def test_offline_regardless_of_choice(self):
+        self.user.status = User.DND
+        self.assertEqual(presence.effective_status(self.user, online=False), "offline")
+
+    def test_invisible_masked_as_offline_when_online(self):
+        self.user.status = User.INVISIBLE
+        self.assertEqual(presence.effective_status(self.user, online=True), "offline")
+
+    def test_dnd_visible_when_online(self):
+        self.user.status = User.DND
+        self.assertEqual(presence.effective_status(self.user, online=True), "dnd")
+
+    def test_online_visible_when_online(self):
+        self.user.status = User.ONLINE
+        self.assertEqual(presence.effective_status(self.user, online=True), "online")
+
+
+class ServerMembersStatusTests(APITestCase):
+    def setUp(self):
+        self.alice = User.objects.create_user(username="alice3", password="pw12345")
+        self.bob = User.objects.create_user(username="bob3", password="pw12345")
+        self.server = Server.objects.create(name="s", owner=self.alice)
+        for u in (self.alice, self.bob):
+            Membership.objects.create(user=u, server=self.server)
+
+    def _members(self):
+        self.client.force_authenticate(self.alice)
+        resp = self.client.get(f"/api/servers/{self.server.id}/members")
+        self.assertEqual(resp.status_code, 200)
+        return {m["username"]: m for m in resp.data}
+
+    def test_offline_member_shows_offline(self):
+        members = self._members()
+        self.assertEqual(members["bob3"]["status"], "offline")
+        self.assertFalse(members["bob3"]["online"])
+
+    def test_invisible_online_member_masked_as_offline(self):
+        presence.user_connected(self.bob.id)
+        self.bob.status = User.INVISIBLE
+        self.bob.save(update_fields=["status"])
+        try:
+            members = self._members()
+            self.assertEqual(members["bob3"]["status"], "offline")
+            self.assertFalse(members["bob3"]["online"])
+        finally:
+            presence.user_disconnected(self.bob.id)
+
+    def test_dnd_online_member_shows_dnd(self):
+        presence.user_connected(self.bob.id)
+        self.bob.status = User.DND
+        self.bob.save(update_fields=["status"])
+        try:
+            members = self._members()
+            self.assertEqual(members["bob3"]["status"], "dnd")
+            self.assertTrue(members["bob3"]["online"])
+        finally:
+            presence.user_disconnected(self.bob.id)
+
+
 class TurnCredentialsTests(TestCase):
     def test_credential_matches_hmac_sha1(self):
         ice = turn.ice_servers(user_id=42, ttl=60)
@@ -200,3 +263,35 @@ class GatewayVoiceSignalingTests(TransactionTestCase):
 
         await alice_ws.disconnect()
         await carol_ws.disconnect()
+
+    async def test_set_status_broadcasts_effective_status(self):
+        alice_ws = await self._connect(self.alice)
+        bob_ws = await self._connect(self.bob)
+
+        # bob получает presence_update о подключении alice (online, статус по умолчанию).
+        await self._receive_until(bob_ws, "presence_update")
+
+        await alice_ws.send_json_to({"op": "set_status", "status": "dnd"})
+        msg = await self._receive_until(bob_ws, "presence_update")
+        self.assertEqual(msg["user_id"], self.alice.id)
+        self.assertEqual(msg["status"], "dnd")
+        self.assertTrue(msg["online"])
+
+        await alice_ws.send_json_to({"op": "set_status", "status": "invisible"})
+        msg = await self._receive_until(bob_ws, "presence_update")
+        self.assertEqual(msg["user_id"], self.alice.id)
+        self.assertEqual(msg["status"], "offline")
+        self.assertFalse(msg["online"])
+
+        await alice_ws.disconnect()
+        await bob_ws.disconnect()
+
+    async def test_set_status_invalid_value_ignored(self):
+        alice_ws = await self._connect(self.alice)
+        await self._receive_until(alice_ws, "ready")
+        await self._receive_until(alice_ws, "presence_update")
+
+        await alice_ws.send_json_to({"op": "set_status", "status": "bogus"})
+        self.assertTrue(await alice_ws.receive_nothing(timeout=0.3))
+
+        await alice_ws.disconnect()

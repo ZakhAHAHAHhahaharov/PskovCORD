@@ -1,7 +1,13 @@
+/** Статус, который выбирает сам пользователь. */
+export type UserStatus = 'online' | 'dnd' | 'invisible'
+/** Что видят другие: invisible всегда маскируется под offline. */
+export type EffectiveStatus = 'online' | 'dnd' | 'offline'
+
 export interface User {
   id: number
   username: string
   avatar_color: string
+  status: UserStatus
 }
 
 export interface Channel {
@@ -28,9 +34,10 @@ export interface Message {
   created_at: string
 }
 
-export interface Member extends User {
+export interface Member extends Omit<User, 'status'> {
   online: boolean
   voice_channel: string | null
+  status: EffectiveStatus
 }
 
 export interface DiscoverServer {

@@ -6,7 +6,7 @@ import {
   useRef,
   ReactNode,
 } from 'react'
-import { getToken } from './api'
+import { getToken, UserStatus } from './api'
 
 type Handler = (payload: any) => void
 
@@ -18,6 +18,7 @@ interface GatewayCtx {
   voiceOffer: (toUserId: number, sdp: string) => void
   voiceAnswer: (toUserId: number, sdp: string) => void
   voiceIceCandidate: (toUserId: number, candidate: RTCIceCandidateInit) => void
+  setStatus: (status: UserStatus) => void
 }
 
 const Ctx = createContext<GatewayCtx>(null as unknown as GatewayCtx)
@@ -97,6 +98,7 @@ export function GatewayProvider({ children }: { children: ReactNode }) {
       raw({ op: 'voice_answer', to_user_id: toUserId, sdp }),
     voiceIceCandidate: (toUserId, candidate) =>
       raw({ op: 'voice_ice_candidate', to_user_id: toUserId, candidate }),
+    setStatus: (status) => raw({ op: 'set_status', status }),
   }
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>

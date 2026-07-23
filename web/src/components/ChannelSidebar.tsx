@@ -1,6 +1,7 @@
-import { Channel, Member, Server, User } from '../api'
+import { Channel, Member, Server } from '../api'
 import Avatar from './Avatar'
 import MicButton from './MicButton'
+import StatusMenu from './StatusMenu'
 import { VoiceState } from './AppShell'
 import { VoiceStatus } from './VoiceProvider'
 
@@ -11,7 +12,6 @@ export default function ChannelSidebar({
   members,
   voice,
   voiceStatus,
-  user,
   onSelectText,
   onJoinVoice,
   onLeaveVoice,
@@ -24,7 +24,6 @@ export default function ChannelSidebar({
   members: Member[]
   voice: VoiceState | null
   voiceStatus: VoiceStatus
-  user: User
   onSelectText: (c: Channel) => void
   onJoinVoice: (c: Channel) => void
   onLeaveVoice: () => void
@@ -122,13 +121,7 @@ export default function ChannelSidebar({
       )}
 
       <div className="user-panel">
-        <div className="user-panel-id">
-          <Avatar name={user.username} color={user.avatar_color} size={32} online showStatus />
-          <div className="user-panel-names">
-            <span className="user-panel-username">{user.username}</span>
-            <span className="user-panel-status">В сети</span>
-          </div>
-        </div>
+        <StatusMenu />
         <div className="user-panel-actions">
           {voice ? (
             <MicButton />

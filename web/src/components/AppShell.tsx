@@ -16,7 +16,7 @@ export interface VoiceState {
 }
 
 export default function AppShell() {
-  const { user, logout } = useAuth()
+  const { logout } = useAuth()
   const gateway = useGateway()
 
   const [servers, setServers] = useState<Server[]>([])
@@ -86,7 +86,9 @@ export default function AppShell() {
     })
     const offPresence = gateway.on('presence_update', (d) => {
       setMembers((prev) =>
-        prev.map((m) => (m.id === d.user_id ? { ...m, online: d.online } : m)),
+        prev.map((m) =>
+          m.id === d.user_id ? { ...m, online: d.online, status: d.status } : m,
+        ),
       )
     })
     const offVoice = gateway.on('voice_state_update', (d) => {
@@ -99,6 +101,8 @@ export default function AppShell() {
           )
         }
         // Участник, которого ещё не было в загруженном списке — добавляем сразу.
+        // Раз он в голосе — статус по умолчанию 'online' (voice_state_update
+        // не несёт эффективный статус; уточнится следующим presence_update).
         return [
           ...prev,
           {
@@ -106,6 +110,7 @@ export default function AppShell() {
             username: d.username,
             avatar_color: d.avatar_color,
             online: true,
+            status: 'online' as const,
             voice_channel: vc,
           },
         ]
@@ -218,7 +223,6 @@ export default function AppShell() {
         members={members}
         voice={voice}
         voiceStatus={voiceStatus}
-        user={user!}
         onSelectText={(c) => setChannelId(c.id)}
         onJoinVoice={handleJoinVoice}
         onLeaveVoice={handleLeaveVoice}

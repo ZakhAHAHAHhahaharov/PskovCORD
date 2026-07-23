@@ -1,0 +1,81 @@
+import { useEffect, useRef, useState } from 'react'
+import { useAuth } from '../auth'
+import { useGateway } from '../gateway'
+import { UserStatus } from '../api'
+import Avatar from './Avatar'
+
+const OPTIONS: { value: UserStatus; label: string; dot: string }[] = [
+  { value: 'online', label: 'В сети', dot: '🟢' },
+  { value: 'dnd', label: 'Не беспокоить', dot: '🔴' },
+  { value: 'invisible', label: 'Невидимка', dot: '⚪' },
+]
+
+export const STATUS_LABELS: Record<UserStatus, string> = {
+  online: 'В сети',
+  dnd: 'Не беспокоить',
+  invisible: 'Невидимка',
+}
+
+/** Клик по своему аватару/имени в панели — открывает выбор статуса. */
+export default function StatusMenu() {
+  const { user, updateLocalStatus } = useAuth()
+  const gateway = useGateway()
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    const onClick = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', onClick)
+    return () => document.removeEventListener('mousedown', onClick)
+  }, [open])
+
+  if (!user) return null
+
+  const choose = (status: UserStatus) => {
+    gateway.setStatus(status)
+    updateLocalStatus(status)
+    setOpen(false)
+  }
+
+  return (
+    <div className="status-menu" ref={ref}>
+      <button
+        type="button"
+        className="user-panel-id status-trigger"
+        onClick={() => setOpen((o) => !o)}
+        title="Изменить статус"
+      >
+        <Avatar
+          name={user.username}
+          color={user.avatar_color}
+          size={32}
+          status={user.status}
+          showStatus
+        />
+        <div className="user-panel-names">
+          <span className="user-panel-username">{user.username}</span>
+          <span className="user-panel-status">{STATUS_LABELS[user.status]}</span>
+        </div>
+      </button>
+
+      {open && (
+        <div className="status-menu-popup">
+          {OPTIONS.map((o) => (
+            <button
+              key={o.value}
+              type="button"
+              className={`status-menu-item ${user.status === o.value ? 'active' : ''}`}
+              onClick={() => choose(o.value)}
+            >
+              <span className="status-menu-dot">{o.dot}</span>
+              {o.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
