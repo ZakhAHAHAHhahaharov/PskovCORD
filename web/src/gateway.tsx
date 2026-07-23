@@ -19,6 +19,7 @@ interface GatewayCtx {
   voiceAnswer: (toUserId: number, sdp: string) => void
   voiceIceCandidate: (toUserId: number, candidate: RTCIceCandidateInit) => void
   voiceMuteUpdate: (muted: boolean, deafened: boolean) => void
+  voiceTopicUpdate: (topic: string) => void
 }
 
 const Ctx = createContext<GatewayCtx>(null as unknown as GatewayCtx)
@@ -100,6 +101,7 @@ export function GatewayProvider({ children }: { children: ReactNode }) {
       raw({ op: 'voice_ice_candidate', to_user_id: toUserId, candidate }),
     voiceMuteUpdate: (muted, deafened) =>
       raw({ op: 'voice_mute_update', muted, deafened }),
+    voiceTopicUpdate: (topic) => raw({ op: 'voice_topic_update', topic }),
   }
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>

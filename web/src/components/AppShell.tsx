@@ -125,11 +125,24 @@ export default function AppShell() {
         ),
       )
     })
+    const offCallState = gateway.on('voice_call_state', (d) => {
+      setServers((prev) =>
+        prev.map((s) => ({
+          ...s,
+          channels: s.channels.map((c) =>
+            c.id === d.channel_id
+              ? { ...c, call_started_at: d.call_started_at, topic: d.topic }
+              : c,
+          ),
+        })),
+      )
+    })
     return () => {
       offMsg()
       offPresence()
       offVoice()
       offChannelCreate()
+      offCallState()
     }
   }, [gateway, channelId, serverId])
 

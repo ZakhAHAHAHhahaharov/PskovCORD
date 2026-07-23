@@ -5,6 +5,6 @@
  * выкачено на сервере.
  */
 export const APP_VERSION = {
-  version: '0.0.5',
-  note: 'live-каналы',
+  version: '0.0.6',
+  note: 'статус звонка',
 }

@@ -2,6 +2,8 @@ import { Channel, Member, Server, User } from '../api'
 import Avatar from './Avatar'
 import MicButton from './MicButton'
 import DeafenButton from './DeafenButton'
+import CallDuration from './CallDuration'
+import CallTopic from './CallTopic'
 import { useVoice } from '../voice'
 import { VoiceState } from './AppShell'
 import { VoiceStatus } from './VoiceProvider'
@@ -113,6 +115,14 @@ export default function ChannelSidebar({
                     <span className="channel-icon">🔊</span>
                     <span className="channel-name">{c.name}</span>
                   </button>
+                  {inChannel.length > 0 && (
+                    <div className="voice-call-info">
+                      {c.call_started_at != null && (
+                        <CallDuration startedAt={c.call_started_at} />
+                      )}
+                      <CallTopic topic={c.topic} canEdit={voice?.channel.id === c.id} />
+                    </div>
+                  )}
                   {inChannel.map((m) => {
                     const speaking = speakingUserIds.has(m.id)
                     const mic = micStateOf(m.id)
