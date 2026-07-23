@@ -627,6 +627,12 @@ input {
   align-items: center;
   justify-content: center;
   font-weight: 600;
+  box-shadow: 0 0 0 0 var(--green);
+  transition: box-shadow 100ms ease-out;
+}
+
+.avatar.speaking {
+  box-shadow: 0 0 0 3px var(--green);
 }
 
 .status-dot {

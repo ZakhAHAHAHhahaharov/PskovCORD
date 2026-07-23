@@ -1,6 +1,7 @@
 import { Channel, Member, Server, User } from '../api'
 import Avatar from './Avatar'
 import MicButton from './MicButton'
+import { useVoice } from '../voice'
 import { VoiceState } from './AppShell'
 import { VoiceStatus } from './VoiceProvider'
 
@@ -31,6 +32,7 @@ export default function ChannelSidebar({
   onCreateChannel: (kind: 'text' | 'voice') => void
   onLogout: () => void
 }) {
+  const { speakingUserIds } = useVoice()
   const textChannels = channels.filter((c) => c.kind === 'text')
   const voiceChannels = channels.filter((c) => c.kind === 'voice')
 
@@ -94,12 +96,15 @@ export default function ChannelSidebar({
                     <span className="channel-icon">🔊</span>
                     <span className="channel-name">{c.name}</span>
                   </button>
-                  {inChannel.map((m) => (
-                    <div key={m.id} className="voice-user">
-                      <Avatar name={m.username} color={m.avatar_color} size={20} />
-                      <span>{m.username}</span>
-                    </div>
-                  ))}
+                  {inChannel.map((m) => {
+                    const speaking = speakingUserIds.has(m.id)
+                    return (
+                      <div key={m.id} className="voice-user">
+                        <Avatar name={m.username} color={m.avatar_color} size={20} speaking={speaking} />
+                        <span>{m.username}</span>
+                      </div>
+                    )
+                  })}
                 </div>
               )
             })}
@@ -123,7 +128,14 @@ export default function ChannelSidebar({
 
       <div className="user-panel">
         <div className="user-panel-id">
-          <Avatar name={user.username} color={user.avatar_color} size={32} online showStatus />
+          <Avatar
+            name={user.username}
+            color={user.avatar_color}
+            size={32}
+            online
+            showStatus
+            speaking={speakingUserIds.has(user.id)}
+          />
           <div className="user-panel-names">
             <span className="user-panel-username">{user.username}</span>
             <span className="user-panel-status">В сети</span>

@@ -20,6 +20,7 @@ export interface VoiceMesh {
   muted: boolean
   toggleMute: () => void
   status: VoiceStatus
+  speakingUserIds: Set<number>
 }
 
 const EMPTY_MESH: VoiceMesh = {
@@ -27,7 +28,14 @@ const EMPTY_MESH: VoiceMesh = {
   muted: true,
   toggleMute: () => {},
   status: 'connecting',
+  speakingUserIds: new Set(),
 }
+
+// Простой RMS-детектор активности голоса по реальному аудио-потоку (свой
+// микрофон + все remote-треки уже есть в mesh — сигналить о "говорю" через
+// WS не нужно). HANGOVER сглаживает мигание кольца в паузах между словами.
+const SPEAKING_THRESHOLD = 0.035
+const SPEAKING_HANGOVER_MS = 300
 
 export const VoiceMeshCtx = createContext<VoiceMesh>(EMPTY_MESH)
 export const useVoice = () => useContext(VoiceMeshCtx)
@@ -41,6 +49,7 @@ export const useVoice = () => useContext(VoiceMeshCtx)
 export function useVoiceMesh(
   voice: VoiceState | null,
   gateway: VoiceGateway,
+  selfUserId: number | null,
 ): VoiceMesh {
   const [remoteStreams, setRemoteStreams] = useState<Map<number, MediaStream>>(
     new Map(),
@@ -49,8 +58,11 @@ export function useVoiceMesh(
   // Честный статус — не "подключено" сразу после join, а по факту хотя бы
   // одного реально установленного RTCPeerConnection (или отсутствия пиров).
   const [status, setStatus] = useState<VoiceStatus>('connecting')
+  const [speakingUserIds, setSpeakingUserIds] = useState<Set<number>>(new Set())
   const peers = useRef<Map<number, Peer>>(new Map())
   const localStream = useRef<MediaStream | null>(null)
+  const remoteStreamsRef = useRef(remoteStreams)
+  remoteStreamsRef.current = remoteStreams
 
   const evaluateStatus = () => {
     const states = Array.from(peers.current.values()).map((p) => p.pc.connectionState)
@@ -193,6 +205,85 @@ export function useVoiceMesh(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [voice?.channel.id])
 
+  // VAD: анализируем реальные аудио-потоки (свой + remote), которые уже
+  // текут через WebRTC, вместо того чтобы гонять "speaking"-события через
+  // сигнальный сервер.
+  useEffect(() => {
+    if (!voice) return
+
+    const AudioCtx = window.AudioContext ?? (window as any).webkitAudioContext
+    if (!AudioCtx) return
+    const audioCtx: AudioContext = new AudioCtx()
+    const analysers = new Map<
+      number,
+      { analyser: AnalyserNode; data: Uint8Array<ArrayBuffer> }
+    >()
+    const lastLoudAt = new Map<number, number>()
+    let rafId: number
+    let cancelled = false
+
+    const ensureAnalyser = (userId: number, stream: MediaStream) => {
+      if (analysers.has(userId)) return
+      const source = audioCtx.createMediaStreamSource(stream)
+      const analyser = audioCtx.createAnalyser()
+      analyser.fftSize = 512
+      analyser.smoothingTimeConstant = 0.6
+      source.connect(analyser)
+      analysers.set(userId, {
+        analyser,
+        data: new Uint8Array(new ArrayBuffer(analyser.fftSize)),
+      })
+    }
+
+    const tick = () => {
+      if (cancelled) return
+
+      const active: [number, MediaStream][] = []
+      if (localStream.current && selfUserId != null) {
+        active.push([selfUserId, localStream.current])
+      }
+      for (const entry of remoteStreamsRef.current) active.push(entry)
+
+      for (const [userId, stream] of active) ensureAnalyser(userId, stream)
+      for (const userId of Array.from(analysers.keys())) {
+        if (!active.some(([id]) => id === userId)) analysers.delete(userId)
+      }
+
+      const now = performance.now()
+      for (const [userId, { analyser, data }] of analysers) {
+        analyser.getByteTimeDomainData(data)
+        let sumSquares = 0
+        for (let i = 0; i < data.length; i++) {
+          const v = (data[i] - 128) / 128
+          sumSquares += v * v
+        }
+        if (Math.sqrt(sumSquares / data.length) > SPEAKING_THRESHOLD) {
+          lastLoudAt.set(userId, now)
+        }
+      }
+
+      setSpeakingUserIds((prev) => {
+        const next = new Set<number>()
+        for (const [userId, t] of lastLoudAt) {
+          if (now - t < SPEAKING_HANGOVER_MS) next.add(userId)
+        }
+        if (next.size === prev.size && Array.from(next).every((id) => prev.has(id))) {
+          return prev
+        }
+        return next
+      })
+
+      rafId = requestAnimationFrame(tick)
+    }
+    rafId = requestAnimationFrame(tick)
+
+    return () => {
+      cancelled = true
+      cancelAnimationFrame(rafId)
+      audioCtx.close().catch(() => {})
+    }
+  }, [voice?.channel.id, selfUserId])
+
   const toggleMute = () => {
     if (!localStream.current) return
     const enabled = localStream.current.getAudioTracks().some((t) => t.enabled)
@@ -200,5 +291,5 @@ export function useVoiceMesh(
     setMuted(enabled)
   }
 
-  return { remoteStreams, muted, toggleMute, status }
+  return { remoteStreams, muted, toggleMute, status, speakingUserIds }
 }

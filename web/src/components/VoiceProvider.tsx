@@ -1,4 +1,5 @@
 import { ReactNode, useEffect } from 'react'
+import { useAuth } from '../auth'
 import { useGateway } from '../gateway'
 import { useVoiceMesh, VoiceMeshCtx, VoiceStatus } from '../voice'
 import { VoiceState } from './AppShell'
@@ -15,7 +16,8 @@ export default function VoiceProvider({
   children: ReactNode
 }) {
   const gateway = useGateway()
-  const mesh = useVoiceMesh(voice, gateway)
+  const { user } = useAuth()
+  const mesh = useVoiceMesh(voice, gateway, user?.id ?? null)
 
   useEffect(() => {
     if (voice) onStatus(mesh.status)
