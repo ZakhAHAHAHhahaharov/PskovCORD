@@ -17,7 +17,7 @@ from rest_framework_simplejwt.tokens import AccessToken
 from . import presence, turn
 from .consumers import GatewayConsumer
 from .middleware import JWTAuthMiddleware
-from .models import Channel, Membership, Server
+from .models import Channel, Membership, Message, Server
 
 User = get_user_model()
 
@@ -456,3 +456,157 @@ class ChannelCreateBroadcastTests(TransactionTestCase):
         self.assertEqual(msg["channel"]["kind"], "text")
 
         await bob_ws.disconnect()
+
+
+class MessageOpsTests(TransactionTestCase):
+    """Удалить своё сообщение может автор, чужое — только владелец сервера.
+    Редактировать можно ТОЛЬКО своё — владелец сервера чужое не правит."""
+
+    def setUp(self):
+        presence._r.flushdb()
+        self.owner = User.objects.create_user(username="owner2", password="pw12345")
+        self.member = User.objects.create_user(username="member2", password="pw12345")
+        self.server = Server.objects.create(name="s", owner=self.owner)
+        for u in (self.owner, self.member):
+            Membership.objects.create(user=u, server=self.server)
+        self.channel = Channel.objects.create(
+            server=self.server, name="general", kind=Channel.TEXT, position=0)
+
+    def tearDown(self):
+        presence._r.flushdb()
+
+    async def _connect(self, user):
+        token = str(AccessToken.for_user(user))
+        comm = WebsocketCommunicator(
+            JWTAuthMiddleware(GatewayConsumer.as_asgi()),
+            f"/ws/gateway?token={token}")
+        connected, _ = await comm.connect()
+        self.assertTrue(connected)
+        return comm
+
+    @staticmethod
+    async def _receive_until(comm, op, timeout=2, max_messages=10):
+        for _ in range(max_messages):
+            msg = await comm.receive_json_from(timeout=timeout)
+            if msg.get("op") == op:
+                return msg
+        raise AssertionError(f"op={op!r} не пришёл за {max_messages} сообщений")
+
+    async def _send(self, comm, content, reply_to=None):
+        await comm.send_json_to({
+            "op": "send_message", "channel_id": self.channel.id,
+            "content": content, "reply_to": reply_to,
+        })
+        msg = await self._receive_until(comm, "message_create")
+        return msg["message"]
+
+    async def test_author_can_delete_own_message(self):
+        member_ws = await self._connect(self.member)
+        owner_ws = await self._connect(self.owner)
+
+        sent = await self._send(member_ws, "привет")
+        await self._receive_until(owner_ws, "message_create")
+
+        await member_ws.send_json_to({"op": "delete_message", "message_id": sent["id"]})
+        seen = await self._receive_until(owner_ws, "message_delete")
+        self.assertEqual(seen["message_id"], sent["id"])
+        self.assertEqual(seen["channel_id"], self.channel.id)
+        exists = await sync_to_async(Message.objects.filter(id=sent["id"]).exists)()
+        self.assertFalse(exists)
+
+        await member_ws.disconnect()
+        await owner_ws.disconnect()
+
+    async def test_owner_can_delete_others_message(self):
+        member_ws = await self._connect(self.member)
+        owner_ws = await self._connect(self.owner)
+
+        sent = await self._send(member_ws, "привет")
+        await self._receive_until(owner_ws, "message_create")
+
+        await owner_ws.send_json_to({"op": "delete_message", "message_id": sent["id"]})
+        seen = await self._receive_until(member_ws, "message_delete")
+        self.assertEqual(seen["message_id"], sent["id"])
+
+        await member_ws.disconnect()
+        await owner_ws.disconnect()
+
+    async def test_regular_member_cannot_delete_others_message(self):
+        owner_ws = await self._connect(self.owner)
+        member_ws = await self._connect(self.member)
+
+        sent = await self._send(owner_ws, "привет от владельца")
+        await self._receive_until(member_ws, "message_create")
+
+        await member_ws.send_json_to({"op": "delete_message", "message_id": sent["id"]})
+        self.assertTrue(await owner_ws.receive_nothing(timeout=0.3))
+        exists = await sync_to_async(Message.objects.filter(id=sent["id"]).exists)()
+        self.assertTrue(exists)
+
+        await owner_ws.disconnect()
+        await member_ws.disconnect()
+
+    async def test_author_can_edit_own_message(self):
+        member_ws = await self._connect(self.member)
+        owner_ws = await self._connect(self.owner)
+
+        sent = await self._send(member_ws, "опечатко")
+        await self._receive_until(owner_ws, "message_create")
+
+        await member_ws.send_json_to({
+            "op": "edit_message", "message_id": sent["id"], "content": "исправлено",
+        })
+        seen = await self._receive_until(owner_ws, "message_update")
+        self.assertEqual(seen["message"]["content"], "исправлено")
+        self.assertIsNotNone(seen["message"]["edited_at"])
+
+        await member_ws.disconnect()
+        await owner_ws.disconnect()
+
+    async def test_owner_cannot_edit_others_message(self):
+        member_ws = await self._connect(self.member)
+        owner_ws = await self._connect(self.owner)
+
+        sent = await self._send(member_ws, "оригинал")
+        await self._receive_until(owner_ws, "message_create")
+
+        await owner_ws.send_json_to({
+            "op": "edit_message", "message_id": sent["id"], "content": "подделка",
+        })
+        self.assertTrue(await member_ws.receive_nothing(timeout=0.3))
+        content = await sync_to_async(
+            lambda: Message.objects.get(id=sent["id"]).content)()
+        self.assertEqual(content, "оригинал")
+
+        await member_ws.disconnect()
+        await owner_ws.disconnect()
+
+    async def test_reply_is_included_in_broadcast(self):
+        owner_ws = await self._connect(self.owner)
+        member_ws = await self._connect(self.member)
+
+        original = await self._send(owner_ws, "вопрос")
+        await self._receive_until(member_ws, "message_create")
+
+        await member_ws.send_json_to({
+            "op": "send_message", "channel_id": self.channel.id,
+            "content": "ответ", "reply_to": original["id"],
+        })
+        seen = await self._receive_until(owner_ws, "message_create")
+        self.assertEqual(seen["message"]["reply_to"]["id"], original["id"])
+        self.assertEqual(seen["message"]["reply_to"]["content"], "вопрос")
+
+        await owner_ws.disconnect()
+        await member_ws.disconnect()
+
+    async def test_reply_to_message_in_other_channel_is_ignored(self):
+        other_channel = await sync_to_async(Channel.objects.create)(
+            server=self.server, name="other", kind=Channel.TEXT, position=1)
+        foreign_msg = await sync_to_async(Message.objects.create)(
+            channel=other_channel, author=self.owner, content="из другого канала")
+
+        member_ws = await self._connect(self.member)
+        sent = await self._send(member_ws, "попытка подмены", reply_to=foreign_msg.id)
+        self.assertIsNone(sent["reply_to"])
+
+        await member_ws.disconnect()

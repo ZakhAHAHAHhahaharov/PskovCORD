@@ -565,6 +565,7 @@ input {
 }
 
 .message-row {
+  position: relative;
   display: flex;
   gap: 16px;
   padding: 6px 0;
@@ -577,6 +578,7 @@ input {
 
 .message-body {
   min-width: 0;
+  flex: 1;
 }
 
 .message-meta {
@@ -596,6 +598,11 @@ input {
   color: var(--text-faint);
 }
 
+.message-edited {
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
 .message-content {
   color: var(--text-normal);
   font-size: 15px;
@@ -604,7 +611,75 @@ input {
   white-space: pre-wrap;
 }
 
-.message-input {
+.message-reply-quote {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  margin-bottom: 2px;
+  padding-left: 10px;
+  border-left: 2px solid var(--text-faint);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.message-reply-author {
+  flex-shrink: 0;
+  font-weight: 600;
+  color: var(--text-normal);
+}
+
+.message-reply-content {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.message-edit-input {
+  width: 100%;
+  background: #383a40;
+  border: none;
+  border-radius: 4px;
+  padding: 6px 8px;
+  color: var(--text-normal);
+  font-size: 15px;
+  outline: 1px solid var(--blurple);
+}
+
+.message-actions {
+  position: absolute;
+  top: -14px;
+  right: 8px;
+  display: none;
+  gap: 2px;
+  background: var(--chat-bg);
+  border: 1px solid var(--channel-hover);
+  border-radius: 6px;
+  padding: 2px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+}
+
+.message-row:hover .message-actions {
+  display: flex;
+}
+
+.message-action {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  font-size: 14px;
+}
+
+.message-action:hover {
+  background: var(--channel-hover);
+}
+
+.message-input-wrap {
   padding: 0 16px 24px;
 }
 
@@ -621,6 +696,39 @@ input {
 
 .message-input input::placeholder {
   color: var(--text-faint);
+}
+
+.reply-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 16px;
+  margin-bottom: 4px;
+  background: #383a40;
+  border-radius: 8px 8px 0 0;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.reply-banner-text {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.reply-banner-cancel {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  font-size: 14px;
+  padding: 2px 4px;
+  border-radius: 3px;
+}
+
+.reply-banner-cancel:hover {
+  color: var(--text-normal);
+  background: var(--channel-hover);
 }
 
 /* ---- members ---- */

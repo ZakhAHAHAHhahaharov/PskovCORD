@@ -27,10 +27,12 @@ export default function AppShell() {
   const [voice, setVoice] = useState<VoiceState | null>(null)
   const [voiceStatus, setVoiceStatus] = useState<VoiceStatus>('connecting')
   const [showDiscover, setShowDiscover] = useState(false)
+  const [replyTarget, setReplyTarget] = useState<Message | null>(null)
 
   const currentServer = servers.find((s) => s.id === serverId) || null
   const channels = currentServer?.channels || []
   const currentChannel = channels.find((c) => c.id === channelId) || null
+  const isServerOwner = currentServer?.owner === user?.id
 
   const selectServer = useCallback((s: Server) => {
     setServerId(s.id)
@@ -61,6 +63,7 @@ export default function AppShell() {
 
   // История сообщений при смене текстового канала.
   useEffect(() => {
+    setReplyTarget(null)
     if (!currentChannel || currentChannel.kind !== 'text') {
       setMessages([])
       return
@@ -83,6 +86,16 @@ export default function AppShell() {
           prev.some((m) => m.id === d.message.id) ? prev : [...prev, d.message],
         )
       }
+    })
+    const offMsgDelete = gateway.on('message_delete', (d) => {
+      if (d.channel_id !== channelId) return
+      setMessages((prev) => prev.filter((m) => m.id !== d.message_id))
+    })
+    const offMsgUpdate = gateway.on('message_update', (d) => {
+      if (d.message.channel !== channelId) return
+      setMessages((prev) =>
+        prev.map((m) => (m.id === d.message.id ? d.message : m)),
+      )
     })
     const offPresence = gateway.on('presence_update', (d) => {
       setMembers((prev) =>
@@ -139,6 +152,8 @@ export default function AppShell() {
     })
     return () => {
       offMsg()
+      offMsgDelete()
+      offMsgUpdate()
       offPresence()
       offVoice()
       offChannelCreate()
@@ -177,7 +192,17 @@ export default function AppShell() {
   }
 
   const handleSend = (content: string) => {
-    if (channelId != null) gateway.sendMessage(channelId, content)
+    if (channelId == null) return
+    gateway.sendMessage(channelId, content, replyTarget?.id ?? null)
+    setReplyTarget(null)
+  }
+
+  const handleDeleteMessage = (messageId: number) => {
+    gateway.deleteMessage(messageId)
+  }
+
+  const handleEditMessage = (messageId: number, content: string) => {
+    gateway.editMessage(messageId, content)
   }
 
   const handleJoinVoice = async (ch: Channel) => {
@@ -261,10 +286,19 @@ export default function AppShell() {
               <span className="hash">#</span>
               <span className="chat-header-name">{currentChannel.name}</span>
             </header>
-            <MessageList messages={messages} />
+            <MessageList
+              messages={messages}
+              currentUserId={user!.id}
+              canModerate={isServerOwner}
+              onDelete={handleDeleteMessage}
+              onEdit={handleEditMessage}
+              onReply={setReplyTarget}
+            />
             <MessageInput
               channelName={currentChannel.name}
               onSend={handleSend}
+              replyTarget={replyTarget}
+              onCancelReply={() => setReplyTarget(null)}
             />
           </>
         ) : (
