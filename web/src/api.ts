@@ -1,0 +1,112 @@
+export interface User {
+  id: number
+  username: string
+  avatar_color: string
+}
+
+export interface Channel {
+  id: number
+  server: number
+  name: string
+  kind: 'text' | 'voice'
+  position: number
+}
+
+export interface Server {
+  id: number
+  name: string
+  owner: number
+  created_at: string
+  channels: Channel[]
+}
+
+export interface Message {
+  id: number
+  channel: number
+  author: User
+  content: string
+  created_at: string
+}
+
+export interface Member extends User {
+  online: boolean
+  voice_channel: string | null
+}
+
+export interface DiscoverServer {
+  id: number
+  name: string
+  member_count: number
+  is_member: boolean
+}
+
+// Пусто => same-origin (относительные запросы). Для dev задаётся в web/.env.
+const API: string = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
+
+let accessToken: string | null = localStorage.getItem('access')
+
+export function setToken(t: string | null) {
+  accessToken = t
+  if (t) localStorage.setItem('access', t)
+  else localStorage.removeItem('access')
+}
+
+export function getToken(): string | null {
+  return accessToken
+}
+
+async function req(path: string, options: RequestInit = {}): Promise<any> {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...((options.headers as Record<string, string>) || {}),
+  }
+  if (accessToken) headers['Authorization'] = `Bearer ${accessToken}`
+
+  const res = await fetch(`${API}${path}`, { ...options, headers })
+  if (!res.ok) {
+    let detail = res.statusText
+    try {
+      const j = await res.json()
+      detail = j.detail || j.username?.[0] || j.password?.[0] || JSON.stringify(j)
+    } catch {
+      /* ignore */
+    }
+    throw new Error(detail)
+  }
+  if (res.status === 204) return null
+  return res.json()
+}
+
+export const api = {
+  register: (username: string, password: string) =>
+    req('/api/auth/register', {
+      method: 'POST',
+      body: JSON.stringify({ username, password }),
+    }),
+  login: (username: string, password: string): Promise<{ access: string; refresh: string }> =>
+    req('/api/auth/token', {
+      method: 'POST',
+      body: JSON.stringify({ username, password }),
+    }),
+  me: (): Promise<User> => req('/api/auth/me'),
+  config: () => req('/api/config'),
+
+  servers: (): Promise<Server[]> => req('/api/servers'),
+  createServer: (name: string): Promise<Server> =>
+    req('/api/servers', { method: 'POST', body: JSON.stringify({ name }) }),
+  discover: (): Promise<DiscoverServer[]> => req('/api/servers/discover'),
+  joinServer: (id: number): Promise<Server> =>
+    req(`/api/servers/${id}/join`, { method: 'POST' }),
+  members: (serverId: number): Promise<Member[]> =>
+    req(`/api/servers/${serverId}/members`),
+  createChannel: (serverId: number, name: string, kind: string): Promise<Channel> =>
+    req(`/api/servers/${serverId}/channels`, {
+      method: 'POST',
+      body: JSON.stringify({ name, kind }),
+    }),
+
+  messages: (channelId: number): Promise<Message[]> =>
+    req(`/api/channels/${channelId}/messages`),
+  livekitToken: (channelId: number): Promise<{ url: string; token: string; room: string }> =>
+    req(`/api/channels/${channelId}/livekit-token`, { method: 'POST' }),
+}

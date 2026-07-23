@@ -1,0 +1,39 @@
+# Env
+.env
+*.env
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+db.sqlite3
+
+# Node / web
+node_modules/
+web/dist/
+web/.vite/
+*.local
+
+# Docker / data
+postgres_data/
+redis_data/
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Локальные бинарники (LiveKit и т.п.)
+tools/*.exe
+
+# env-бэкапы (могут содержать секреты)
+*.env.txt
+*.env.bak
+*.env.local

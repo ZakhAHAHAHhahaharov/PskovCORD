@@ -1,0 +1,13 @@
+{
+  "name": "pskovcord-desktop",
+  "version": "0.1.0",
+  "description": "Electron-обёртка над веб-билдом PskovCord",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder"
+  },
+  "devDependencies": {
+    "electron": "^31.3.0"
+  }
+}
