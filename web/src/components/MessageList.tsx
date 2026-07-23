@@ -47,6 +47,12 @@ export default function MessageList({
     if (trimmed && trimmed !== m.content) onEdit(m.id, trimmed)
   }
 
+  const confirmDelete = (m: Message) => {
+    if (window.confirm('Удалить это сообщение? Действие необратимо.')) {
+      onDelete(m.id)
+    }
+  }
+
   return (
     <div className="message-list">
       {messages.length === 0 && (
@@ -107,7 +113,7 @@ export default function MessageList({
                 <button
                   className="message-action"
                   title="Удалить"
-                  onClick={() => onDelete(m.id)}
+                  onClick={() => confirmDelete(m)}
                 >
                   🗑️
                 </button>
