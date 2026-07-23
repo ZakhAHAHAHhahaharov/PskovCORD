@@ -13,6 +13,7 @@ GatewayConsumer — единственный WebSocket на клиента (по
     {"op": "voice_answer",        "to_user_id": <id>, "sdp": "..."}
     {"op": "voice_ice_candidate", "to_user_id": <id>, "candidate": {...}}
     {"op": "voice_mute_update", "muted": bool, "deafened": bool}
+    {"op": "voice_topic_update", "topic": "..."}
 
 События сервер -> клиент:
     {"op": "ready", "user": {...}}
@@ -25,11 +26,19 @@ GatewayConsumer — единственный WebSocket на клиента (по
     {"op": "voice_answer",        "from_user_id": <id>, "sdp": "..."}
     {"op": "voice_ice_candidate", "from_user_id": <id>, "candidate": {...}}
     {"op": "voice_mute_update", "user_id": <id>, "muted": bool, "deafened": bool}
+    {"op": "voice_call_state", "channel_id": <id>,
+     "call_started_at": <float|null>, "topic": "..."|null}
 
 voice_mute_update — статус своего микрофона/наушников (мьют, дефен), который
 клиент шлёт при каждом изменении, пока состоит в голосовом канале; сервер
 запоминает его в presence (voice_flags) и рассылает всем на сервере, чтобы
 у остальных участников канала загорался/гас значок мьюта прямо в списке.
+
+voice_call_state — момент начала текущего разговора в канале и его статус
+(topic). Живёт в presence, пока в канале хоть кто-то есть: появляется при
+входе первого участника, стирается когда выходит последний. Ставить topic
+может только тот, кто сейчас сам в этом канале (voice_topic_update без
+target-канала — сервер сам берёт канал из presence отправителя).
 
 WebRTC-сигналинг (voice_offer/voice_answer/voice_ice_candidate) — прямой relay
 1:1 через персональную группу "user_{id}" (см. connect()/disconnect()).
@@ -93,6 +102,7 @@ class GatewayConsumer(AsyncWebsocketConsumer):
             if prev_voice:
                 server_id = await self._channel_server(prev_voice)
                 await self._broadcast_voice(self.user.id, None, server_id)
+                await self._broadcast_call_state(prev_voice, server_id)
             await self._broadcast_presence(False)
 
     async def receive(self, text_data=None, bytes_data=None):
@@ -112,6 +122,8 @@ class GatewayConsumer(AsyncWebsocketConsumer):
             await self._handle_voice_relay(op, data)
         elif op == "voice_mute_update":
             await self._handle_voice_mute_update(data)
+        elif op == "voice_topic_update":
+            await self._handle_voice_topic_update(data)
 
     # --- операции -----------------------------------------------------------
     async def _handle_send(self, data):
@@ -135,11 +147,14 @@ class GatewayConsumer(AsyncWebsocketConsumer):
         server_id = await self._voice_channel_server(channel_id)
         if not server_id:
             return
-        peer_ids = await asyncio.to_thread(
+        peer_ids, emptied_channel = await asyncio.to_thread(
             presence.join_voice, self.uid, channel_id)
         peer_flags = await asyncio.to_thread(
             presence.voice_members_flags, channel_id)
         await self._broadcast_voice(self.user.id, channel_id, server_id)
+        await self._broadcast_call_state(channel_id, server_id)
+        if emptied_channel:
+            await self._broadcast_call_state(emptied_channel, server_id)
         await self._send({
             "op": "voice_peers",
             "channel_id": channel_id,
@@ -155,6 +170,16 @@ class GatewayConsumer(AsyncWebsocketConsumer):
         if prev:
             server_id = await self._channel_server(prev)
             await self._broadcast_voice(self.user.id, None, server_id)
+            await self._broadcast_call_state(prev, server_id)
+
+    async def _handle_voice_topic_update(self, data):
+        topic = (data.get("topic") or "").strip()[:120]
+        channel_id = await asyncio.to_thread(presence.voice_channel, self.uid)
+        if not channel_id:
+            return
+        await asyncio.to_thread(presence.set_call_topic, channel_id, topic)
+        server_id = await self._channel_server(channel_id)
+        await self._broadcast_call_state(channel_id, server_id)
 
     async def _handle_voice_mute_update(self, data):
         muted = bool(data.get("muted"))
@@ -219,6 +244,18 @@ class GatewayConsumer(AsyncWebsocketConsumer):
         # Только участникам этого сервера.
         await self.channel_layer.group_send(
             f"server_{server_id}", {"type": "broadcast", "payload": payload})
+
+    async def _broadcast_call_state(self, channel_id, server_id):
+        if not server_id:
+            return
+        state = await asyncio.to_thread(presence.call_state, channel_id)
+        await self.channel_layer.group_send(
+            f"server_{server_id}", {"type": "broadcast", "payload": {
+                "op": "voice_call_state",
+                "channel_id": int(channel_id),
+                "call_started_at": state["call_started_at"],
+                "topic": state["topic"],
+            }})
 
     async def broadcast(self, event):
         """Обработчик group_send(type="broadcast")."""
