@@ -183,6 +183,42 @@ class VoiceCredentialsViewTests(APITestCase):
         self.assertEqual(resp.status_code, 400)
 
 
+class ServerMembersMicStatusTests(APITestCase):
+    """/servers/<id>/members должен отдавать muted/deafened для всех — чтобы
+    их было видно даже тем, кто сам не подключён к голосовому каналу."""
+
+    def setUp(self):
+        presence._r.flushdb()
+        self.viewer = User.objects.create_user(username="viewer1", password="pw12345")
+        self.talker = User.objects.create_user(username="talker1", password="pw12345")
+        self.server = Server.objects.create(name="s", owner=self.viewer)
+        for u in (self.viewer, self.talker):
+            Membership.objects.create(user=u, server=self.server)
+        self.voice_channel = Channel.objects.create(
+            server=self.server, name="v", kind=Channel.VOICE, position=0)
+
+    def tearDown(self):
+        presence._r.flushdb()
+
+    def test_defaults_to_false(self):
+        self.client.force_authenticate(self.viewer)
+        resp = self.client.get(f"/api/servers/{self.server.id}/members")
+        talker_row = next(r for r in resp.data if r["username"] == "talker1")
+        self.assertEqual(talker_row["muted"], False)
+        self.assertEqual(talker_row["deafened"], False)
+
+    def test_reflects_current_flags_without_being_in_the_channel(self):
+        presence.join_voice(self.talker.id, self.voice_channel.id)
+        presence.set_voice_flags(self.talker.id, muted=True, deafened=True)
+
+        # viewer не в голосовом канале вообще — но статус всё равно виден.
+        self.client.force_authenticate(self.viewer)
+        resp = self.client.get(f"/api/servers/{self.server.id}/members")
+        talker_row = next(r for r in resp.data if r["username"] == "talker1")
+        self.assertEqual(talker_row["muted"], True)
+        self.assertEqual(talker_row["deafened"], True)
+
+
 class ChannelCreatePermissionTests(APITestCase):
     def setUp(self):
         self.owner = User.objects.create_user(username="owner1", password="pw12345")
