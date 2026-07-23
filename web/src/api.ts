@@ -43,6 +43,9 @@ export interface Message {
 export interface Member extends User {
   online: boolean
   voice_channel: string | null
+  /** Статус микрофона/наушников — виден всем, даже не подключённым к каналу. */
+  muted: boolean
+  deafened: boolean
 }
 
 export interface DiscoverServer {

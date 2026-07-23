@@ -644,15 +644,9 @@ input {
   text-overflow: ellipsis;
 }
 
-.message-edit-input {
-  width: 100%;
-  background: #383a40;
-  border: none;
+.message-row.editing {
+  background: rgba(88, 101, 242, 0.08);
   border-radius: 4px;
-  padding: 6px 8px;
-  color: var(--text-normal);
-  font-size: 15px;
-  outline: 1px solid var(--blurple);
 }
 
 .message-actions {
@@ -723,6 +717,11 @@ input {
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
+}
+
+.edit-banner {
+  background: rgba(88, 101, 242, 0.15);
+  color: var(--text-normal);
 }
 
 .reply-banner-cancel {
