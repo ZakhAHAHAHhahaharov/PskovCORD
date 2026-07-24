@@ -4,10 +4,10 @@ import { useGateway } from '../gateway'
 import { UserStatus } from '../api'
 import Avatar from './Avatar'
 
-const OPTIONS: { value: UserStatus; label: string; dot: string }[] = [
-  { value: 'online', label: 'В сети', dot: '🟢' },
-  { value: 'dnd', label: 'Не беспокоить', dot: '🔴' },
-  { value: 'invisible', label: 'Невидимка', dot: '⚪' },
+const OPTIONS: { value: UserStatus; label: string }[] = [
+  { value: 'online', label: 'В сети' },
+  { value: 'dnd', label: 'Не беспокоить' },
+  { value: 'invisible', label: 'Невидимка' },
 ]
 
 export const STATUS_LABELS: Record<UserStatus, string> = {
@@ -71,7 +71,7 @@ export default function StatusMenu({ speaking = false }: { speaking?: boolean })
               className={`status-menu-item ${user.status === o.value ? 'active' : ''}`}
               onClick={() => choose(o.value)}
             >
-              <span className="status-menu-dot">{o.dot}</span>
+              <span className={`status-menu-dot ${o.value}`} />
               {o.label}
             </button>
           ))}
