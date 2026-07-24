@@ -15,12 +15,19 @@ interface VoiceGateway {
  */
 export type VoiceStatus = 'connecting' | 'reconnecting' | 'connected' | 'failed'
 
-// Автопереподключение при обрыве после успешного коннекта: экспоненциальная
-// пауза между попытками, всего ~30с, прежде чем сдаться и отдать 'failed'
-// наверх (там пользователя реально выкинет из канала с алертом).
-const MAX_RECONNECT_ATTEMPTS = 6
+// Автопереподключение при обрыве после успешного коннекта: пробуем БЕССРОЧНО
+// (пока пользователь сам не выйдет из канала), с экспоненциальной паузой между
+// попытками до потолка. "Сдаться" здесь означает только первый, ещё ни разу
+// не удавшийся коннект (см. handleDropped) — тот по-прежнему быстро отдаёт
+// 'failed' наверх, где AppShell выкинет из канала алертом.
 const RECONNECT_BASE_DELAY_MS = 1000
-const RECONNECT_MAX_DELAY_MS = 8000
+const RECONNECT_MAX_DELAY_MS = 15000
+// Если одна попытка connect() не уложилась в это время — считаем её
+// зависшей и обрываем сами, а не ждём вечно. Без этого таймаута единственный
+// подвисший запрос (например, race на сервере, из-за которой первое
+// сообщение терялось — уже пофикшено, но мало ли) намертво стопорил бы весь
+// цикл переподключения: ни новых попыток, ни отказа — тишина навсегда.
+const CONNECT_ATTEMPT_TIMEOUT_MS = 12000
 
 export interface VoiceMesh {
   remoteStreams: Map<number, MediaStream>
@@ -202,11 +209,29 @@ export function useVoiceMesh(
       })
       client.current = sfu
 
+      // Сторожевой таймер на саму попытку: если connect() завис (не
+      // резолвится и не реджектится — например, из-за потерянного ICE или
+      // любой другой безответной подвисшей стадии рукопожатия), сами обрываем
+      // эту попытку и уходим в следующую, а не ждём бесконечно. Гонки с
+      // onStatus('failed'), который клиент мог прислать сам чуть раньше, нет:
+      // handleDropped зовётся не более одного раза на реальный обрыв — либо
+      // отсюда, либо оттуда, проверка client.current === sfu не даст сделать
+      // это дважды на одну и ту же (уже сменившуюся) попытку.
+      let timedOut = false
+      const attemptTimeout = setTimeout(() => {
+        timedOut = true
+        if (client.current === sfu) handleDropped()
+      }, CONNECT_ATTEMPT_TIMEOUT_MS)
+
       void (async () => {
         try {
           await sfu.connect(localStream.current?.getAudioTracks()[0] ?? null)
+          clearTimeout(attemptTimeout)
+          if (timedOut) return
         } catch {
-          // onStatus('failed') уже отправлен клиентом.
+          // onStatus('failed') уже отправлен клиентом (обычный путь) — либо,
+          // если сюда попали из-за attemptTimeout, handleDropped уже вызван там.
+          clearTimeout(attemptTimeout)
           return
         }
         // На новом продюсере переприменяем текущий мьют — сам трек уже молчит,
@@ -233,11 +258,13 @@ export function useVoiceMesh(
 
     // Связь оборвалась после того, как мы уже были подключены — пробуем
     // автоматически восстановить её сами, не выкидывая из канала за
-    // секундный сбой сети. Сдаёмся только после нескольких неудачных попыток.
+    // секундный сбой сети. Пока не выйдем из канала сами — пробуем бессрочно
+    // (см. константы выше); "сдаёмся" только если не удалось подключиться ни
+    // разу — это другой случай, тут retry-цикл ещё не запускался.
     const handleDropped = () => {
       if (cancelled) return
       client.current?.close()
-      if (!hasConnectedOnce || reconnectAttempt >= MAX_RECONNECT_ATTEMPTS) {
+      if (!hasConnectedOnce) {
         setStatus('failed')
         return
       }
