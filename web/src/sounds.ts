@@ -47,3 +47,16 @@ export function playLeaveSound() {
 export function playToggleSound(turningOn: boolean) {
   beep(turningOn ? 620 : 400, 60, 0, 0.12)
 }
+
+/** Связь с голосовым каналом неожиданно оборвалась — идёт автопереподключение. */
+export function playDisconnectSound() {
+  beep(500, 70, 0, 0.18)
+  beep(350, 70, 90, 0.18)
+  beep(220, 140, 180, 0.18)
+}
+
+/** Связь восстановлена сама после обрыва. */
+export function playReconnectedSound() {
+  beep(440, 80, 0, 0.16)
+  beep(660, 120, 80, 0.16)
+}

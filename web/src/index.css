@@ -436,6 +436,14 @@ input {
   font-weight: 700;
 }
 
+.voice-signal.warn {
+  color: var(--yellow);
+}
+
+.voice-signal.error {
+  color: var(--red);
+}
+
 .voice-ping {
   display: inline-flex;
   align-items: center;
