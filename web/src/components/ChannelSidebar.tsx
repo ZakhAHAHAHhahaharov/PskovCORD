@@ -11,6 +11,7 @@ import {
   Monitor,
   Circle,
   Settings,
+  UserCog,
 } from 'lucide-react'
 import { Channel, Member, Server, User } from '../api'
 import Avatar from './Avatar'
@@ -43,6 +44,7 @@ export default function ChannelSidebar({
   onLeaveVoice,
   onCreateChannel,
   onOpenSettings,
+  onOpenProfile,
   onWatchScreen,
 }: {
   server: Server | null
@@ -57,6 +59,7 @@ export default function ChannelSidebar({
   onLeaveVoice: () => void
   onCreateChannel: (kind: 'text' | 'voice') => void
   onOpenSettings: () => void
+  onOpenProfile: () => void
   /** Клик по бейджу «демка» рядом с ником — открыть демонстрацию этого
    * участника (с автоподключением к его каналу, если мы не там). */
   onWatchScreen: (member: Member) => void
@@ -157,7 +160,13 @@ export default function ChannelSidebar({
                     const mic = micStateOf(m)
                     return (
                       <div key={m.id} className="voice-user">
-                        <Avatar name={m.username} color={m.avatar_color} size={20} speaking={speaking} />
+                        <Avatar
+                          name={m.username}
+                          color={m.avatar_color}
+                          image={m.avatar_image}
+                          size={20}
+                          speaking={speaking}
+                        />
                         <span className={speaking ? 'speaking' : ''}>{m.username}</span>
                         {m.sharing_screen && (
                           <button
@@ -256,6 +265,9 @@ export default function ChannelSidebar({
               </button>
             </>
           )}
+          <button className="icon-btn" title="Мой профиль" onClick={onOpenProfile}>
+            <UserCog size={17} />
+          </button>
           <button className="icon-btn" title="Настройки" onClick={onOpenSettings}>
             <Settings size={17} />
           </button>

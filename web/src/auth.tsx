@@ -10,6 +10,9 @@ interface AuthCtx {
   /** Оптимистичное обновление своего статуса в локальном состоянии (сама
    * отправка/персист — через gateway.setStatus). */
   updateLocalStatus: (status: UserStatus) => void
+  /** Применить обновлённый профиль (ник/аватар) сразу после успешного PATCH
+   * /api/auth/me — не дожидаясь эха через gateway (profile_update). */
+  updateLocalUser: (user: User) => void
 }
 
 const Ctx = createContext<AuthCtx>(null as unknown as AuthCtx)
@@ -57,9 +60,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser((u) => (u ? { ...u, status } : u))
   }
 
+  const updateLocalUser = (updated: User) => {
+    setUser(updated)
+  }
+
   return (
     <Ctx.Provider
-      value={{ user, loading, login, register, logout, updateLocalStatus }}
+      value={{ user, loading, login, register, logout, updateLocalStatus, updateLocalUser }}
     >
       {children}
     </Ctx.Provider>

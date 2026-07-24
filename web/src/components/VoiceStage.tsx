@@ -32,7 +32,13 @@ function ParticipantTile({
 }) {
   return (
     <div className="participant-tile">
-      <Avatar name={member.username} color={member.avatar_color} size={64} speaking={speaking} />
+      <Avatar
+        name={member.username}
+        color={member.avatar_color}
+        image={member.avatar_image}
+        size={64}
+        speaking={speaking}
+      />
       <span className="participant-tile-name">{member.username}</span>
       <span className="participant-tile-icons">
         {muted && (

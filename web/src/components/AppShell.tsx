@@ -17,6 +17,7 @@ import VoiceProvider, { VoiceStatus } from './VoiceProvider'
 import VoiceStage from './VoiceStage'
 import DiscoverModal from './DiscoverModal'
 import SettingsModal from './SettingsModal'
+import ProfileModal from './ProfileModal'
 
 export interface VoiceState {
   channel: Channel
@@ -38,6 +39,7 @@ export default function AppShell() {
   const [voiceStatus, setVoiceStatus] = useState<VoiceStatus>('connecting')
   const [showDiscover, setShowDiscover] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
+  const [showProfile, setShowProfile] = useState(false)
   const [replyTarget, setReplyTarget] = useState<Message | null>(null)
   const [editTarget, setEditTarget] = useState<Message | null>(null)
   // userId, чью демонстрацию нужно автоматически начать смотреть в
@@ -141,6 +143,7 @@ export default function AppShell() {
             id: d.user_id,
             username: d.username,
             avatar_color: d.avatar_color,
+            avatar_image: d.avatar_image ?? '',
             online: true,
             status: 'online' as const,
             voice_channel: vc,
@@ -166,6 +169,18 @@ export default function AppShell() {
       setMembers((prev) =>
         prev.map((m) =>
           m.id === d.user_id ? { ...m, sharing_screen: !!d.sharing } : m,
+        ),
+      )
+    })
+    // Смена ника/аватара — свою уже применили локально сразу после ответа
+    // PATCH /api/auth/me (см. handleProfileUpdated), но остальным участникам
+    // и старым сообщениям в списке нужно обновиться этим же событием.
+    const offProfileUpdate = gateway.on('profile_update', (d) => {
+      setMembers((prev) =>
+        prev.map((m) =>
+          m.id === d.user_id
+            ? { ...m, username: d.username, avatar_color: d.avatar_color, avatar_image: d.avatar_image }
+            : m,
         ),
       )
     })
@@ -203,6 +218,7 @@ export default function AppShell() {
       offVoice()
       offMicStatus()
       offScreenShare()
+      offProfileUpdate()
       offChannelCreate()
       offCallState()
     }
@@ -436,6 +452,7 @@ export default function AppShell() {
         onLeaveVoice={handleLeaveVoice}
         onCreateChannel={handleCreateChannel}
         onOpenSettings={() => setShowSettings(true)}
+        onOpenProfile={() => setShowProfile(true)}
         onWatchScreen={handleWatchBadge}
       />
 
@@ -496,6 +513,7 @@ export default function AppShell() {
       {showSettings && (
         <SettingsModal onClose={() => setShowSettings(false)} onLogout={logout} />
       )}
+      {showProfile && <ProfileModal onClose={() => setShowProfile(false)} />}
     </div>
     </VoiceProvider>
   )

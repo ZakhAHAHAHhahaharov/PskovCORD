@@ -7,6 +7,8 @@ export interface User {
   id: number
   username: string
   avatar_color: string
+  /** Картинка аватара (data-URL), пусто — цветной кружок с буквой. */
+  avatar_image: string
   status: UserStatus
 }
 
@@ -94,7 +96,14 @@ async function req(path: string, options: RequestInit = {}): Promise<any> {
     let detail = res.statusText
     try {
       const j = await res.json()
-      detail = j.detail || j.username?.[0] || j.password?.[0] || JSON.stringify(j)
+      // DRF отдаёт либо {"detail": "..."}, либо по-полевые ошибки валидации
+      // {"поле": ["сообщение", ...], ...} — независимо от имени поля берём
+      // первое сообщение первого поля, не полагаясь на конкретные названия
+      // (username/password/current_password/avatar_image/...).
+      const firstFieldError = Object.values(j).find(
+        (v): v is string[] => Array.isArray(v) && typeof v[0] === 'string',
+      )?.[0]
+      detail = j.detail || firstFieldError || JSON.stringify(j)
     } catch {
       /* ignore */
     }
@@ -117,6 +126,13 @@ export const api = {
     }),
   logout: () => req('/api/auth/logout', { method: 'POST' }),
   me: (): Promise<User> => req('/api/auth/me'),
+  updateProfile: (data: { username?: string; avatar_image?: string }): Promise<User> =>
+    req('/api/auth/me', { method: 'PATCH', body: JSON.stringify(data) }),
+  changePassword: (current_password: string, new_password: string) =>
+    req('/api/auth/change-password', {
+      method: 'POST',
+      body: JSON.stringify({ current_password, new_password }),
+    }),
   config: () => req('/api/config'),
 
   servers: (): Promise<Server[]> => req('/api/servers'),
