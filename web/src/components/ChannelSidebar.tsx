@@ -10,7 +10,7 @@ import {
   Headphones,
   Monitor,
   Circle,
-  LogOut,
+  Settings,
 } from 'lucide-react'
 import { Channel, Member, Server, User } from '../api'
 import Avatar from './Avatar'
@@ -42,7 +42,7 @@ export default function ChannelSidebar({
   onJoinVoice,
   onLeaveVoice,
   onCreateChannel,
-  onLogout,
+  onOpenSettings,
   onWatchScreen,
 }: {
   server: Server | null
@@ -56,7 +56,7 @@ export default function ChannelSidebar({
   onJoinVoice: (c: Channel) => void
   onLeaveVoice: () => void
   onCreateChannel: (kind: 'text' | 'voice') => void
-  onLogout: () => void
+  onOpenSettings: () => void
   /** Клик по бейджу «демка» рядом с ником — открыть демонстрацию этого
    * участника (с автоподключением к его каналу, если мы не там). */
   onWatchScreen: (member: Member) => void
@@ -256,8 +256,8 @@ export default function ChannelSidebar({
               </button>
             </>
           )}
-          <button className="icon-btn" title="Выйти" onClick={onLogout}>
-            <LogOut size={17} />
+          <button className="icon-btn" title="Настройки" onClick={onOpenSettings}>
+            <Settings size={17} />
           </button>
         </div>
       </div>

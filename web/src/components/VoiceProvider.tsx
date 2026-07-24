@@ -1,6 +1,7 @@
 import { ReactNode, useEffect } from 'react'
 import { useAuth } from '../auth'
 import { useGateway } from '../gateway'
+import { useSettings } from '../settings'
 import { useVoiceMesh, VoiceMeshCtx, VoiceStatus } from '../voice'
 import { VoiceState } from './AppShell'
 
@@ -17,6 +18,7 @@ export default function VoiceProvider({
 }) {
   const gateway = useGateway()
   const { user } = useAuth()
+  const { outputVolume } = useSettings()
   const mesh = useVoiceMesh(voice, gateway, user?.id ?? null)
 
   useEffect(() => {
@@ -32,7 +34,9 @@ export default function VoiceProvider({
           autoPlay
           muted={mesh.deafened}
           ref={(el) => {
-            if (el) el.srcObject = stream
+            if (!el) return
+            el.srcObject = stream
+            el.volume = outputVolume
           }}
         />
       ))}

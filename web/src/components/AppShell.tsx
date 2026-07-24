@@ -16,6 +16,7 @@ import MembersList from './MembersList'
 import VoiceProvider, { VoiceStatus } from './VoiceProvider'
 import VoiceStage from './VoiceStage'
 import DiscoverModal from './DiscoverModal'
+import SettingsModal from './SettingsModal'
 
 export interface VoiceState {
   channel: Channel
@@ -36,6 +37,7 @@ export default function AppShell() {
   const [voice, setVoice] = useState<VoiceState | null>(null)
   const [voiceStatus, setVoiceStatus] = useState<VoiceStatus>('connecting')
   const [showDiscover, setShowDiscover] = useState(false)
+  const [showSettings, setShowSettings] = useState(false)
   const [replyTarget, setReplyTarget] = useState<Message | null>(null)
   const [editTarget, setEditTarget] = useState<Message | null>(null)
   // userId, чью демонстрацию нужно автоматически начать смотреть в
@@ -433,7 +435,7 @@ export default function AppShell() {
         onJoinVoice={handleJoinVoice}
         onLeaveVoice={handleLeaveVoice}
         onCreateChannel={handleCreateChannel}
-        onLogout={logout}
+        onOpenSettings={() => setShowSettings(true)}
         onWatchScreen={handleWatchBadge}
       />
 
@@ -490,6 +492,9 @@ export default function AppShell() {
           onClose={() => setShowDiscover(false)}
           onJoined={handleJoined}
         />
+      )}
+      {showSettings && (
+        <SettingsModal onClose={() => setShowSettings(false)} onLogout={logout} />
       )}
     </div>
     </VoiceProvider>

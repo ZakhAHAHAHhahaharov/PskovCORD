@@ -2,15 +2,20 @@ import { useEffect, useRef, useState } from 'react'
 import { Maximize2, Minimize2, Monitor, MicOff, HeadphoneOff, X, Eye } from 'lucide-react'
 import { Channel, Member } from '../api'
 import Avatar from './Avatar'
+import { useSettings } from '../settings'
 import { useVoice } from '../voice'
 
 /** Живой `<video>`, привязанный к MediaStream по ref — не пересоздаётся при
  * смене раскладки (grid ⇄ развёрнуто), поток не прерывается. */
 function StreamVideo({ stream, muted }: { stream: MediaStream; muted: boolean }) {
   const ref = useRef<HTMLVideoElement>(null)
+  const { outputVolume } = useSettings()
   useEffect(() => {
     if (ref.current) ref.current.srcObject = stream
   }, [stream])
+  useEffect(() => {
+    if (ref.current) ref.current.volume = outputVolume
+  }, [outputVolume])
   return <video ref={ref} autoPlay playsInline muted={muted} />
 }
 
