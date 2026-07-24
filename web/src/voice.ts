@@ -54,6 +54,11 @@ export interface VoiceMesh {
   /** Средний RTT (мс) до SFU, null пока нет данных. */
   pingMs: number | null
   speakingUserIds: Set<number>
+  /** Текущий RMS-уровень своего микрофона (0..~1, до применения gain) —
+   * геттер, а не реактивное значение: обновляется 60 раз/с в VAD-цикле,
+   * для живого метра в настройках дешевле опрашивать через requestAnimationFrame
+   * самому, чем гонять это через React state на каждый кадр. */
+  getMicLevel: () => number
 }
 
 const EMPTY_MESH: VoiceMesh = {
@@ -72,6 +77,7 @@ const EMPTY_MESH: VoiceMesh = {
   status: 'connecting',
   pingMs: null,
   speakingUserIds: new Set(),
+  getMicLevel: () => 0,
 }
 
 // Простой RMS-детектор активности голоса по реальному аудио-потоку (свой
@@ -136,6 +142,8 @@ export function useVoiceMesh(
   // которую смотрели, просто пропадала бы навсегда — новый клиент никогда не
   // узнает, что её нужно снова consume'ить.
   const watchedScreenUserIdsRef = useRef<Set<number>>(new Set())
+  // Живой уровень своего микрофона для метра в настройках — см. VoiceMesh.getMicLevel.
+  const micLevelRef = useRef(0)
 
   const { micGain, micThreshold } = useSettings()
   // Порог VAD читается внутри requestAnimationFrame-цикла ниже — эффект,
@@ -462,7 +470,9 @@ export function useVoiceMesh(
           const v = (data[i] - 128) / 128
           sumSquares += v * v
         }
-        if (Math.sqrt(sumSquares / data.length) > micThresholdRef.current) {
+        const rms = Math.sqrt(sumSquares / data.length)
+        if (userId === selfUserId) micLevelRef.current = rms
+        if (rms > micThresholdRef.current) {
           lastLoudAt.set(userId, now)
         }
       }
@@ -486,6 +496,7 @@ export function useVoiceMesh(
       cancelled = true
       cancelAnimationFrame(rafId)
       audioCtx.close().catch(() => {})
+      micLevelRef.current = 0
     }
   }, [voice?.channel.id, selfUserId])
 
@@ -580,5 +591,6 @@ export function useVoiceMesh(
     status,
     pingMs,
     speakingUserIds,
+    getMicLevel: () => micLevelRef.current,
   }
 }
