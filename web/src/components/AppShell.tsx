@@ -2,7 +2,12 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { api, Channel, Member, Message, Server } from '../api'
 import { useAuth } from '../auth'
 import { useGateway } from '../gateway'
-import { playJoinSound, playLeaveSound } from '../sounds'
+import {
+  playJoinSound,
+  playLeaveSound,
+  playScreenShareStartSound,
+  playScreenShareStopSound,
+} from '../sounds'
 import ServerRail from './ServerRail'
 import ChannelSidebar from './ChannelSidebar'
 import MessageList from './MessageList'
@@ -366,6 +371,38 @@ export default function AppShell() {
       if (id !== user.id && !currentIds.has(id)) playLeaveSound()
     }
     voiceRosterRef.current = currentIds
+  }, [members, voice, user])
+
+  // Тот же паттерн, что и звук входа/выхода: у кого из участников ТЕКУЩЕГО
+  // канала флаг sharing_screen сменился — играем звук старта/стопа демонстрации.
+  // Себя не учитываем (свой тумблер уже даёт визуальную обратную связь).
+  const voiceSharingRef = useRef<Set<number>>(new Set())
+  useEffect(() => {
+    voiceSharingRef.current = voice
+      ? new Set(
+          members
+            .filter((m) => m.voice_channel === String(voice.channel.id) && m.sharing_screen)
+            .map((m) => m.id),
+        )
+      : new Set()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [voice?.channel.id])
+
+  useEffect(() => {
+    if (!voice || !user) return
+    const currentSharing = new Set(
+      members
+        .filter((m) => m.voice_channel === String(voice.channel.id) && m.sharing_screen)
+        .map((m) => m.id),
+    )
+    const prevSharing = voiceSharingRef.current
+    for (const id of currentSharing) {
+      if (id !== user.id && !prevSharing.has(id)) playScreenShareStartSound()
+    }
+    for (const id of prevSharing) {
+      if (id !== user.id && !currentSharing.has(id)) playScreenShareStopSound()
+    }
+    voiceSharingRef.current = currentSharing
   }, [members, voice, user])
 
   return (

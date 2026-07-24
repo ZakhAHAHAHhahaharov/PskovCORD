@@ -700,11 +700,14 @@ input {
 .voice-stage-grid {
   flex: 1;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  /* grid-template-columns выставляется инлайн из VoiceStage (число колонок
+     зависит от количества тайлов) — мало тайлов -> они большие и заполняют
+     весь main, как в Discord. */
+  grid-auto-rows: 1fr;
   gap: 16px;
   padding: 20px;
   overflow-y: auto;
-  align-content: start;
+  align-content: stretch;
 }
 
 .participant-tile {
@@ -712,7 +715,10 @@ input {
   display: flex;
   flex-direction: column;
   align-items: center;
+  justify-content: center;
   gap: 8px;
+  height: 100%;
+  min-height: 140px;
   padding: 20px 12px;
   background: var(--sidebar-bg);
   border-radius: 8px;
@@ -743,8 +749,8 @@ input {
 
 .screen-preview-tile {
   position: relative;
-  grid-column: span 2;
-  aspect-ratio: 16 / 9;
+  height: 100%;
+  min-height: 140px;
   background: #000;
   border-radius: 8px;
   overflow: hidden;
@@ -853,15 +859,27 @@ input {
 .voice-stage-expanded-video {
   flex: 1;
   min-height: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  position: relative;
+  cursor: pointer;
 }
 
+/* position:absolute + margin:auto вместо flex-центрирования — на Firefox/Linux
+   flex-центрирование видео "прыгало" в левую часть экрана через мгновение
+   после старта (пересчёт layout при получении реальных intrinsic-размеров
+   видео). Абсолютное позиционирование этой гонки не имеет. */
 .voice-stage-expanded-video video {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: auto;
+  height: auto;
   max-width: 100%;
   max-height: 100%;
-  object-fit: contain;
+}
+
+.voice-stage-expanded-video .screen-preview-placeholder {
+  position: absolute;
+  inset: 0;
 }
 
 /* ---- chat ---- */
