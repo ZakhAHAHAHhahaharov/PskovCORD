@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react'
+import { Monitor } from 'lucide-react'
 import { Member } from '../api'
 import { useVoice } from '../voice'
 
@@ -18,7 +19,9 @@ function ScreenTile({
   return (
     <div className="screen-tile">
       <video ref={ref} autoPlay playsInline muted={muted} />
-      <span className="screen-tile-label">🖥️ {label}</span>
+      <span className="screen-tile-label">
+        <Monitor size={13} /> {label}
+      </span>
     </div>
   )
 }

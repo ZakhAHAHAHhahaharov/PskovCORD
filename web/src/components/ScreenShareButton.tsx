@@ -1,3 +1,4 @@
+import { Monitor } from 'lucide-react'
 import { useVoice } from '../voice'
 
 /** Кнопка «Демонстрация экрана» — работает только внутри VoiceProvider (в голосе). */
@@ -9,7 +10,7 @@ export default function ScreenShareButton() {
       onClick={toggleScreenShare}
       title={isSharingScreen ? 'Остановить демонстрацию экрана' : 'Демонстрация экрана'}
     >
-      🖥️
+      <Monitor size={17} />
     </button>
   )
 }

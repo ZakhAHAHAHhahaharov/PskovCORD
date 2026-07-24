@@ -1,3 +1,16 @@
+import {
+  Volume2,
+  MicOff,
+  HeadphoneOff,
+  Wifi,
+  Loader2,
+  PhoneOff,
+  Mic,
+  Headphones,
+  Monitor,
+  Circle,
+  LogOut,
+} from 'lucide-react'
 import { Channel, Member, Server, User } from '../api'
 import Avatar from './Avatar'
 import MicButton from './MicButton'
@@ -10,11 +23,10 @@ import { useVoice } from '../voice'
 import { VoiceState } from './AppShell'
 import { VoiceStatus } from './VoiceProvider'
 
-function pingLabel(ms: number | null): string {
-  if (ms == null) return ''
-  if (ms < 80) return `🟢 ${ms} мс`
-  if (ms < 180) return `🟡 ${ms} мс`
-  return `🔴 ${ms} мс`
+function pingColor(ms: number): string {
+  if (ms < 80) return 'var(--green)'
+  if (ms < 180) return 'var(--yellow)'
+  return 'var(--red)'
 }
 
 export default function ChannelSidebar({
@@ -122,7 +134,9 @@ export default function ChannelSidebar({
                     }`}
                     onClick={() => onJoinVoice(c)}
                   >
-                    <span className="channel-icon">🔊</span>
+                    <span className="channel-icon">
+                      <Volume2 size={15} />
+                    </span>
                     <span className="channel-name">{c.name}</span>
                   </button>
                   {inChannel.length > 0 && (
@@ -141,8 +155,16 @@ export default function ChannelSidebar({
                         <Avatar name={m.username} color={m.avatar_color} size={20} speaking={speaking} />
                         <span className={speaking ? 'speaking' : ''}>{m.username}</span>
                         <span className="voice-user-icons">
-                          {mic.muted && <span title="Микрофон выключен">🔇</span>}
-                          {mic.deafened && <span title="Не слышит участников">🔕</span>}
+                          {mic.muted && (
+                            <span title="Микрофон выключен">
+                              <MicOff size={13} />
+                            </span>
+                          )}
+                          {mic.deafened && (
+                            <span title="Не слышит участников">
+                              <HeadphoneOff size={13} />
+                            </span>
+                          )}
                         </span>
                       </div>
                     )
@@ -158,15 +180,27 @@ export default function ChannelSidebar({
         <div className="voice-connected">
           <div className="voice-connected-info">
             <span className="voice-signal">
-              {voiceStatus === 'connected' ? '📶 Голос подключён' : '⏳ Подключение…'}
+              {voiceStatus === 'connected' ? (
+                <>
+                  <Wifi size={14} /> Голос подключён
+                </>
+              ) : (
+                <>
+                  <Loader2 size={14} className="spin" /> Подключение…
+                </>
+              )}
               {voiceStatus === 'connected' && pingMs != null && (
-                <span className="voice-ping">{pingLabel(pingMs)}</span>
+                <span className="voice-ping">
+                  <Circle size={8} fill={pingColor(pingMs)} color={pingColor(pingMs)} /> {pingMs} мс
+                </span>
               )}
             </span>
-            <span className="voice-connected-channel">🔊 {voice.channel.name}</span>
+            <span className="voice-connected-channel">
+              <Volume2 size={12} /> {voice.channel.name}
+            </span>
           </div>
           <button className="voice-disconnect" title="Отключиться" onClick={onLeaveVoice}>
-            ⏻
+            <PhoneOff size={17} />
           </button>
         </div>
       )}
@@ -183,18 +217,18 @@ export default function ChannelSidebar({
           ) : (
             <>
               <button className="icon-btn" title="Микрофон (войдите в голосовой канал)" disabled>
-                🎙️
+                <Mic size={17} />
               </button>
               <button className="icon-btn" title="Звук (войдите в голосовой канал)" disabled>
-                🎧
+                <Headphones size={17} />
               </button>
               <button className="icon-btn" title="Демонстрация экрана (войдите в голосовой канал)" disabled>
-                🖥️
+                <Monitor size={17} />
               </button>
             </>
           )}
           <button className="icon-btn" title="Выйти" onClick={onLogout}>
-            ⏻
+            <LogOut size={17} />
           </button>
         </div>
       </div>

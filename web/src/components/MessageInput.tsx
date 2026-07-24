@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { Pencil, X } from 'lucide-react'
 import { Message } from '../api'
 
 export default function MessageInput({
@@ -48,9 +49,11 @@ export default function MessageInput({
     <div className="message-input-wrap">
       {editTarget ? (
         <div className="reply-banner edit-banner">
-          <span className="reply-banner-text">✏️ Редактирование сообщения</span>
+          <span className="reply-banner-text">
+            <Pencil size={13} /> Редактирование сообщения
+          </span>
           <button className="reply-banner-cancel" title="Отменить (Esc)" onClick={onCancelEdit}>
-            ✕
+            <X size={14} />
           </button>
         </div>
       ) : (
@@ -60,7 +63,7 @@ export default function MessageInput({
               Ответ пользователю <b>{replyTarget.author.username}</b>: {replyTarget.content}
             </span>
             <button className="reply-banner-cancel" title="Отменить ответ" onClick={onCancelReply}>
-              ✕
+              <X size={14} />
             </button>
           </div>
         )

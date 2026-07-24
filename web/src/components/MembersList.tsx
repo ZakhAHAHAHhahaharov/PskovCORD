@@ -1,3 +1,4 @@
+import { Volume2 } from 'lucide-react'
 import { Channel, Member } from '../api'
 import Avatar from './Avatar'
 
@@ -30,7 +31,11 @@ export default function MembersList({
         />
         <div className="member-info">
           <span className={`member-name ${m.online ? '' : 'dim'}`}>{m.username}</span>
-          {voice && <span className="member-voice">🔊 {voice}</span>}
+          {voice && (
+            <span className="member-voice">
+              <Volume2 size={12} /> {voice}
+            </span>
+          )}
         </div>
       </div>
     )

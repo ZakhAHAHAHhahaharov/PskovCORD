@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react'
+import { Reply, Pencil, Trash2 } from 'lucide-react'
 import { Message } from '../api'
 import Avatar from './Avatar'
 
@@ -76,7 +77,7 @@ export default function MessageList({
                 title="Ответить"
                 onClick={() => onReply(m)}
               >
-                ↩️
+                <Reply size={15} />
               </button>
               {isAuthor && (
                 <button
@@ -84,7 +85,7 @@ export default function MessageList({
                   title="Изменить"
                   onClick={() => onEditRequest(m)}
                 >
-                  ✏️
+                  <Pencil size={15} />
                 </button>
               )}
               {(isAuthor || canModerate) && (
@@ -93,7 +94,7 @@ export default function MessageList({
                   title="Удалить"
                   onClick={() => confirmDelete(m)}
                 >
-                  🗑️
+                  <Trash2 size={15} />
                 </button>
               )}
             </div>
