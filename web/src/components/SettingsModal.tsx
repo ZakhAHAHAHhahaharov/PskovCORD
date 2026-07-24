@@ -1,8 +1,40 @@
+import { useEffect, useRef } from 'react'
 import { LogOut, Volume2, Mic, AudioWaveform, X } from 'lucide-react'
 import { useSettings, DEFAULT_SETTINGS } from '../settings'
+import { useVoice } from '../voice'
 
 // min(0.005) + max(0.15) шкалы чувствительности — см. onChange/value ниже.
 const THRESHOLD_RANGE_SUM = 0.155
+// RMS, соответствующий 100% ширины метра — обычная громкая речь в микрофон
+// редко превышает это значение, порог/gain живут в куда меньшем диапазоне.
+const METER_SCALE = 0.3
+
+/** Живой уровень своего микрофона — полоса + метка порога. Обновляется через
+ * requestAnimationFrame напрямую в DOM (минуя React state), чтобы 60 кадров/с
+ * не гоняли ре-рендер всего модала. Вне голосового канала микрофон не
+ * захвачен — getMicLevel() тогда всегда 0, полоса просто остаётся пустой. */
+function MicLevelMeter({ thresholdPct }: { thresholdPct: number }) {
+  const { getMicLevel } = useVoice()
+  const fillRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    let rafId: number
+    const tick = () => {
+      const pct = Math.min(100, (getMicLevel() / METER_SCALE) * 100)
+      if (fillRef.current) fillRef.current.style.width = `${pct}%`
+      rafId = requestAnimationFrame(tick)
+    }
+    rafId = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(rafId)
+  }, [getMicLevel])
+
+  return (
+    <div className="mic-level-meter">
+      <div className="mic-level-meter-fill" ref={fillRef} />
+      <div className="mic-level-meter-threshold" style={{ left: `${thresholdPct}%` }} />
+    </div>
+  )
+}
 
 function SliderField({
   icon,
@@ -112,8 +144,11 @@ export default function SettingsModal({
           onChange={(v) => setMicThreshold(THRESHOLD_RANGE_SUM - v)}
           onReset={() => setMicThreshold(DEFAULT_SETTINGS.micThreshold)}
         />
+        <MicLevelMeter thresholdPct={Math.min(100, (micThreshold / METER_SCALE) * 100)} />
         <p className="settings-hint">
-          Насколько громко нужно говорить, чтобы у остальных загорелось кольцо "говорит".
+          Полоса — живой уровень вашего микрофона (только в голосовом канале), метка — порог
+          срабатывания. Насколько громко нужно говорить, чтобы у остальных загорелось кольцо
+          "говорит".
         </p>
 
         <button className="settings-logout" onClick={onLogout}>
