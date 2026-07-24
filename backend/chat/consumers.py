@@ -30,6 +30,13 @@ GatewayConsumer — единственный WebSocket на клиента (по
     {"op": "voice_screen_share_update", "user_id": <id>, "sharing": bool}
     {"op": "voice_call_state", "channel_id": <id>,
      "call_started_at": <float|null>, "topic": "..."|null}
+    {"op": "profile_update", "user_id": <id>, "username": "...",
+     "avatar_color": "#RRGGBB", "avatar_image": "data:image/...;base64,..."|""}
+
+profile_update — смена ника и/или аватара (см. accounts.views.MeView.patch,
+не через этот gateway — обычный REST PATCH /api/auth/me). Рассылается всем
+серверам, где состоит пользователь, чтобы ростер/сообщения обновились без
+перезагрузки страницы у остальных.
 
 voice_mute_update — статус своего микрофона/наушников (мьют, дефен), который
 клиент шлёт при каждом изменении, пока состоит в голосовом канале; сервер
@@ -287,6 +294,7 @@ class GatewayConsumer(AsyncWebsocketConsumer):
             "user_id": self.user.id,
             "username": self.user.username,
             "avatar_color": self.user.avatar_color,
+            "avatar_image": self.user.avatar_image,
             "online": eff_status != "offline",
             "status": eff_status,
         }
@@ -302,6 +310,7 @@ class GatewayConsumer(AsyncWebsocketConsumer):
             "user_id": user_id,
             "username": self.user.username,
             "avatar_color": self.user.avatar_color,
+            "avatar_image": self.user.avatar_image,
             "channel_id": channel_id,
             "server_id": server_id,
         }

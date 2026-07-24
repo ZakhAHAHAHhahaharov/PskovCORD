@@ -1,3 +1,5 @@
+from asgiref.sync import async_to_sync
+from channels.layers import get_channel_layer
 from django.contrib.auth import login as django_login, logout as django_logout
 from rest_framework import generics, permissions
 from rest_framework.response import Response
@@ -5,7 +7,35 @@ from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenObtainPairView
 
-from .serializers import RegisterSerializer, UserSerializer
+from .serializers import (
+    ChangePasswordSerializer,
+    ProfileUpdateSerializer,
+    RegisterSerializer,
+    UserSerializer,
+)
+
+
+def _broadcast_profile_update(user):
+    """Живое обновление ника/аватара у остальных — на всех серверах, где
+    состоит пользователь (тот же паттерн group_send, что и channel_create/
+    voice_state_update в chat.views/consumers). Импорт Membership — внутри
+    функции: chat не импортируется на уровне модуля accounts, чтобы не
+    создавать лишнюю связь между приложениями при обычной загрузке Django."""
+    from chat.models import Membership
+
+    server_ids = Membership.objects.filter(user=user).values_list(
+        "server_id", flat=True)
+    payload = {
+        "op": "profile_update",
+        "user_id": user.id,
+        "username": user.username,
+        "avatar_color": user.avatar_color,
+        "avatar_image": user.avatar_image,
+    }
+    channel_layer = get_channel_layer()
+    for server_id in server_ids:
+        async_to_sync(channel_layer.group_send)(
+            f"server_{server_id}", {"type": "broadcast", "payload": payload})
 
 
 def tokens_for(user):
@@ -56,3 +86,21 @@ class LogoutView(APIView):
 class MeView(APIView):
     def get(self, request):
         return Response(UserSerializer(request.user).data)
+
+    def patch(self, request):
+        serializer = ProfileUpdateSerializer(
+            request.user, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        user = serializer.save()
+        _broadcast_profile_update(user)
+        return Response(UserSerializer(user).data)
+
+
+class ChangePasswordView(APIView):
+    def post(self, request):
+        serializer = ChangePasswordSerializer(
+            data=request.data, context={"request": request})
+        serializer.is_valid(raise_exception=True)
+        request.user.set_password(serializer.validated_data["new_password"])
+        request.user.save(update_fields=["password"])
+        return Response(status=204)

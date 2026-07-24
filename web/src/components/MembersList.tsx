@@ -25,6 +25,7 @@ export default function MembersList({
         <Avatar
           name={m.username}
           color={m.avatar_color}
+          image={m.avatar_image}
           size={32}
           status={m.status}
           showStatus

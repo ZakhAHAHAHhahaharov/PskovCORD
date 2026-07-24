@@ -51,6 +51,7 @@ export default function StatusMenu({ speaking = false }: { speaking?: boolean })
         <Avatar
           name={user.username}
           color={user.avatar_color}
+          image={user.avatar_image}
           size={32}
           status={user.status}
           showStatus

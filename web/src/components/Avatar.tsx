@@ -5,6 +5,7 @@ type StatusDot = EffectiveStatus | 'invisible'
 export default function Avatar({
   name,
   color,
+  image,
   size = 32,
   online,
   status,
@@ -13,6 +14,8 @@ export default function Avatar({
 }: {
   name: string
   color: string
+  /** Картинка аватара (data-URL). Пусто/undefined — цветной кружок с буквой. */
+  image?: string
   size?: number
   /** Устаревший способ (только online/offline) — используется, если `status` не задан. */
   online?: boolean
@@ -25,12 +28,21 @@ export default function Avatar({
   const dotStatus: StatusDot = status ?? (online ? 'online' : 'offline')
   return (
     <div className="avatar-wrap" style={{ width: size, height: size }}>
-      <div
-        className={`avatar ${speaking ? 'speaking' : ''}`}
-        style={{ background: color, width: size, height: size, fontSize: size * 0.42 }}
-      >
-        {initial}
-      </div>
+      {image ? (
+        <img
+          src={image}
+          alt=""
+          className={`avatar avatar-img ${speaking ? 'speaking' : ''}`}
+          style={{ width: size, height: size }}
+        />
+      ) : (
+        <div
+          className={`avatar ${speaking ? 'speaking' : ''}`}
+          style={{ background: color, width: size, height: size, fontSize: size * 0.42 }}
+        >
+          {initial}
+        </div>
+      )}
       {showStatus && <span className={`status-dot ${dotStatus}`} />}
     </div>
   )

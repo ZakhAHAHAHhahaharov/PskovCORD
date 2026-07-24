@@ -56,7 +56,12 @@ export default function MessageList({
             key={m.id}
             className={`message-row ${editingId === m.id ? 'editing' : ''}`}
           >
-            <Avatar name={m.author.username} color={m.author.avatar_color} size={40} />
+            <Avatar
+              name={m.author.username}
+              color={m.author.avatar_color}
+              image={m.author.avatar_image}
+              size={40}
+            />
             <div className="message-body">
               {m.reply_to && (
                 <div className="message-reply-quote">
