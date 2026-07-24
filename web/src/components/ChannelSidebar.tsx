@@ -3,6 +3,7 @@ import {
   MicOff,
   HeadphoneOff,
   Wifi,
+  WifiOff,
   Loader2,
   PhoneOff,
   Mic,
@@ -179,14 +180,29 @@ export default function ChannelSidebar({
       {voice && (
         <div className="voice-connected">
           <div className="voice-connected-info">
-            <span className="voice-signal">
-              {voiceStatus === 'connected' ? (
+            <span
+              className={`voice-signal ${
+                voiceStatus === 'reconnecting' ? 'warn' : voiceStatus === 'failed' ? 'error' : ''
+              }`}
+            >
+              {voiceStatus === 'connected' && (
                 <>
                   <Wifi size={14} /> Голос подключён
                 </>
-              ) : (
+              )}
+              {voiceStatus === 'connecting' && (
                 <>
                   <Loader2 size={14} className="spin" /> Подключение…
+                </>
+              )}
+              {voiceStatus === 'reconnecting' && (
+                <>
+                  <Loader2 size={14} className="spin" /> Переподключение…
+                </>
+              )}
+              {voiceStatus === 'failed' && (
+                <>
+                  <WifiOff size={14} /> Нет связи
                 </>
               )}
               {voiceStatus === 'connected' && pingMs != null && (
