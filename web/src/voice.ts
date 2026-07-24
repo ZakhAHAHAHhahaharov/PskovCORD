@@ -98,6 +98,12 @@ export function useVoiceMesh(
   // автопереподключении (эффект ниже создаётся один раз на весь канал).
   const mutedRef = useRef(muted)
   mutedRef.current = muted
+  // То же самое для демонстрации экрана: сам захват (displayStream) не
+  // прерывается обрывом связи, только его продюсер на старом (упавшем)
+  // SfuClient — на новом транспорте после реконнекта продюсим те же треки
+  // заново, чтобы показ не пришлось запускать вручную повторно.
+  const isSharingScreenRef = useRef(isSharingScreen)
+  isSharingScreenRef.current = isSharingScreen
 
   useEffect(() => {
     if (!voice) return
@@ -165,15 +171,28 @@ export function useVoiceMesh(
       void (async () => {
         try {
           await sfu.connect(localStream.current?.getAudioTracks()[0] ?? null)
-          // На новом продюсере переприменяем текущий мьют — сам трек уже
-          // молчит, если muted (t.enabled=false), но пауза продюсера была
-          // локальной для старого (упавшего) SfuClient. Только для
-          // переподключения: на самом первом коннекте mutedRef ещё не
-          // синхронизирован с состоянием (гонка с getUserMedia), да и не нужен —
-          // свежий продюсер и так стартует в консистентном unpaused-состоянии.
-          if (isReconnect) sfu.setMicPaused(mutedRef.current)
         } catch {
           // onStatus('failed') уже отправлен клиентом.
+          return
+        }
+        // На новом продюсере переприменяем текущий мьют — сам трек уже молчит,
+        // если muted (t.enabled=false), но пауза продюсера была локальной для
+        // старого (упавшего) SfuClient. Только для переподключения: на самом
+        // первом коннекте mutedRef ещё не синхронизирован с состоянием (гонка
+        // с getUserMedia), да и не нужен — свежий продюсер и так стартует в
+        // консистентном unpaused-состоянии.
+        if (isReconnect) sfu.setMicPaused(mutedRef.current)
+        // Демонстрация экрана точно так же не должна прерываться реконнектом:
+        // захват (displayStream) всё ещё жив, продюсируем его заново на новом
+        // транспорте — как будто ничего не было. Голос к этому моменту уже
+        // поднят, так что неудача здесь не должна ронять reconnect — просто
+        // не поднимаем показ и снимаем "sharing", включат заново вручную.
+        if (isReconnect && isSharingScreenRef.current && displayStream.current) {
+          try {
+            await sfu.startScreen(displayStream.current.getTracks())
+          } catch {
+            setIsSharingScreen(false)
+          }
         }
       })()
     }
