@@ -242,10 +242,24 @@ input {
 
 /* ---- channel sidebar ---- */
 .channel-sidebar {
+  position: relative;
   background: var(--sidebar-bg);
   display: flex;
   flex-direction: column;
   min-height: 0;
+}
+
+/* Нижний блок (голос-статус + панель пользователя) прибит к низу absolute и
+   специально ШИРЕ 240px-колонки сайдбара — "плывёт" поверх main. При 5
+   иконках действий (мик/дефен/демка/профиль/настройки) им физически не
+   хватало места рядом с ником+статусом в исходной ширине колонки. */
+.sidebar-bottom {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 320px;
+  z-index: 15;
+  box-shadow: 4px 0 12px rgba(0, 0, 0, 0.35);
 }
 
 .sidebar-header {
