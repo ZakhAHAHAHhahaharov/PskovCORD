@@ -26,6 +26,21 @@ ALLOWED_HOSTS = [
     if h.strip()
 ]
 
+# В проде nginx термирует TLS и проксирует на backend голым HTTP —
+# без этого Django считает КАЖДЫЙ запрос небезопасным (request.is_secure()
+# всегда False) и при CSRF-проверке сравнивает реальный браузерный
+# "Origin: https://..." со своим самодельным "http://..." — не совпадает,
+# и падает CSRF на любом POST (включая логин в саму админку). nginx уже
+# шлёт X-Forwarded-Proto (см. nginx.conf.example) — тут просто говорим
+# Django ему верить.
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+# Тот же класс проблемы, доп. защита: Django по умолчанию доверяет Origin/
+# Referer только для ALLOWED_HOSTS по HTTP — с HTTPS-доменом за прокси нужно
+# явно перечислить схему.
+CSRF_TRUSTED_ORIGINS = [
+    f"https://{h}" for h in ALLOWED_HOSTS if h not in ("localhost", "127.0.0.1")
+]
+
 INSTALLED_APPS = [
     "daphne",  # раньше staticfiles — включает ASGI-runserver (WebSocket в dev)
     "django.contrib.admin",
