@@ -871,21 +871,25 @@ input {
   flex: 1;
   min-height: 0;
   position: relative;
+  overflow: hidden;
   cursor: pointer;
 }
 
-/* position:absolute + margin:auto вместо flex-центрирования — на Firefox/Linux
-   flex-центрирование видео "прыгало" в левую часть экрана через мгновение
-   после старта (пересчёт layout при получении реальных intrinsic-размеров
-   видео). Абсолютное позиционирование этой гонки не имеет. */
+/* width/height:100% + object-fit:contain вместо width/height:auto +
+   max-width/max-height:100% — та версия всё ещё считала БОКС видео от его
+   intrinsic-размера (auto), просто с потолком в 100%; на мгновение после
+   получения реальных размеров (loadedmetadata, ~1с) её всё равно было видно
+   мигающей крупнее контейнера. Фиксированные 100%/100% делают бокс видео
+   независимым от intrinsic-размера вообще — под реальное соотношение сторон
+   вписывается только видимое содержимое через object-fit, бокс не меняется
+   никогда. Тот же приём, что и у .screen-preview-tile video. overflow:hidden
+   на контейнере — подстраховка на случай если что-то всё же вылезет. */
 .voice-stage-expanded-video video {
   position: absolute;
   inset: 0;
-  margin: auto;
-  width: auto;
-  height: auto;
-  max-width: 100%;
-  max-height: 100%;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
 }
 
 .voice-stage-expanded-video .screen-preview-placeholder {
