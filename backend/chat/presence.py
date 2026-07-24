@@ -16,6 +16,12 @@ _r = redis.from_url(settings.REDIS_URL, decode_responses=True)
 
 ONLINE_SET = "presence:online"
 
+# Сколько живёт heartbeat-запись без обновления, прежде чем uid считается
+# «призраком» (WS оборвался без close-фрейма — сон/краш/вырубленный вайфай —
+# и обычный disconnect() у GatewayConsumer так и не пришёл) и принудительно
+# выкидывается из presence (см. heartbeat_sweep).
+HEARTBEAT_TTL = 5 * 60
+
 # Атомарно: переносит uid в новый voice-канал и возвращает участников,
 # которые были там ДО него. Без этого два одновременных join гонятся за
 # отдельными SMEMBERS/SADD и оба видят пустой список пиров.
@@ -56,6 +62,10 @@ def _call_topic_key(channel_id) -> str:
     return f"presence:call_topic:{channel_id}"
 
 
+def _heartbeat_key(uid) -> str:
+    return f"presence:hb:{uid}"
+
+
 # --- online -----------------------------------------------------------------
 def user_connected(uid) -> int:
     uid = str(uid)
@@ -72,6 +82,7 @@ def user_disconnected(uid) -> int:
         _r.delete(_conn_key(uid))
         _r.srem(ONLINE_SET, uid)
         clear_voice(uid)
+        clear_heartbeat(uid)
         return 0
     return n
 
@@ -82,6 +93,39 @@ def is_online(uid) -> bool:
 
 def online_user_ids() -> set:
     return set(_r.smembers(ONLINE_SET))
+
+
+# --- heartbeat (страховка от «призрачных» сессий) ---------------------------
+# GatewayConsumer.disconnect() чисто прибирает presence, когда WS закрылся
+# нормально (close-фрейм дошёл). Но если сеть оборвалась резко (сон ноутбука,
+# краш вкладки, вырубленный вайфай/VPN) — close-фрейм может не прийти вообще,
+# и без этой страховки uid оставался бы «онлайн в голосе» бессрочно. Клиент
+# шлёт {"op": "ping"} раз в несколько минут, пока держит /ws/gateway открытым
+# (см. gateway.tsx); сервер обновляет этот TTL. Отдельный периодический sweep
+# (см. [[heartbeat_sweep]]) находит тех, у кого TTL истёк, и принудительно
+# считает их отключившимися.
+def heartbeat(uid):
+    _r.set(_heartbeat_key(str(uid)), 1, ex=HEARTBEAT_TTL)
+
+
+def is_heartbeat_alive(uid) -> bool:
+    return bool(_r.exists(_heartbeat_key(str(uid))))
+
+
+def clear_heartbeat(uid):
+    _r.delete(_heartbeat_key(str(uid)))
+
+
+def force_offline(uid):
+    """Принудительно считает uid полностью отключившимся — для sweep'а, когда
+    обычный disconnect() так и не пришёл. Возвращает голосовой канал, который
+    он покидает (или None), чтобы вызывающий код разослал уведомление."""
+    uid = str(uid)
+    _r.delete(_conn_key(uid))
+    _r.srem(ONLINE_SET, uid)
+    prev = clear_voice(uid)
+    clear_heartbeat(uid)
+    return prev
 
 
 # --- voice ------------------------------------------------------------------

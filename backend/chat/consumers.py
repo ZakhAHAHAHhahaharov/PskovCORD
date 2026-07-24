@@ -14,6 +14,7 @@ GatewayConsumer — единственный WebSocket на клиента (по
     {"op": "voice_mute_update", "muted": bool, "deafened": bool}
     {"op": "voice_topic_update", "topic": "..."}
     {"op": "set_status", "status": "online" | "dnd" | "invisible"}
+    {"op": "ping"}  — хартбит, см. presence.heartbeat/chat.heartbeat_sweep
 
 События сервер -> клиент:
     {"op": "ready", "user": {...}}
@@ -82,6 +83,7 @@ class GatewayConsumer(AsyncWebsocketConsumer):
             await self.channel_layer.group_add(group, self.channel_name)
 
         await asyncio.to_thread(presence.user_connected, self.uid)
+        await asyncio.to_thread(presence.heartbeat, self.uid)
         await self._broadcast_presence(True)
 
         await self._send({
@@ -130,6 +132,11 @@ class GatewayConsumer(AsyncWebsocketConsumer):
             await self._handle_voice_topic_update(data)
         elif op == "set_status":
             await self._handle_set_status(data)
+        elif op == "ping":
+            # Хартбит живости соединения — см. presence.heartbeat и
+            # chat.heartbeat_sweep (страховка на случай, если WS оборвётся
+            # без close-фрейма и обычный disconnect() не придёт).
+            await asyncio.to_thread(presence.heartbeat, self.uid)
 
     # --- операции -----------------------------------------------------------
     async def _handle_send(self, data):
