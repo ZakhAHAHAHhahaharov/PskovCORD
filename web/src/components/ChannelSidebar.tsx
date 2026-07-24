@@ -84,7 +84,7 @@ export default function ChannelSidebar({
         <span className="sidebar-title">{server ? server.name : 'Нет сервера'}</span>
       </header>
 
-      <div className="channel-scroll">
+      <div className="channel-scroll" style={{ paddingBottom: voice ? 116 : 60 }}>
         {server && (
           <>
             <div className="channel-category">
@@ -199,6 +199,11 @@ export default function ChannelSidebar({
         )}
       </div>
 
+      {/* Прибита к низу absolute и шире колонки сайдбара (см. .sidebar-bottom) —
+          иначе 5 иконок действий не помещаются рядом с ником+статусом и
+          съезжают друг на друга. Раз она "плывёт" поверх main, .channel-scroll
+          выше получает нижний паддинг под её высоту (см. inline style). */}
+      <div className="sidebar-bottom">
       {voice && (
         <div className="voice-connected">
           <div className="voice-connected-info">
@@ -272,6 +277,7 @@ export default function ChannelSidebar({
             <Settings size={17} />
           </button>
         </div>
+      </div>
       </div>
     </aside>
   )
