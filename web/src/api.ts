@@ -86,7 +86,10 @@ async function req(path: string, options: RequestInit = {}): Promise<any> {
   }
   if (accessToken) headers['Authorization'] = `Bearer ${accessToken}`
 
-  const res = await fetch(`${API}${path}`, { ...options, headers })
+  // include: логин/регистрация заодно ставят Django-сессию (см. LoginView) —
+  // в деве Vite (:5173) и API (:8000) разные origin'ы, без явного include
+  // браузер cookie не сохранит/не пришлёт.
+  const res = await fetch(`${API}${path}`, { ...options, headers, credentials: 'include' })
   if (!res.ok) {
     let detail = res.statusText
     try {
@@ -112,6 +115,7 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ username, password }),
     }),
+  logout: () => req('/api/auth/logout', { method: 'POST' }),
   me: (): Promise<User> => req('/api/auth/me'),
   config: () => req('/api/config'),
 

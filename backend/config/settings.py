@@ -122,10 +122,22 @@ SFU_PUBLIC_URL = os.getenv("SFU_PUBLIC_URL", "ws://localhost:4443")
 
 # CORS: в dev разрешаем всё (Vite :5173, Electron file://).
 CORS_ALLOW_ALL_ORIGINS = DEBUG
+
+# Логин в приложении (LoginView/RegisterView, см. accounts/views.py) заодно
+# заводит обычную Django-сессию — тем же браузерным cookie пускает и в
+# /adminpskordpro/, без отдельного входа. В проде (DEBUG=0, всегда HTTPS за
+# nginx) не даём этим cookie ходить голым по HTTP.
+SESSION_COOKIE_SECURE = not DEBUG
+CSRF_COOKIE_SECURE = not DEBUG
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
 ]
+# В деве Vite (:5173) и Django (:8000) — разные origin'ы: без этого браузер
+# не сохранит cookie сессии, которую ставит LoginView (credentials: 'include'
+# на фронте, см. api.ts). В проде всё за одним доменом через nginx — не
+# мешает, но и не нужен, там и так same-origin.
+CORS_ALLOW_CREDENTIALS = True
 
 STATIC_URL = "static/"
 # В деве отдаёт сам runserver (DEBUG=1 — Django-стафайлы обслуживают их
