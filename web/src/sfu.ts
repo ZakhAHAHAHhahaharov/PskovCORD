@@ -421,17 +421,26 @@ export class SfuClient {
     if (!this.sendTransport) return null
     try {
       const stats = await this.sendTransport.getStats()
-      let rtt: number | null = null
+      // getStats() может отдать НЕСКОЛЬКО candidate-pair репортов (в т.ч.
+      // устаревшие, от прошлых ICE-рестартов) — forEach без явного выбора
+      // "лучшего" перезаписывал rtt в порядке обхода Map (не гарантирован),
+      // из-за чего в итоге мог остаться репорт от неактивной пары. Явно
+      // предпочитаем именно nominated — это и есть реально используемая пара.
+      let best: any = null
       stats.forEach((report: any) => {
-        if (
-          report.type === 'candidate-pair' &&
-          (report.nominated ?? report.state === 'succeeded') &&
-          typeof report.currentRoundTripTime === 'number'
-        ) {
-          rtt = report.currentRoundTripTime * 1000
-        }
+        if (report.type !== 'candidate-pair') return
+        if (!report.nominated && report.state !== 'succeeded') return
+        if (!best || (report.nominated && !best.nominated)) best = report
       })
-      return rtt
+      if (!best || typeof best.currentRoundTripTime !== 'number') return null
+      // currentRoundTripTimeMeasurements === 0 значит ни одной STUN-проверки
+      // живости ещё не прошло — currentRoundTripTime в этот момент застыл на
+      // 0 не потому что пинг реально нулевой, а потому что мерить ещё нечем
+      // (отсюда и "всегда 0 мс" сразу после коннекта/реконнекта). Раз в
+      // несколько секунд consent-freshness обновит его сама — просто пока не
+      // показываем ложный ноль.
+      if (best.currentRoundTripTimeMeasurements === 0) return null
+      return best.currentRoundTripTime * 1000
     } catch {
       return null
     }
