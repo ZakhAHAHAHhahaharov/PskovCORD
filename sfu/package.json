@@ -4,6 +4,9 @@
   "private": true,
   "description": "PskovCord SFU (mediasoup) — медиа-транспорт голоса вместо P2P-mesh",
   "main": "dist/index.js",
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
@@ -11,7 +14,7 @@
   },
   "dependencies": {
     "jsonwebtoken": "^9.0.2",
-    "mediasoup": "^3.14.11",
+    "mediasoup": "^3.22.0",
     "ws": "^8.18.0"
   },
   "devDependencies": {
