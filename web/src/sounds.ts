@@ -1,7 +1,24 @@
+import lancerSplatUrl from './assets/sounds/lancer-splat.ogg'
+import reverseLancerSplatUrl from './assets/sounds/reverse-lancer-splat.ogg'
+import boWompUrl from './assets/sounds/bo-womp.ogg'
+import boWompReverseUrl from './assets/sounds/bo-womp_reverse_.ogg'
+
 /**
- * Короткие синтезированные звуки для голосового канала — без внешних
- * аудиофайлов, чистый Web Audio API (пара тонов с экспоненциальным затуханием).
+ * Звуки голосового канала. Вход/выход и старт/стоп демонстрации — реальные
+ * аудиофайлы (импортом, а не из public/, чтобы Vite переписал URL под
+ * base:'./' — иначе в Electron/file:// абсолютный путь "/sounds/..." был бы
+ * битым). Остальное — короткие синтезированные тона, чистый Web Audio API.
  */
+function playFile(url: string, volume = 0.7) {
+  try {
+    const audio = new Audio(url)
+    audio.volume = volume
+    void audio.play().catch(() => {})
+  } catch {
+    // ignore
+  }
+}
+
 let audioCtx: AudioContext | null = null
 
 function ctx(): AudioContext | null {
@@ -33,14 +50,22 @@ function beep(freq: number, durationMs: number, startDelayMs = 0, gain = 0.15) {
 
 /** Кто-то вошёл в голосовой канал, где мы уже находимся. */
 export function playJoinSound() {
-  beep(660, 90)
-  beep(880, 100, 90)
+  playFile(lancerSplatUrl)
 }
 
 /** Кто-то вышел из голосового канала, где мы всё ещё находимся. */
 export function playLeaveSound() {
-  beep(600, 90)
-  beep(420, 110, 90)
+  playFile(reverseLancerSplatUrl)
+}
+
+/** Кто-то (не мы) начал демонстрацию экрана в канале, где мы находимся. */
+export function playScreenShareStartSound() {
+  playFile(boWompUrl)
+}
+
+/** Кто-то (не мы) закончил демонстрацию экрана. */
+export function playScreenShareStopSound() {
+  playFile(boWompReverseUrl)
 }
 
 /** Клик по своей кнопке мьюта/дефена. `turningOn` — включаем ли обратно. */

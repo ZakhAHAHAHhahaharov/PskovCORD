@@ -12,6 +12,14 @@ server {
     include /etc/letsencrypt/options-ssl-nginx.conf;
     ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
 
+    # Собранная статика (в т.ч. admin/css,js) — отдаём напрямую, минуя Django:
+    # в проде (DEBUG=0) runserver сам её не раздаёт. Путь — bind-mount
+    # ./staticfiles из docker-compose.prod.yml (backend collectstatic
+    # складывает туда при старте контейнера, см. entrypoint.sh).
+    location /static/ {
+        alias /opt/pskovcord/deploy/staticfiles/;
+    }
+
     location / {
         proxy_pass http://127.0.0.1:8000;
         proxy_set_header Host $host;

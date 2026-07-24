@@ -187,6 +187,12 @@ export default function VoiceStage({
 
   const nameOf = (uid: number) => members.find((m) => m.id === uid)?.username ?? `Участник ${uid}`
 
+  // Сколько всего тайлов в сетке (участники + свой показ + чужие демки) —
+  // от этого зависит число колонок: мало тайлов -> они большие и заполняют
+  // всё пространство main (как в Discord), много -> сетка мельче.
+  const tileCount = roster.length + (isSharingScreen ? 1 : 0) + sharingOthers.length
+  const gridCols = Math.max(1, Math.ceil(Math.sqrt(tileCount || 1)))
+
   const expandedStream =
     expandedUserId == null
       ? null
@@ -238,7 +244,11 @@ export default function VoiceStage({
               </button>
             </div>
           </div>
-          <div className="voice-stage-expanded-video">
+          <div
+            className="voice-stage-expanded-video"
+            title="Свернуть"
+            onClick={() => setExpandedUserId(null)}
+          >
             {expandedStream ? (
               <StreamVideo
                 stream={expandedStream}
@@ -253,7 +263,10 @@ export default function VoiceStage({
           </div>
         </div>
       ) : (
-        <div className="voice-stage-grid">
+        <div
+          className="voice-stage-grid"
+          style={{ gridTemplateColumns: `repeat(${gridCols}, 1fr)` }}
+        >
           {roster.map((m) => (
             <ParticipantTile
               key={m.id}

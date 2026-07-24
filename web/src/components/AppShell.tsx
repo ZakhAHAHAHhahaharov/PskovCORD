@@ -2,7 +2,12 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { api, Channel, Member, Message, Server } from '../api'
 import { useAuth } from '../auth'
 import { useGateway } from '../gateway'
-import { playJoinSound, playLeaveSound } from '../sounds'
+import {
+  playJoinSound,
+  playLeaveSound,
+  playScreenShareStartSound,
+  playScreenShareStopSound,
+} from '../sounds'
 import ServerRail from './ServerRail'
 import ChannelSidebar from './ChannelSidebar'
 import MessageList from './MessageList'
@@ -354,7 +359,8 @@ export default function AppShell() {
   }, [voice?.channel.id])
 
   // Звук при входе/выходе участников звонка, в котором мы сейчас сами —
-  // слышат все, кто уже в этом звонке (не сам вошедший/вышедший).
+  // играет для ВСЕХ в канале, включая самого вошедшего/вышедшего (каждый
+  // клиент детектит смену ростера у себя локально и проигрывает звук сам).
   useEffect(() => {
     if (!voice || !user) return
     const currentIds = new Set(
@@ -364,12 +370,44 @@ export default function AppShell() {
     )
     const prevIds = voiceRosterRef.current
     for (const id of currentIds) {
-      if (id !== user.id && !prevIds.has(id)) playJoinSound()
+      if (!prevIds.has(id)) playJoinSound()
     }
     for (const id of prevIds) {
-      if (id !== user.id && !currentIds.has(id)) playLeaveSound()
+      if (!currentIds.has(id)) playLeaveSound()
     }
     voiceRosterRef.current = currentIds
+  }, [members, voice, user])
+
+  // Тот же паттерн, что и звук входа/выхода: у кого из участников ТЕКУЩЕГО
+  // канала флаг sharing_screen сменился — играем звук старта/стопа демонстрации,
+  // тоже всем в канале, включая самого включившего/выключившего показ.
+  const voiceSharingRef = useRef<Set<number>>(new Set())
+  useEffect(() => {
+    voiceSharingRef.current = voice
+      ? new Set(
+          members
+            .filter((m) => m.voice_channel === String(voice.channel.id) && m.sharing_screen)
+            .map((m) => m.id),
+        )
+      : new Set()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [voice?.channel.id])
+
+  useEffect(() => {
+    if (!voice || !user) return
+    const currentSharing = new Set(
+      members
+        .filter((m) => m.voice_channel === String(voice.channel.id) && m.sharing_screen)
+        .map((m) => m.id),
+    )
+    const prevSharing = voiceSharingRef.current
+    for (const id of currentSharing) {
+      if (!prevSharing.has(id)) playScreenShareStartSound()
+    }
+    for (const id of prevSharing) {
+      if (!currentSharing.has(id)) playScreenShareStopSound()
+    }
+    voiceSharingRef.current = currentSharing
   }, [members, voice, user])
 
   return (
