@@ -45,6 +45,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   const logout = () => {
+    // Гасим и Django-сессию (см. LoginView) — иначе после выхода из
+    // приложения /adminpskordpro/ остался бы залогинен тем же cookie ещё
+    // до истечения сессии. Best-effort — локальный выход не ждёт сеть.
+    void api.logout().catch(() => {})
     setToken(null)
     setUser(null)
   }
