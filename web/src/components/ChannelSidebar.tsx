@@ -43,6 +43,7 @@ export default function ChannelSidebar({
   onLeaveVoice,
   onCreateChannel,
   onLogout,
+  onWatchScreen,
 }: {
   server: Server | null
   channels: Channel[]
@@ -56,6 +57,9 @@ export default function ChannelSidebar({
   onLeaveVoice: () => void
   onCreateChannel: (kind: 'text' | 'voice') => void
   onLogout: () => void
+  /** Клик по бейджу «демка» рядом с ником — открыть демонстрацию этого
+   * участника (с автоподключением к его каналу, если мы не там). */
+  onWatchScreen: (member: Member) => void
 }) {
   const { speakingUserIds, muted, deafened, pingMs } = useVoice()
   // Для себя — локальное состояние mesh'а (мгновенный отклик на клик);
@@ -155,6 +159,15 @@ export default function ChannelSidebar({
                       <div key={m.id} className="voice-user">
                         <Avatar name={m.username} color={m.avatar_color} size={20} speaking={speaking} />
                         <span className={speaking ? 'speaking' : ''}>{m.username}</span>
+                        {m.sharing_screen && (
+                          <button
+                            className="demo-badge"
+                            title={`Смотреть демонстрацию экрана — ${m.username}`}
+                            onClick={() => onWatchScreen(m)}
+                          >
+                            <Monitor size={11} /> демка
+                          </button>
+                        )}
                         <span className="voice-user-icons">
                           {mic.muted && (
                             <span title="Микрофон выключен">

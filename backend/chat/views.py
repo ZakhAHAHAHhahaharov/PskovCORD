@@ -89,6 +89,7 @@ class ServerMembers(APIView):
                 "voice_channel": presence.voice_channel(u.id),
                 "muted": flags["muted"],
                 "deafened": flags["deafened"],
+                "sharing_screen": flags["sharing_screen"],
             })
         # Онлайн сверху, затем по имени.
         data.sort(key=lambda x: (not x["online"], x["username"].lower()))

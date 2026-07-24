@@ -18,6 +18,7 @@ interface GatewayCtx {
   voiceJoin: (channelId: number) => void
   voiceLeave: () => void
   voiceMuteUpdate: (muted: boolean, deafened: boolean) => void
+  voiceScreenShareUpdate: (sharing: boolean) => void
   voiceTopicUpdate: (topic: string) => void
   setStatus: (status: UserStatus) => void
 }
@@ -114,6 +115,8 @@ export function GatewayProvider({ children }: { children: ReactNode }) {
     voiceLeave: () => raw({ op: 'voice_leave' }),
     voiceMuteUpdate: (muted, deafened) =>
       raw({ op: 'voice_mute_update', muted, deafened }),
+    voiceScreenShareUpdate: (sharing) =>
+      raw({ op: 'voice_screen_share_update', sharing }),
     voiceTopicUpdate: (topic) => raw({ op: 'voice_topic_update', topic }),
     setStatus: (status) => raw({ op: 'set_status', status }),
   }

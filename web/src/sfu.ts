@@ -7,13 +7,21 @@ export type SfuStatus = 'connecting' | 'connected' | 'failed'
 type Source = 'mic' | 'screen'
 
 export interface SfuCallbacks {
-  /** Появился/обновился голосовой поток участника userId. */
+  /** Появился/обновился голосовой поток участника userId. Голос всегда
+   * автослушается — в отличие от демонстрации экрана. */
   onRemoteStream: (userId: number, stream: MediaStream) => void
   /** Голосовой поток участника userId пропал. */
   onRemoteRemoved: (userId: number) => void
-  /** Появилась/обновилась демонстрация экрана участника userId. */
+  /** userId начал демонстрировать экран (в этой SFU-комнате появился
+   * producer источника screen) — ещё НЕ значит, что мы его смотрим. */
+  onScreenAvailable: (userId: number) => void
+  /** userId перестал демонстрировать экран (все screen-продюсеры закрыты). */
+  onScreenUnavailable: (userId: number) => void
+  /** Появился/обновился АКТИВНО ПРОСМАТРИВАЕМЫЙ поток демонстрации userId
+   * (после watchScreen). */
   onScreenStream: (userId: number, stream: MediaStream) => void
-  /** Демонстрация экрана участника userId завершилась. */
+  /** Просматриваемый поток демонстрации userId пропал (после unwatchScreen
+   * или из-за того, что демонстрация вообще завершилась). */
   onScreenRemoved: (userId: number) => void
   onStatus: (status: SfuStatus) => void
 }
@@ -30,12 +38,14 @@ interface ConsumerMeta {
 
 /**
  * Клиент собственного SFU (mediasoup). Держит ОДНО WS-соединение к SFU и один
- * send + один recv WebRTC-транспорт: свой микрофон (и, при желании, экран)
- * уходят Producer'ами, а чужие потоки приходят Consumer'ами. Это заменяет
- * прежний P2P full-mesh (по соединению на каждого участника).
+ * send + один recv WebRTC-транспорт: свой микрофон (и, при демонстрации,
+ * экран) уходят Producer'ами, а чужие потоки приходят Consumer'ами. Это
+ * заменяет прежний P2P full-mesh (по соединению на каждого участника).
  *
- * Наружу отдаём готовые MediaStream'ы, ключёванные по userId и разведённые по
- * типу: голос (onRemoteStream) и демонстрация экрана (onScreenStream).
+ * Голос слушается автоматически (как и раньше). Демонстрация экрана — НЕТ:
+ * SFU лишь сообщает, что у userId появился screen-producer (доступен для
+ * просмотра); реальный consume() запускается только явным watchScreen(),
+ * чтобы зайти в комнату не значило автоматически смотреть чей-то экран.
  */
 export class SfuClient {
   private ws: WebSocket | null = null
@@ -46,6 +56,10 @@ export class SfuClient {
   private screenProducers: types.Producer[] = []
   private readonly consumers = new Map<string, types.Consumer>()
   private readonly consumerMeta = new Map<string, ConsumerMeta>()
+  // Доступные (но не обязательно просматриваемые) screen-продюсеры по userId —
+  // нужны, чтобы watchScreen() знал, что именно consume'ить.
+  private readonly availableScreenProducers = new Map<number, Set<string>>()
+  private readonly watchedScreenUsers = new Set<number>()
   private readonly pending = new Map<number, Pending>()
   private nextReqId = 1
   private closed = false
@@ -74,13 +88,17 @@ export class SfuClient {
         })
       }
 
-      // Подписаться на уже присутствующих участников.
+      // Подписаться на уже присутствующих участников: голос — сразу, экран —
+      // только зафиксировать доступность (см. класс-докстринг).
       const producers = (await this.request('getProducers')) as {
         producerId: string
         userId: number
         source: Source
       }[]
-      for (const p of producers) await this.consume(p.producerId, p.userId, p.source)
+      for (const p of producers) {
+        if (p.source === 'screen') this.markScreenAvailable(p.userId, p.producerId)
+        else await this.consumeMic(p.producerId, p.userId)
+      }
     } catch (err) {
       if (!this.closed) this.cb.onStatus('failed')
       throw err
@@ -122,22 +140,31 @@ export class SfuClient {
   private onNotification(notification: string, data: any) {
     switch (notification) {
       case 'newProducer':
-        // Не ждём результата — consume асинхронно.
-        void this.consume(data.producerId, data.userId, data.source ?? 'mic')
+        if (data.source === 'screen') {
+          this.markScreenAvailable(data.userId, data.producerId)
+          // Если этого пользователя уже смотрят (например, у демонстрации
+          // видео и звук приходят двумя producer'ами не одновременно) —
+          // сразу подхватываем новый трек в уже идущий просмотр.
+          if (this.watchedScreenUsers.has(data.userId)) {
+            void this.consumeScreen(data.producerId, data.userId)
+          }
+        } else {
+          void this.consumeMic(data.producerId, data.userId)
+        }
         break
       case 'peerClosed':
         this.removeUser(data.userId)
         break
       case 'producerClosed':
-        // Конкретный продюсер (например, конец демонстрации) закрылся.
-        this.closeConsumersOfProducer(data.producerId)
+        this.onProducerClosed(data.producerId, data.userId, data.source)
         break
       case 'consumerClosed': {
         const meta = this.consumerMeta.get(data.consumerId)
         this.consumers.get(data.consumerId)?.close()
         this.consumers.delete(data.consumerId)
         this.consumerMeta.delete(data.consumerId)
-        if (meta) this.recomputeStream(meta.userId, meta.source)
+        if (meta?.source === 'mic') this.recomputeMicStream(meta.userId)
+        else if (meta) this.recomputeScreenStream(meta.userId)
         break
       }
     }
@@ -199,80 +226,162 @@ export class SfuClient {
     })
   }
 
-  private async consume(producerId: string, userId: number, source: Source) {
-    if (this.closed || !this.recvTransport) return
-    try {
-      const params = await this.request('consume', {
-        producerId,
-        rtpCapabilities: this.device.rtpCapabilities,
-      })
-      const consumer = await this.recvTransport.consume({
-        id: params.id,
-        producerId: params.producerId,
-        kind: params.kind,
-        rtpParameters: params.rtpParameters,
-      })
-      const uid = (params.producerUserId as number | null) ?? userId
-      const src: Source = (params.source as Source) ?? source
-      this.consumers.set(consumer.id, consumer)
-      this.consumerMeta.set(consumer.id, { userId: uid, source: src })
-      consumer.on('transportclose', () => {
-        this.consumers.delete(consumer.id)
-        this.consumerMeta.delete(consumer.id)
-      })
-      // Сервер стартует консюмера на паузе — снимаем после setup.
-      await this.request('resumeConsumer', { consumerId: consumer.id })
-      this.recomputeStream(uid, src)
-    } catch {
-      // Один неудавшийся consume не должен ронять весь голос.
+  private markScreenAvailable(userId: number, producerId: string) {
+    let set = this.availableScreenProducers.get(userId)
+    const wasAvailable = !!set && set.size > 0
+    if (!set) {
+      set = new Set()
+      this.availableScreenProducers.set(userId, set)
     }
+    set.add(producerId)
+    if (!wasAvailable) this.cb.onScreenAvailable(userId)
   }
 
-  /** Собрать MediaStream пользователя из его действующих консюмеров данного типа. */
-  private recomputeStream(userId: number, source: Source) {
-    const tracks: MediaStreamTrack[] = []
-    for (const [cid, consumer] of this.consumers) {
-      const meta = this.consumerMeta.get(cid)
-      if (meta && meta.userId === userId && meta.source === source) {
-        tracks.push(consumer.track)
-      }
-    }
-    const emitRemoved =
-      source === 'screen' ? this.cb.onScreenRemoved : this.cb.onRemoteRemoved
-    const emitStream =
-      source === 'screen' ? this.cb.onScreenStream : this.cb.onRemoteStream
-    if (tracks.length === 0) {
-      emitRemoved(userId)
-      return
-    }
-    emitStream(userId, new MediaStream(tracks))
-  }
-
-  private closeConsumersOfProducer(producerId: string) {
-    const affected: ConsumerMeta[] = []
+  private onProducerClosed(producerId: string, userId: number, source: Source) {
+    if (source !== 'screen') return
+    const set = this.availableScreenProducers.get(userId)
+    set?.delete(producerId)
+    // Если этот producer сейчас смотрели — закрыть его consumer и пересчитать.
     for (const [cid, consumer] of this.consumers) {
       if (consumer.producerId === producerId) {
-        const meta = this.consumerMeta.get(cid)
-        if (meta) affected.push(meta)
         consumer.close()
         this.consumers.delete(cid)
         this.consumerMeta.delete(cid)
       }
     }
-    for (const meta of affected) this.recomputeStream(meta.userId, meta.source)
+    if (!set || set.size === 0) {
+      this.availableScreenProducers.delete(userId)
+      this.cb.onScreenUnavailable(userId)
+      if (this.watchedScreenUsers.has(userId)) {
+        this.watchedScreenUsers.delete(userId)
+        this.cb.onScreenRemoved(userId)
+      }
+    } else if (this.watchedScreenUsers.has(userId)) {
+      this.recomputeScreenStream(userId)
+    }
   }
 
-  private removeUser(userId: number) {
-    const sources = new Set<Source>()
-    for (const [cid, meta] of this.consumerMeta) {
-      if (meta.userId === userId) {
-        sources.add(meta.source)
+  private async consumeMic(producerId: string, userId: number) {
+    if (this.closed || !this.recvTransport) return
+    try {
+      const consumer = await this.doConsume(producerId)
+      this.consumers.set(consumer.id, consumer)
+      this.consumerMeta.set(consumer.id, { userId, source: 'mic' })
+      consumer.on('transportclose', () => {
+        this.consumers.delete(consumer.id)
+        this.consumerMeta.delete(consumer.id)
+      })
+      await this.request('resumeConsumer', { consumerId: consumer.id })
+      this.recomputeMicStream(userId)
+    } catch {
+      // Один неудавшийся consume не должен ронять весь голос.
+    }
+  }
+
+  private async consumeScreen(producerId: string, userId: number) {
+    if (this.closed || !this.recvTransport) return
+    // Уже consume'или именно этот producer (например, повторный newProducer).
+    for (const consumer of this.consumers.values()) {
+      if (consumer.producerId === producerId) return
+    }
+    try {
+      const consumer = await this.doConsume(producerId)
+      this.consumers.set(consumer.id, consumer)
+      this.consumerMeta.set(consumer.id, { userId, source: 'screen' })
+      consumer.on('transportclose', () => {
+        this.consumers.delete(consumer.id)
+        this.consumerMeta.delete(consumer.id)
+      })
+      await this.request('resumeConsumer', { consumerId: consumer.id })
+      this.recomputeScreenStream(userId)
+    } catch {
+      // Не смогли подключить один из треков демонстрации — не фатально.
+    }
+  }
+
+  private async doConsume(producerId: string): Promise<types.Consumer> {
+    const params = await this.request('consume', {
+      producerId,
+      rtpCapabilities: this.device.rtpCapabilities,
+    })
+    return this.recvTransport!.consume({
+      id: params.id,
+      producerId: params.producerId,
+      kind: params.kind,
+      rtpParameters: params.rtpParameters,
+    })
+  }
+
+  /** Явно начать просмотр демонстрации экрана userId (по клику «Смотреть»). */
+  watchScreen(userId: number): void {
+    if (this.watchedScreenUsers.has(userId)) return
+    this.watchedScreenUsers.add(userId)
+    const producerIds = this.availableScreenProducers.get(userId)
+    if (!producerIds || producerIds.size === 0) return
+    for (const producerId of producerIds) {
+      void this.consumeScreen(producerId, userId)
+    }
+  }
+
+  /** Прекратить просмотр демонстрации userId (сама демонстрация продолжается
+   * для остальных — мы просто перестаём тянуть трафик). */
+  unwatchScreen(userId: number): void {
+    if (!this.watchedScreenUsers.delete(userId)) return
+    for (const [cid, meta] of Array.from(this.consumerMeta)) {
+      if (meta.userId === userId && meta.source === 'screen') {
+        void this.request('closeConsumer', { consumerId: cid }).catch(() => {})
         this.consumers.get(cid)?.close()
         this.consumers.delete(cid)
         this.consumerMeta.delete(cid)
       }
     }
-    for (const source of sources) this.recomputeStream(userId, source)
+    this.cb.onScreenRemoved(userId)
+  }
+
+  isWatchingScreen(userId: number): boolean {
+    return this.watchedScreenUsers.has(userId)
+  }
+
+  private recomputeMicStream(userId: number) {
+    const tracks: MediaStreamTrack[] = []
+    for (const [cid, consumer] of this.consumers) {
+      const meta = this.consumerMeta.get(cid)
+      if (meta && meta.userId === userId && meta.source === 'mic') tracks.push(consumer.track)
+    }
+    if (tracks.length === 0) {
+      this.cb.onRemoteRemoved(userId)
+      return
+    }
+    this.cb.onRemoteStream(userId, new MediaStream(tracks))
+  }
+
+  private recomputeScreenStream(userId: number) {
+    const tracks: MediaStreamTrack[] = []
+    for (const [cid, consumer] of this.consumers) {
+      const meta = this.consumerMeta.get(cid)
+      if (meta && meta.userId === userId && meta.source === 'screen') tracks.push(consumer.track)
+    }
+    if (tracks.length === 0) {
+      this.cb.onScreenRemoved(userId)
+      return
+    }
+    this.cb.onScreenStream(userId, new MediaStream(tracks))
+  }
+
+  private removeUser(userId: number) {
+    for (const [cid, meta] of Array.from(this.consumerMeta)) {
+      if (meta.userId !== userId) continue
+      this.consumers.get(cid)?.close()
+      this.consumers.delete(cid)
+      this.consumerMeta.delete(cid)
+    }
+    this.cb.onRemoteRemoved(userId)
+    if (this.availableScreenProducers.delete(userId)) {
+      this.cb.onScreenUnavailable(userId)
+    }
+    if (this.watchedScreenUsers.delete(userId)) {
+      this.cb.onScreenRemoved(userId)
+    }
   }
 
   /** Мьют своего микрофона: пауза Producer'а останавливает отправку RTP. */
@@ -333,6 +442,8 @@ export class SfuClient {
     for (const c of this.consumers.values()) c.close()
     this.consumers.clear()
     this.consumerMeta.clear()
+    this.availableScreenProducers.clear()
+    this.watchedScreenUsers.clear()
     this.micProducer?.close()
     for (const p of this.screenProducers) p.close()
     this.screenProducers = []

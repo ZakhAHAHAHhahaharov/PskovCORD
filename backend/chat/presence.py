@@ -206,7 +206,7 @@ def effective_status(user, online: bool) -> str:
     return user.status
 
 
-# --- voice mic/deafen flags ---------------------------------------------
+# --- voice mic/deafen/screen-share флаги ---------------------------------
 def set_voice_flags(uid, muted: bool, deafened: bool):
     """Запоминает состояние микрофона/наушников — чтобы новый участник канала
     сразу видел актуальный статус остальных, не дожидаясь их следующего
@@ -216,11 +216,23 @@ def set_voice_flags(uid, muted: bool, deafened: bool):
     })
 
 
+def set_screen_sharing(uid, sharing: bool):
+    """Отдельно от muted/deafened — демонстрация экрана. Хранится в том же
+    хэше (hset с частичным mapping не трогает остальные поля), поэтому
+    живёт наравне с ними и точно так же стирается clear_voice() при выходе
+    из канала. Виден ВСЕМ на сервере (не только участникам SFU-комнаты) —
+    именно на этом флаге строится бейдж «демка» и клик по нему."""
+    _r.hset(_voice_flags_key(str(uid)), mapping={
+        "sharing_screen": int(bool(sharing)),
+    })
+
+
 def voice_flags(uid) -> dict:
     raw = _r.hgetall(_voice_flags_key(str(uid)))
     return {
         "muted": raw.get("muted") == "1",
         "deafened": raw.get("deafened") == "1",
+        "sharing_screen": raw.get("sharing_screen") == "1",
     }
 
 

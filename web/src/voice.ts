@@ -5,6 +5,7 @@ import { playDisconnectSound, playReconnectedSound } from './sounds'
 
 interface VoiceGateway {
   voiceMuteUpdate: (muted: boolean, deafened: boolean) => void
+  voiceScreenShareUpdate: (sharing: boolean) => void
 }
 
 /**
@@ -23,8 +24,17 @@ const RECONNECT_MAX_DELAY_MS = 8000
 
 export interface VoiceMesh {
   remoteStreams: Map<number, MediaStream>
-  /** Демонстрации экрана участников (userId → поток видео+звук). */
+  /** Демонстрации ДРУГИХ, которые мы сейчас активно смотрим (после watchScreen). */
   screenShares: Map<number, MediaStream>
+  /** userId'ы, чья демонстрация сейчас доступна для просмотра в этой SFU-комнате
+   * (не значит, что мы её смотрим — только что можно нажать «Смотреть»). */
+  availableScreenUserIds: Set<number>
+  /** Начать смотреть демонстрацию userId (явное действие — автопросмотра нет). */
+  watchScreen: (userId: number) => void
+  /** Перестать смотреть — сама демонстрация для остальных продолжается. */
+  unwatchScreen: (userId: number) => void
+  /** Локальный предпросмотр своей демонстрации (без похода через SFU). */
+  ownScreenStream: MediaStream | null
   /** Демонстрирую ли я сейчас свой экран. */
   isSharingScreen: boolean
   toggleScreenShare: () => void
@@ -41,6 +51,10 @@ export interface VoiceMesh {
 const EMPTY_MESH: VoiceMesh = {
   remoteStreams: new Map(),
   screenShares: new Map(),
+  availableScreenUserIds: new Set(),
+  watchScreen: () => {},
+  unwatchScreen: () => {},
+  ownScreenStream: null,
   isSharingScreen: false,
   toggleScreenShare: () => {},
   muted: true,
@@ -64,8 +78,8 @@ export const useVoice = () => useContext(VoiceMeshCtx)
 /**
  * Голос через собственный SFU (mediasoup): одно WS-соединение и один
  * send/recv WebRTC-транспорт к SFU-серверу вместо P2P-mesh. Наружу отдаётся
- * тот же контракт VoiceMesh (remoteStreams по userId, мьют/дефен, пинг, VAD),
- * поэтому UI-компоненты и детектор речи не изменились — см. [[sfu.ts]].
+ * контракт VoiceMesh (remoteStreams по userId, мьют/дефен, пинг, VAD,
+ * демонстрация экрана) — см. [[sfu.ts]].
  */
 export function useVoiceMesh(
   voice: VoiceState | null,
@@ -78,6 +92,10 @@ export function useVoiceMesh(
   const [screenShares, setScreenShares] = useState<Map<number, MediaStream>>(
     new Map(),
   )
+  const [availableScreenUserIds, setAvailableScreenUserIds] = useState<Set<number>>(
+    new Set(),
+  )
+  const [ownScreenStream, setOwnScreenStream] = useState<MediaStream | null>(null)
   const [isSharingScreen, setIsSharingScreen] = useState(false)
   const [muted, setMuted] = useState(true)
   const [deafened, setDeafened] = useState(false)
@@ -130,6 +148,22 @@ export function useVoiceMesh(
           setRemoteStreams((prev) => {
             if (!prev.has(userId)) return prev
             const next = new Map(prev)
+            next.delete(userId)
+            return next
+          })
+        },
+        onScreenAvailable: (userId) => {
+          setAvailableScreenUserIds((prev) => {
+            if (prev.has(userId)) return prev
+            const next = new Set(prev)
+            next.add(userId)
+            return next
+          })
+        },
+        onScreenUnavailable: (userId) => {
+          setAvailableScreenUserIds((prev) => {
+            if (!prev.has(userId)) return prev
+            const next = new Set(prev)
             next.delete(userId)
             return next
           })
@@ -253,10 +287,12 @@ export function useVoiceMesh(
       setMuted(true)
       setDeafened(false)
       setIsSharingScreen(false)
+      setOwnScreenStream(null)
       setStatus('connecting')
       setPingMs(null)
       setRemoteStreams(new Map())
       setScreenShares(new Map())
+      setAvailableScreenUserIds(new Set())
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [voice?.channel.id])
@@ -268,6 +304,14 @@ export function useVoiceMesh(
     gateway.voiceMuteUpdate(muted, deafened)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [voice?.channel.id, muted, deafened])
+
+  // Рассылаем факт демонстрации экрана — виден всем на сервере (не только
+  // участникам этого голосового канала), на нём держится бейдж «демка».
+  useEffect(() => {
+    if (!voice) return
+    gateway.voiceScreenShareUpdate(isSharingScreen)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [voice?.channel.id, isSharingScreen])
 
   // VAD: анализируем реальные аудио-потоки (свой + remote), которые уже текут
   // через WebRTC, вместо того чтобы гонять "speaking"-события через сеть.
@@ -384,6 +428,7 @@ export function useVoiceMesh(
     displayStream.current?.getTracks().forEach((t) => t.stop())
     displayStream.current = null
     setIsSharingScreen(false)
+    setOwnScreenStream(null)
   }
 
   const toggleScreenShare = () => {
@@ -403,6 +448,7 @@ export function useVoiceMesh(
         if (videoTrack) videoTrack.addEventListener('ended', stopSharing)
         await client.current!.startScreen(stream.getTracks())
         setIsSharingScreen(true)
+        setOwnScreenStream(stream)
       })
       .catch(() => {
         // Пользователь отменил выбор экрана — ничего не делаем.
@@ -410,9 +456,21 @@ export function useVoiceMesh(
       })
   }
 
+  const watchScreen = (userId: number) => {
+    client.current?.watchScreen(userId)
+  }
+
+  const unwatchScreen = (userId: number) => {
+    client.current?.unwatchScreen(userId)
+  }
+
   return {
     remoteStreams,
     screenShares,
+    availableScreenUserIds,
+    watchScreen,
+    unwatchScreen,
+    ownScreenStream,
     isSharingScreen,
     toggleScreenShare,
     muted,

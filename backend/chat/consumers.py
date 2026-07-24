@@ -12,6 +12,7 @@ GatewayConsumer — единственный WebSocket на клиента (по
     {"op": "voice_join",   "channel_id": <id>}
     {"op": "voice_leave"}
     {"op": "voice_mute_update", "muted": bool, "deafened": bool}
+    {"op": "voice_screen_share_update", "sharing": bool}
     {"op": "voice_topic_update", "topic": "..."}
     {"op": "set_status", "status": "online" | "dnd" | "invisible"}
     {"op": "ping"}  — хартбит, см. presence.heartbeat/chat.heartbeat_sweep
@@ -24,8 +25,9 @@ GatewayConsumer — единственный WebSocket на клиента (по
     {"op": "presence_update", "user_id": <id>, "online": bool, "status": "online"|"dnd"|"offline"}
     {"op": "voice_state_update", "user_id": <id>, "channel_id": <id|null>}
     {"op": "voice_peers", "channel_id": <id>, "peer_ids": [<id>, ...],
-     "peer_flags": {<id>: {"muted": bool, "deafened": bool}, ...}}
+     "peer_flags": {<id>: {"muted": bool, "deafened": bool, "sharing_screen": bool}, ...}}
     {"op": "voice_mute_update", "user_id": <id>, "muted": bool, "deafened": bool}
+    {"op": "voice_screen_share_update", "user_id": <id>, "sharing": bool}
     {"op": "voice_call_state", "channel_id": <id>,
      "call_started_at": <float|null>, "topic": "..."|null}
 
@@ -33,6 +35,12 @@ voice_mute_update — статус своего микрофона/наушни�
 клиент шлёт при каждом изменении, пока состоит в голосовом канале; сервер
 запоминает его в presence (voice_flags) и рассылает всем на сервере, чтобы
 у остальных участников канала загорался/гас значок мьюта прямо в списке.
+
+voice_screen_share_update — аналогично, но для демонстрации экрана. Живёт в
+presence (voice_flags.sharing_screen), рассылается ВСЕМ участникам сервера
+(не только тем, кто сейчас в этом голосовом канале) — на этом флаге держится
+красный бейдж «демка» и переход по клику на него, даже если кликающий сам
+никуда не подключён.
 
 voice_call_state — момент начала текущего разговора в канале и его статус
 (topic). Живёт в presence, пока в канале хоть кто-то есть: появляется при
@@ -128,6 +136,8 @@ class GatewayConsumer(AsyncWebsocketConsumer):
             await self._handle_voice_leave()
         elif op == "voice_mute_update":
             await self._handle_voice_mute_update(data)
+        elif op == "voice_screen_share_update":
+            await self._handle_voice_screen_share_update(data)
         elif op == "voice_topic_update":
             await self._handle_voice_topic_update(data)
         elif op == "set_status":
@@ -251,6 +261,22 @@ class GatewayConsumer(AsyncWebsocketConsumer):
                 "user_id": self.user.id,
                 "muted": muted,
                 "deafened": deafened,
+            }})
+
+    async def _handle_voice_screen_share_update(self, data):
+        sharing = bool(data.get("sharing"))
+        channel_id = await asyncio.to_thread(presence.voice_channel, self.uid)
+        if not channel_id:
+            return
+        await asyncio.to_thread(presence.set_screen_sharing, self.uid, sharing)
+        server_id = await self._channel_server(channel_id)
+        if not server_id:
+            return
+        await self.channel_layer.group_send(
+            f"server_{server_id}", {"type": "broadcast", "payload": {
+                "op": "voice_screen_share_update",
+                "user_id": self.user.id,
+                "sharing": sharing,
             }})
 
     # --- рассылка -----------------------------------------------------------
