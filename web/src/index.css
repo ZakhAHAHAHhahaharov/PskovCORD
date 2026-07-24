@@ -1393,8 +1393,37 @@ input {
   background: var(--channel-hover);
 }
 
+.mic-level-meter {
+  position: relative;
+  height: 8px;
+  border-radius: 4px;
+  background: #1e1f22;
+  margin: -8px 0 8px;
+  overflow: visible;
+}
+
+.mic-level-meter-fill {
+  height: 100%;
+  width: 0%;
+  border-radius: 4px;
+  background: var(--green);
+  /* Метр обновляется через requestAnimationFrame напрямую в style.width —
+     transition сглаживает дискретные кадры визуально, без него дёргается. */
+  transition: width 60ms linear;
+}
+
+.mic-level-meter-threshold {
+  position: absolute;
+  top: -3px;
+  width: 2px;
+  height: 14px;
+  background: #fff;
+  border-radius: 1px;
+  transform: translateX(-1px);
+}
+
 .settings-hint {
-  margin: -10px 0 20px;
+  margin: 0 0 20px;
   font-size: 12px;
   color: var(--text-faint);
 }
