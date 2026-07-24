@@ -1,3 +1,4 @@
+import { Mic, MicOff } from 'lucide-react'
 import { useVoice } from '../voice'
 import { playToggleSound } from '../sounds'
 
@@ -14,7 +15,7 @@ export default function MicButton() {
       onClick={handleClick}
       title={muted ? 'Включить микрофон' : 'Выключить микрофон'}
     >
-      {muted ? '🔇' : '🎙️'}
+      {muted ? <MicOff size={17} /> : <Mic size={17} />}
     </button>
   )
 }

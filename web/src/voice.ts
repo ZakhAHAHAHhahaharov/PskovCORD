@@ -1,12 +1,25 @@
 import { createContext, useContext, useEffect, useRef, useState } from 'react'
 import type { VoiceState } from './components/AppShell'
-import { SfuClient, SfuStatus } from './sfu'
+import { SfuClient } from './sfu'
+import { playDisconnectSound, playReconnectedSound } from './sounds'
 
 interface VoiceGateway {
   voiceMuteUpdate: (muted: boolean, deafened: boolean) => void
 }
 
-export type VoiceStatus = SfuStatus
+/**
+ * 'reconnecting' — отдельно от 'connecting': сеанс уже был установлен, связь
+ * оборвалась, и мы молча пытаемся восстановить её сами (см. reconnect-цикл
+ * ниже), не выкидывая пользователя из канала при кратковременном сбое сети.
+ */
+export type VoiceStatus = 'connecting' | 'reconnecting' | 'connected' | 'failed'
+
+// Автопереподключение при обрыве после успешного коннекта: экспоненциальная
+// пауза между попытками, всего ~30с, прежде чем сдаться и отдать 'failed'
+// наверх (там пользователя реально выкинет из канала с алертом).
+const MAX_RECONNECT_ATTEMPTS = 6
+const RECONNECT_BASE_DELAY_MS = 1000
+const RECONNECT_MAX_DELAY_MS = 8000
 
 export interface VoiceMesh {
   remoteStreams: Map<number, MediaStream>
@@ -81,52 +94,130 @@ export function useVoiceMesh(
   // Состояние мьюта на момент включения дефена — чтобы при выключении дефена
   // вернуть именно его, а не всегда размьючивать.
   const mutedBeforeDeafen = useRef(false)
+  // Текущий мьют для переприменения к продюсеру нового SfuClient при
+  // автопереподключении (эффект ниже создаётся один раз на весь канал).
+  const mutedRef = useRef(muted)
+  mutedRef.current = muted
+  // То же самое для демонстрации экрана: сам захват (displayStream) не
+  // прерывается обрывом связи, только его продюсер на старом (упавшем)
+  // SfuClient — на новом транспорте после реконнекта продюсим те же треки
+  // заново, чтобы показ не пришлось запускать вручную повторно.
+  const isSharingScreenRef = useRef(isSharingScreen)
+  isSharingScreenRef.current = isSharingScreen
 
   useEffect(() => {
     if (!voice) return
 
     let cancelled = false
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null
+    let reconnectAttempt = 0
+    let hasConnectedOnce = false
     setStatus('connecting')
 
-    const sfu = new SfuClient(voice.sfuUrl, voice.sfuToken, {
-      onRemoteStream: (userId, stream) => {
-        setRemoteStreams((prev) => {
-          const next = new Map(prev)
-          next.set(userId, stream)
-          return next
-        })
-      },
-      onRemoteRemoved: (userId) => {
-        setRemoteStreams((prev) => {
-          if (!prev.has(userId)) return prev
-          const next = new Map(prev)
-          next.delete(userId)
-          return next
-        })
-      },
-      onScreenStream: (userId, stream) => {
-        setScreenShares((prev) => {
-          const next = new Map(prev)
-          next.set(userId, stream)
-          return next
-        })
-      },
-      onScreenRemoved: (userId) => {
-        setScreenShares((prev) => {
-          if (!prev.has(userId)) return prev
-          const next = new Map(prev)
-          next.delete(userId)
-          return next
-        })
-      },
-      onStatus: (s) => {
-        if (!cancelled) setStatus(s)
-      },
-    })
-    client.current = sfu
+    const startAttempt = () => {
+      if (cancelled) return
+      const isReconnect = hasConnectedOnce
+
+      const sfu = new SfuClient(voice.sfuUrl, voice.sfuToken, {
+        onRemoteStream: (userId, stream) => {
+          setRemoteStreams((prev) => {
+            const next = new Map(prev)
+            next.set(userId, stream)
+            return next
+          })
+        },
+        onRemoteRemoved: (userId) => {
+          setRemoteStreams((prev) => {
+            if (!prev.has(userId)) return prev
+            const next = new Map(prev)
+            next.delete(userId)
+            return next
+          })
+        },
+        onScreenStream: (userId, stream) => {
+          setScreenShares((prev) => {
+            const next = new Map(prev)
+            next.set(userId, stream)
+            return next
+          })
+        },
+        onScreenRemoved: (userId) => {
+          setScreenShares((prev) => {
+            if (!prev.has(userId)) return prev
+            const next = new Map(prev)
+            next.delete(userId)
+            return next
+          })
+        },
+        onStatus: (s) => {
+          if (cancelled) return
+          if (s === 'connected') {
+            // Различаем "просто зашли" и "восстановились после обрыва" —
+            // только во втором случае это радостное событие, о котором
+            // стоит сигналить звуком.
+            if (isReconnect && reconnectAttempt > 0) playReconnectedSound()
+            hasConnectedOnce = true
+            reconnectAttempt = 0
+            setStatus('connected')
+          } else if (s === 'connecting') {
+            setStatus(isReconnect ? 'reconnecting' : 'connecting')
+          } else if (s === 'failed') {
+            handleDropped()
+          }
+        },
+      })
+      client.current = sfu
+
+      void (async () => {
+        try {
+          await sfu.connect(localStream.current?.getAudioTracks()[0] ?? null)
+        } catch {
+          // onStatus('failed') уже отправлен клиентом.
+          return
+        }
+        // На новом продюсере переприменяем текущий мьют — сам трек уже молчит,
+        // если muted (t.enabled=false), но пауза продюсера была локальной для
+        // старого (упавшего) SfuClient. Только для переподключения: на самом
+        // первом коннекте mutedRef ещё не синхронизирован с состоянием (гонка
+        // с getUserMedia), да и не нужен — свежий продюсер и так стартует в
+        // консистентном unpaused-состоянии.
+        if (isReconnect) sfu.setMicPaused(mutedRef.current)
+        // Демонстрация экрана точно так же не должна прерываться реконнектом:
+        // захват (displayStream) всё ещё жив, продюсируем его заново на новом
+        // транспорте — как будто ничего не было. Голос к этому моменту уже
+        // поднят, так что неудача здесь не должна ронять reconnect — просто
+        // не поднимаем показ и снимаем "sharing", включат заново вручную.
+        if (isReconnect && isSharingScreenRef.current && displayStream.current) {
+          try {
+            await sfu.startScreen(displayStream.current.getTracks())
+          } catch {
+            setIsSharingScreen(false)
+          }
+        }
+      })()
+    }
+
+    // Связь оборвалась после того, как мы уже были подключены — пробуем
+    // автоматически восстановить её сами, не выкидывая из канала за
+    // секундный сбой сети. Сдаёмся только после нескольких неудачных попыток.
+    const handleDropped = () => {
+      if (cancelled) return
+      client.current?.close()
+      if (!hasConnectedOnce || reconnectAttempt >= MAX_RECONNECT_ATTEMPTS) {
+        setStatus('failed')
+        return
+      }
+      if (reconnectAttempt === 0) playDisconnectSound()
+      reconnectAttempt++
+      setStatus('reconnecting')
+      const delay = Math.min(
+        RECONNECT_BASE_DELAY_MS * 2 ** (reconnectAttempt - 1),
+        RECONNECT_MAX_DELAY_MS,
+      )
+      reconnectTimer = setTimeout(startAttempt, delay)
+    }
 
     void (async () => {
-      let micTrack: MediaStreamTrack | null = null
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
         if (cancelled) {
@@ -134,29 +225,25 @@ export function useVoiceMesh(
           return
         }
         localStream.current = stream
-        micTrack = stream.getAudioTracks()[0] ?? null
         setMuted(false)
       } catch {
         if (!cancelled) setMuted(true)
       }
       if (cancelled) return
-      try {
-        await sfu.connect(micTrack)
-      } catch {
-        // onStatus('failed') уже отправлен клиентом.
-      }
+      startAttempt()
     })()
 
     // Опрос RTT до SFU раз в 2.5с.
     const pingInterval = setInterval(async () => {
-      const rtt = await sfu.pingMs()
+      const rtt = (await client.current?.pingMs()) ?? null
       if (!cancelled) setPingMs(rtt)
     }, 2500)
 
     return () => {
       cancelled = true
+      if (reconnectTimer) clearTimeout(reconnectTimer)
       clearInterval(pingInterval)
-      sfu.close()
+      client.current?.close()
       client.current = null
       localStream.current?.getTracks().forEach((t) => t.stop())
       localStream.current = null

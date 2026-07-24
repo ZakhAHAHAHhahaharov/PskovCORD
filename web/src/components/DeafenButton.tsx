@@ -1,3 +1,4 @@
+import { Headphones, HeadphoneOff } from 'lucide-react'
 import { useVoice } from '../voice'
 import { playToggleSound } from '../sounds'
 
@@ -14,7 +15,7 @@ export default function DeafenButton() {
       onClick={handleClick}
       title={deafened ? 'Включить звук' : 'Отключить звук (не слышать участников)'}
     >
-      {deafened ? '🔕' : '🎧'}
+      {deafened ? <HeadphoneOff size={17} /> : <Headphones size={17} />}
     </button>
   )
 }

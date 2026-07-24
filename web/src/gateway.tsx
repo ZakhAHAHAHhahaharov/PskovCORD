@@ -25,6 +25,14 @@ interface GatewayCtx {
 const Ctx = createContext<GatewayCtx>(null as unknown as GatewayCtx)
 export const useGateway = () => useContext(Ctx)
 
+// Хартбит: пока сокет открыт, шлём {"op":"ping"} раз в PING_INTERVAL — сервер
+// обновляет TTL "жив" (presence.heartbeat, 5 минут) и раз в минуту подчищает
+// тех, чей TTL истёк (chat.heartbeat_sweep) — страховка на случай, если WS
+// оборвался без close-фрейма (сон ноутбука, краш вкладки) и обычный
+// disconnect() так и не пришёл. Интервал заметно короче TTL — несколько
+// попыток про запас на случай троттлинга фоновой вкладки браузером.
+const PING_INTERVAL_MS = 60 * 1000
+
 // Пусто => same-origin (ws/wss от текущего хоста). Для dev задаётся в web/.env.
 const ENV_WS = import.meta.env.VITE_WS_URL
 const WS: string =
@@ -71,6 +79,14 @@ export function GatewayProvider({ children }: { children: ReactNode }) {
       wsRef.current?.close()
     }
   }, [connect])
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const ws = wsRef.current
+      if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ op: 'ping' }))
+    }, PING_INTERVAL_MS)
+    return () => clearInterval(interval)
+  }, [])
 
   const raw = (obj: unknown) => {
     const msg = JSON.stringify(obj)

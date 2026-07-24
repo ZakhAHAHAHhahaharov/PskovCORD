@@ -17,6 +17,7 @@
   --blurple: #5865f2;
   --blurple-hover: #4752c4;
   --green: #23a55a;
+  --yellow: #f0b232;
   --red: #f23f43;
 
   --font: 'gg sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
@@ -326,10 +327,11 @@ input {
 }
 
 .channel-icon {
-  font-size: 15px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   opacity: 0.8;
   width: 20px;
-  text-align: center;
 }
 
 .channel-name {
@@ -360,8 +362,8 @@ input {
 .voice-user-icons {
   display: flex;
   align-items: center;
+  gap: 3px;
   margin-left: auto;
-  font-size: 12px;
   opacity: 0.85;
 }
 
@@ -426,12 +428,26 @@ input {
 }
 
 .voice-signal {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   color: var(--green);
   font-size: 13px;
   font-weight: 700;
 }
 
+.voice-signal.warn {
+  color: var(--yellow);
+}
+
+.voice-signal.error {
+  color: var(--red);
+}
+
 .voice-ping {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
   margin-left: 6px;
   color: var(--text-muted);
   font-size: 12px;
@@ -439,8 +455,24 @@ input {
 }
 
 .voice-connected-channel {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   color: var(--text-muted);
   font-size: 12px;
+}
+
+.spin {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .voice-disconnect {
@@ -553,7 +585,22 @@ input {
 }
 
 .status-menu-dot {
-  font-size: 12px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.status-menu-dot.online {
+  background: var(--green);
+}
+
+.status-menu-dot.dnd {
+  background: var(--red);
+}
+
+.status-menu-dot.invisible {
+  background: #80848e;
 }
 
 .icon-btn {
@@ -615,6 +662,9 @@ input {
   position: absolute;
   left: 8px;
   bottom: 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   padding: 2px 8px;
   border-radius: 4px;
   font-size: 12px;
@@ -814,6 +864,9 @@ input {
 }
 
 .reply-banner-text {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   min-width: 0;
   overflow: hidden;
   white-space: nowrap;
@@ -827,9 +880,11 @@ input {
 
 .reply-banner-cancel {
   flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   color: var(--text-muted);
-  font-size: 14px;
-  padding: 2px 4px;
+  padding: 4px;
   border-radius: 3px;
 }
 
@@ -883,6 +938,9 @@ input {
 }
 
 .member-voice {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   font-size: 12px;
   color: var(--text-muted);
 }
