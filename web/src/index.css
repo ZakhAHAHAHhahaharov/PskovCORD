@@ -724,6 +724,7 @@ input {
   border-radius: 8px;
 }
 
+
 .participant-tile-name {
   color: var(--text-normal);
   font-size: 14px;
@@ -757,8 +758,18 @@ input {
   cursor: pointer;
 }
 
+/* position:absolute вместо width/height:100% в потоке — на Linux было видно,
+   как тайл через ~1с после старта потока (когда браузер узнаёт intrinsic-
+   размер видео, loadedmetadata) внезапно "распухал" по высоте: проценты от
+   родителя внутри грид-ячейки с неопределённой высотой (grid-auto-rows: 1fr)
+   в этот момент трактуются как auto и тянут высоту строки под соотношение
+   сторон видео. Абсолютное позиционирование убирает видео из потока
+   полностью — оно больше не может повлиять на размер .screen-preview-tile,
+   только вписывается в него через object-fit (тот же приём, что и в
+   .voice-stage-expanded-video video ниже). */
 .screen-preview-tile video {
-  display: block;
+  position: absolute;
+  inset: 0;
   width: 100%;
   height: 100%;
   object-fit: contain;
@@ -1039,6 +1050,10 @@ input {
 
 .message-action:hover {
   background: var(--channel-hover);
+}
+
+.message-action-danger {
+  color: var(--red);
 }
 
 .message-input-wrap {

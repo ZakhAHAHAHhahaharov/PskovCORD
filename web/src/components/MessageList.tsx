@@ -90,7 +90,7 @@ export default function MessageList({
               )}
               {(isAuthor || canModerate) && (
                 <button
-                  className="message-action"
+                  className="message-action message-action-danger"
                   title="Удалить"
                   onClick={() => confirmDelete(m)}
                 >

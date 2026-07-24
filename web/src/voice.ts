@@ -129,6 +129,12 @@ export function useVoiceMesh(
   // заново, чтобы показ не пришлось запускать вручную повторно.
   const isSharingScreenRef = useRef(isSharingScreen)
   isSharingScreenRef.current = isSharingScreen
+  // userId'ы, чью демонстрацию мы явно попросили посмотреть (watchScreen) —
+  // это состояние живёт ТОЛЬКО внутри SfuClient-инстанса, а реконнект создаёт
+  // новый инстанс с нуля. Без этого списка после реконнекта чужая демка,
+  // которую смотрели, просто пропадала бы навсегда — новый клиент никогда не
+  // узнает, что её нужно снова consume'ить.
+  const watchedScreenUserIdsRef = useRef<Set<number>>(new Set())
 
   useEffect(() => {
     if (!voice) return
@@ -253,6 +259,13 @@ export function useVoiceMesh(
             setIsSharingScreen(false)
           }
         }
+        // Аналогично — чужие демки, которые мы смотрели, на новом клиенте
+        // нужно заново попросить (см. комментарий у watchedScreenUserIdsRef).
+        // watchScreen() сам разберётся, доступна ли демка прямо сейчас, или
+        // появится чуть позже новым producer'ом — не нужно ждать здесь.
+        if (isReconnect) {
+          for (const uid of watchedScreenUserIdsRef.current) sfu.watchScreen(uid)
+        }
       })()
     }
 
@@ -310,6 +323,7 @@ export function useVoiceMesh(
       localStream.current = null
       displayStream.current?.getTracks().forEach((t) => t.stop())
       displayStream.current = null
+      watchedScreenUserIdsRef.current.clear()
       mutedBeforeDeafen.current = false
       setMuted(true)
       setDeafened(false)
@@ -484,10 +498,12 @@ export function useVoiceMesh(
   }
 
   const watchScreen = (userId: number) => {
+    watchedScreenUserIdsRef.current.add(userId)
     client.current?.watchScreen(userId)
   }
 
   const unwatchScreen = (userId: number) => {
+    watchedScreenUserIdsRef.current.delete(userId)
     client.current?.unwatchScreen(userId)
   }
 
