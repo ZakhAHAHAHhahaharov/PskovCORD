@@ -2,6 +2,7 @@ import { createContext, useContext, useEffect, useRef, useState } from 'react'
 import type { VoiceState } from './components/AppShell'
 import { SfuClient } from './sfu'
 import { playDisconnectSound, playReconnectedSound } from './sounds'
+import { useSettings } from './settings'
 
 interface VoiceGateway {
   voiceMuteUpdate: (muted: boolean, deafened: boolean) => void
@@ -76,7 +77,7 @@ const EMPTY_MESH: VoiceMesh = {
 // Простой RMS-детектор активности голоса по реальному аудио-потоку (свой
 // микрофон + все remote-треки уже есть локально — сигналить о "говорю" через
 // сеть не нужно). HANGOVER сглаживает мигание кольца в паузах между словами.
-const SPEAKING_THRESHOLD = 0.035
+// Сам порог — настраиваемый (settings.micThreshold), это дефолт для него.
 const SPEAKING_HANGOVER_MS = 300
 
 export const VoiceMeshCtx = createContext<VoiceMesh>(EMPTY_MESH)
@@ -135,6 +136,29 @@ export function useVoiceMesh(
   // которую смотрели, просто пропадала бы навсегда — новый клиент никогда не
   // узнает, что её нужно снова consume'ить.
   const watchedScreenUserIdsRef = useRef<Set<number>>(new Set())
+
+  const { micGain, micThreshold } = useSettings()
+  // Порог VAD читается внутри requestAnimationFrame-цикла ниже — эффект,
+  // где он крутится, не должен пересоздаваться на каждое изменение настройки.
+  const micThresholdRef = useRef(micThreshold)
+  micThresholdRef.current = micThreshold
+  // Усиление микрофона перед отправкой — Web Audio граф (source -> gain ->
+  // destination), собирается один раз при захвате mic-потока (см. ниже);
+  // сам GainNode живёт тут, чтобы менять .gain.value на лету без пересборки
+  // графа и без реконнекта к SFU при каждом движении ползунка.
+  const micGainNodeRef = useRef<GainNode | null>(null)
+  const micProcessedStreamRef = useRef<MediaStream | null>(null)
+  const micProcessingCtxRef = useRef<AudioContext | null>(null)
+  // Значение на момент создания графа (эффект ниже собирает граф асинхронно,
+  // после getUserMedia — если пользователь успеет подвигать ползунок именно
+  // в этом узком окне, свежее значение подхватится через ref, а не протухшее
+  // замыкание на micGain из момента входа в канал).
+  const micGainRef = useRef(micGain)
+  micGainRef.current = micGain
+
+  useEffect(() => {
+    if (micGainNodeRef.current) micGainNodeRef.current.gain.value = micGain
+  }, [micGain])
 
   useEffect(() => {
     if (!voice) return
@@ -231,7 +255,13 @@ export function useVoiceMesh(
 
       void (async () => {
         try {
-          await sfu.connect(localStream.current?.getAudioTracks()[0] ?? null)
+          // Продюсим обработанный (с усилением) трек, если граф собрался —
+          // иначе сырой с микрофона (AudioContext недоступен и т.п.).
+          const micTrack =
+            micProcessedStreamRef.current?.getAudioTracks()[0] ??
+            localStream.current?.getAudioTracks()[0] ??
+            null
+          await sfu.connect(micTrack)
           clearTimeout(attemptTimeout)
           if (timedOut) return
         } catch {
@@ -299,6 +329,28 @@ export function useVoiceMesh(
           return
         }
         localStream.current = stream
+        // Граф усиления микрофона: source (сырой mic-трек) -> gain ->
+        // destination (обработанный трек, именно его и продюсируем). Мьют
+        // по-прежнему переключает .enabled на СЫРОМ треке (toggleMute) —
+        // выключенный трек отдаёт source'у тишину, она и течёт дальше через
+        // граф, так что мьют работает независимо от усиления.
+        try {
+          const AudioCtx = window.AudioContext ?? (window as any).webkitAudioContext
+          if (AudioCtx) {
+            const micCtx: AudioContext = new AudioCtx()
+            const source = micCtx.createMediaStreamSource(stream)
+            const gainNode = micCtx.createGain()
+            gainNode.gain.value = micGainRef.current
+            const destination = micCtx.createMediaStreamDestination()
+            source.connect(gainNode)
+            gainNode.connect(destination)
+            micProcessingCtxRef.current = micCtx
+            micGainNodeRef.current = gainNode
+            micProcessedStreamRef.current = destination.stream
+          }
+        } catch {
+          // Без Web Audio просто продюсируем сырой трек без усиления.
+        }
         setMuted(false)
       } catch {
         if (!cancelled) setMuted(true)
@@ -323,6 +375,11 @@ export function useVoiceMesh(
       localStream.current = null
       displayStream.current?.getTracks().forEach((t) => t.stop())
       displayStream.current = null
+      micProcessedStreamRef.current?.getTracks().forEach((t) => t.stop())
+      micProcessedStreamRef.current = null
+      micGainNodeRef.current = null
+      micProcessingCtxRef.current?.close().catch(() => {})
+      micProcessingCtxRef.current = null
       watchedScreenUserIdsRef.current.clear()
       mutedBeforeDeafen.current = false
       setMuted(true)
@@ -405,7 +462,7 @@ export function useVoiceMesh(
           const v = (data[i] - 128) / 128
           sumSquares += v * v
         }
-        if (Math.sqrt(sumSquares / data.length) > SPEAKING_THRESHOLD) {
+        if (Math.sqrt(sumSquares / data.length) > micThresholdRef.current) {
           lastLoudAt.set(userId, now)
         }
       }
