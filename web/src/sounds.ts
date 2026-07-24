@@ -50,22 +50,22 @@ function beep(freq: number, durationMs: number, startDelayMs = 0, gain = 0.15) {
 
 /** Кто-то вошёл в голосовой канал, где мы уже находимся. */
 export function playJoinSound() {
-  playFile(lancerSplatUrl)
+  playFile(boWompUrl)
 }
 
 /** Кто-то вышел из голосового канала, где мы всё ещё находимся. */
 export function playLeaveSound() {
-  playFile(reverseLancerSplatUrl)
+  playFile(boWompReverseUrl)
 }
 
 /** Кто-то (не мы) начал демонстрацию экрана в канале, где мы находимся. */
 export function playScreenShareStartSound() {
-  playFile(boWompUrl)
+  playFile(lancerSplatUrl)
 }
 
 /** Кто-то (не мы) закончил демонстрацию экрана. */
 export function playScreenShareStopSound() {
-  playFile(boWompReverseUrl)
+  playFile(reverseLancerSplatUrl)
 }
 
 /** Клик по своей кнопке мьюта/дефена. `turningOn` — включаем ли обратно. */
