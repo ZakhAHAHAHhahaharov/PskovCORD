@@ -16,8 +16,15 @@ export const STATUS_LABELS: Record<UserStatus, string> = {
   invisible: 'Невидимка',
 }
 
-/** Клик по своему аватару/имени в панели — открывает выбор статуса. */
-export default function StatusMenu({ speaking = false }: { speaking?: boolean }) {
+/** Клик по своему аватару/имени в панели — открывает карточку профиля
+ * с выбором действия (редактировать профиль / сменить статус). */
+export default function StatusMenu({
+  speaking = false,
+  onOpenProfile,
+}: {
+  speaking?: boolean
+  onOpenProfile: () => void
+}) {
   const { user, updateLocalStatus } = useAuth()
   const gateway = useGateway()
   const [open, setOpen] = useState(false)
@@ -64,18 +71,45 @@ export default function StatusMenu({ speaking = false }: { speaking?: boolean })
       </button>
 
       {open && (
-        <div className="status-menu-popup">
-          {OPTIONS.map((o) => (
+        <div className="status-menu-popup profile-popup">
+          <div className="profile-popup-banner">
+            <Avatar
+              name={user.username}
+              color={user.avatar_color}
+              image={user.avatar_image}
+              size={56}
+              status={user.status}
+              showStatus
+            />
+            <span className="profile-popup-name">{user.username}</span>
+          </div>
+
+          <div className="profile-popup-menu">
             <button
-              key={o.value}
               type="button"
-              className={`status-menu-item ${user.status === o.value ? 'active' : ''}`}
-              onClick={() => choose(o.value)}
+              className="profile-popup-item"
+              onClick={() => {
+                setOpen(false)
+                onOpenProfile()
+              }}
             >
-              <span className={`status-menu-dot ${o.value}`} />
-              {o.label}
+              Редактировать профиль
             </button>
-          ))}
+
+            <div className="profile-popup-divider" />
+            <div className="profile-popup-label">Статус</div>
+            {OPTIONS.map((o) => (
+              <button
+                key={o.value}
+                type="button"
+                className={`status-menu-item ${user.status === o.value ? 'active' : ''}`}
+                onClick={() => choose(o.value)}
+              >
+                <span className={`status-menu-dot ${o.value}`} />
+                {o.label}
+              </button>
+            ))}
+          </div>
         </div>
       )}
     </div>
