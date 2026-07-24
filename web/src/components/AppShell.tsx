@@ -359,7 +359,8 @@ export default function AppShell() {
   }, [voice?.channel.id])
 
   // Звук при входе/выходе участников звонка, в котором мы сейчас сами —
-  // слышат все, кто уже в этом звонке (не сам вошедший/вышедший).
+  // играет для ВСЕХ в канале, включая самого вошедшего/вышедшего (каждый
+  // клиент детектит смену ростера у себя локально и проигрывает звук сам).
   useEffect(() => {
     if (!voice || !user) return
     const currentIds = new Set(
@@ -369,17 +370,17 @@ export default function AppShell() {
     )
     const prevIds = voiceRosterRef.current
     for (const id of currentIds) {
-      if (id !== user.id && !prevIds.has(id)) playJoinSound()
+      if (!prevIds.has(id)) playJoinSound()
     }
     for (const id of prevIds) {
-      if (id !== user.id && !currentIds.has(id)) playLeaveSound()
+      if (!currentIds.has(id)) playLeaveSound()
     }
     voiceRosterRef.current = currentIds
   }, [members, voice, user])
 
   // Тот же паттерн, что и звук входа/выхода: у кого из участников ТЕКУЩЕГО
-  // канала флаг sharing_screen сменился — играем звук старта/стопа демонстрации.
-  // Себя не учитываем (свой тумблер уже даёт визуальную обратную связь).
+  // канала флаг sharing_screen сменился — играем звук старта/стопа демонстрации,
+  // тоже всем в канале, включая самого включившего/выключившего показ.
   const voiceSharingRef = useRef<Set<number>>(new Set())
   useEffect(() => {
     voiceSharingRef.current = voice
@@ -401,10 +402,10 @@ export default function AppShell() {
     )
     const prevSharing = voiceSharingRef.current
     for (const id of currentSharing) {
-      if (id !== user.id && !prevSharing.has(id)) playScreenShareStartSound()
+      if (!prevSharing.has(id)) playScreenShareStartSound()
     }
     for (const id of prevSharing) {
-      if (id !== user.id && !currentSharing.has(id)) playScreenShareStopSound()
+      if (!currentSharing.has(id)) playScreenShareStopSound()
     }
     voiceSharingRef.current = currentSharing
   }, [members, voice, user])
