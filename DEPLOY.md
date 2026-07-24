@@ -96,6 +96,16 @@ docker compose --env-file .env -f deploy/docker-compose.prod.yml logs -f backend
 bash /opt/pskovcord/deploy/deploy.sh
 ```
 
+## Django-админка
+
+Путь нарочно не `/admin/`, а `/adminpskordpro/` (см. `backend/config/urls.py`) — чтобы
+не отсвечивать на типовой автоматической подборке путей. Статику (`admin/css`, `js`)
+в проде раздаёт nginx напрямую из `/opt/pskovcord/deploy/staticfiles/`
+(bind-mount, наполняется `collectstatic` при каждом старте контейнера backend —
+см. `entrypoint.sh`), а не Django (в проде `DEBUG=0`, raw-сервер статику не отдаёт).
+Это значит: **nginx-конфиг на сервере нужно обновить руками** (см. ниже) — сам
+`deploy.sh` его не трогает, только код/контейнеры.
+
 ## TLS-сертификат
 
 Используется **общий wildcard-сертификат `*.zlgvpn.org`**, лежит на сервере в

@@ -88,6 +88,12 @@ services:
     # Публично не торчит — nginx на хосте проксирует сюда с TLS.
     ports:
       - "127.0.0.1:8000:8000"
+    volumes:
+      # collectstatic (см. backend.Dockerfile) кладёт файлы сюда при сборке
+      # образа; хостовый nginx отдаёт /static/ напрямую отсюда же — см.
+      # deploy/nginx.conf.example. Путь на хосте: ./staticfiles рядом с этим
+      # compose-файлом, т.е. /opt/pskovcord/deploy/staticfiles.
+      - ./staticfiles:/app/backend/staticfiles
     restart: unless-stopped
 
 volumes:
