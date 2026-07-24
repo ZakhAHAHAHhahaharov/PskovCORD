@@ -3,6 +3,7 @@ import Avatar from './Avatar'
 import MicButton from './MicButton'
 import StatusMenu from './StatusMenu'
 import DeafenButton from './DeafenButton'
+import ScreenShareButton from './ScreenShareButton'
 import CallDuration from './CallDuration'
 import CallTopic from './CallTopic'
 import { useVoice } from '../voice'
@@ -177,6 +178,7 @@ export default function ChannelSidebar({
             <>
               <MicButton />
               <DeafenButton />
+              <ScreenShareButton />
             </>
           ) : (
             <>
@@ -185,6 +187,9 @@ export default function ChannelSidebar({
               </button>
               <button className="icon-btn" title="Звук (войдите в голосовой канал)" disabled>
                 🎧
+              </button>
+              <button className="icon-btn" title="Демонстрация экрана (войдите в голосовой канал)" disabled>
+                🖥️
               </button>
             </>
           )}

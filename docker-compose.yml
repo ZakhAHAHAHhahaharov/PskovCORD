@@ -46,6 +46,14 @@ services:
       - "--no-tls"
       - "--no-dtls"
 
+  sfu:
+    build: ./sfu
+    env_file: .env
+    # host-сеть — как у coturn: mediasoup'у нужны прямой UDP/TCP-диапазон
+    # (SFU_RTC_MIN_PORT..MAX_PORT) и реальный announcedIp, а не bridge-NAT.
+    # Слушает WS-сигналинг на SFU_LISTEN_PORT (по умолчанию 4443).
+    network_mode: host
+
   backend:
     build: ./backend
     env_file: .env

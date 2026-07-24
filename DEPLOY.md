@@ -8,14 +8,18 @@
 | Домен | https://pskord.zlgvpn.org (TLS — общий wildcard `*.zlgvpn.org`) |
 | Путь на сервере | `/opt/pskovcord` (git-репозиторий, ветка `main`) |
 | Пользователь деплоя | `deploy` (группа `docker`, вход только по SSH-ключу) |
-| Голос | Свой WebRTC P2P mesh + coturn (self-hosted STUN/TURN, UDP 3478 + 49160-49200) |
+| Голос | Свой **SFU на mediasoup** (сервис `sfu`): сигналинг через nginx `wss://…/sfu`, медиа — UDP/TCP `40000-40100` напрямую |
 
 ## Архитектура
 
 ```
-Интернет → nginx (хост, TLS-терминация, :80→:443) → backend (Docker, 127.0.0.1:8000)
-                                                         ├─ postgres (Docker, без публичного порта)
-                                                         └─ redis    (Docker, без публичного порта)
+Интернет → nginx (хост, TLS-терминация, :80→:443) ─┬→ backend (Docker, 127.0.0.1:8000)
+                                                   │      ├─ postgres (Docker, без публичного порта)
+                                                   │      └─ redis    (Docker, без публичного порта)
+                                                   └→ /sfu → sfu (host-сеть, 127.0.0.1:4443) — сигналинг
+
+Медиа голоса (аудио + демонстрация экрана): браузер ⇄ sfu напрямую,
+UDP/TCP 40000-40100 на публичном IP, мимо nginx и docker NAT.
 ```
 
 - `backend` — один Docker-образ (`deploy/backend.Dockerfile`, multi-stage): собирает
@@ -24,12 +28,15 @@
 - nginx стоит на хосте (не в контейнере) — проще управлять сертификатом и не
   тратить лишние ресурсы контейнера на 1 vCPU машине.
 - Postgres/Redis доступны только из docker-сети — портов наружу нет.
-- `coturn` (STUN/TURN) работает в `network_mode: host` — слушает 3478/udp+tcp
-  и relay-диапазон 49160-49200/udp напрямую на публичном IP сервера, мимо nginx
-  и docker NAT. Голосовой сигналинг (SDP/ICE) идёт через тот же `/ws/gateway`,
-  что и остальной realtime — отдельный location в nginx не нужен. Сам аудиопоток
-  в mesh-схеме идёт напрямую между браузерами клиентов (через coturn как relay
-  только когда прямой P2P невозможен из-за NAT).
+- `sfu` (mediasoup) работает в `network_mode: host`: сигналинг слушает
+  `127.0.0.1:4443` (наружу порт **не открывается** — его проксирует nginx по
+  `wss://pskord.zlgvpn.org/sfu`, поэтому нет mixed content на HTTPS-странице),
+  а медиа принимает напрямую на публичном IP в диапазоне `40000-40100/udp+tcp`.
+  mediasoup — сам себе ICE-эндпоинт, поэтому **coturn для голоса больше не нужен**
+  (оставлен в стеке как легаси; можно удалить отдельным изменением, чтобы
+  освободить ресурсы 1 vCPU).
+- Django только выдаёт короткоживущий `sfu_token` (общий секрет `SFU_SECRET`) —
+  через обычный REST; presence/кто-в-канале/мьют по-прежнему идут через `/ws/gateway`.
 
 ## CI/CD
 
@@ -38,7 +45,8 @@
   для мержа в `main`.
 - **`.github/workflows/deploy.yml`** — на пуш в `main` (то есть на мерж PR):
   подключается по SSH и выполняет `deploy/deploy.sh` на сервере:
-  `git reset --hard origin/main` → `docker compose build backend` → `up -d` → `migrate`.
+  `git reset --hard origin/main` → `docker compose build` (backend + sfu) →
+  `up -d` → `migrate`.
 
 Ветка `main` защищена (branch protection): только через PR, обязательные CI-чеки,
 запрещены force-push и удаление ветки, действует и для админов. Рабочая ветка для
@@ -51,12 +59,26 @@
   `/home/deploy/.ssh/authorized_keys` на сервере).
 - **`/opt/pskovcord/.env`** и **`/opt/pskovcord/backend/.env`** на сервере (права 600,
   не в git) — Postgres-пароль, `DJANGO_SECRET_KEY`, `DJANGO_DEBUG=0`,
-  `DJANGO_ALLOWED_HOSTS=pskord.zlgvpn.org`, `TURN_SECRET` (одинаковый в обоих
-  файлах — coturn читает его через compose-подстановку из корневого `.env`,
-  Django — из `backend/.env`; сгенерировать `openssl rand -hex 32`).
+  `DJANGO_ALLOWED_HOSTS=pskord.zlgvpn.org`, `TURN_SECRET` (легаси coturn).
+- **`SFU_SECRET`** — добавить в **корневой `/opt/pskovcord/.env`** (одной строкой,
+  `openssl rand -hex 32`). Оттуда compose раздаёт его и Django, и SFU, так что
+  дублировать в `backend/.env` не нужно. Если не задать — обе стороны возьмут
+  небезопасный dev-дефолт (голос заработает, но токен можно подделать).
+- `SFU_PUBLIC_URL` и `SFU_ANNOUNCED_IP` **задавать не нужно** — прод-значения
+  (`wss://pskord.zlgvpn.org/sfu` и `94.26.90.101`) зашиты в
+  `deploy/docker-compose.prod.yml` и перекрывают `backend/.env`.
 
-**Firewall на сервере** (вручную, не через docker — `coturn` в `network_mode: host`):
-открыть `3478/udp`, `3478/tcp`, `49160-49200/udp`.
+**Firewall на сервере** (вручную, не через docker — `sfu` в `network_mode: host`):
+
+```bash
+# Медиа SFU (голос + демонстрация экрана) — обязательно:
+ufw allow 40000:40100/udp
+ufw allow 40000:40100/tcp
+```
+
+Порт сигналинга `4443` наружу открывать **не нужно** (ходит только nginx с localhost).
+Старые порты coturn (`3478`, `49160-49200/udp`) для голоса больше не используются —
+можно закрыть, когда coturn будет удалён из стека.
 
 ## Ручные операции на сервере
 

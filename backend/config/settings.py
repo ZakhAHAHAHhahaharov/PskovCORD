@@ -93,10 +93,17 @@ SIMPLE_JWT = {
     "REFRESH_TOKEN_LIFETIME": timedelta(days=7),
 }
 
-# TURN/STUN (coturn, REST shared-secret)
+# TURN/STUN (coturn, REST shared-secret) — оставлено для совместимости;
+# на медиа-леге SFU coturn не участвует (mediasoup сам себе ICE-эндпоинт).
 TURN_SECRET = os.getenv("TURN_SECRET", "dev-insecure-turn-secret")
 TURN_HOST = os.getenv("TURN_HOST", "localhost")
 TURN_PORT = os.getenv("TURN_PORT", "3478")
+
+# SFU (собственный mediasoup Node-сервис) — медиа-транспорт голоса.
+# SFU_SECRET — общий секрет для подписи access-токена (см. chat/sfu.py).
+# SFU_PUBLIC_URL — WS-URL сигналинга SFU, который отдаём клиенту.
+SFU_SECRET = os.getenv("SFU_SECRET", "dev-insecure-sfu-secret")
+SFU_PUBLIC_URL = os.getenv("SFU_PUBLIC_URL", "ws://localhost:4443")
 
 # CORS: в dev разрешаем всё (Vite :5173, Electron file://).
 CORS_ALLOW_ALL_ORIGINS = DEBUG

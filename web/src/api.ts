@@ -131,6 +131,6 @@ export const api = {
     req(`/api/channels/${channelId}/messages`),
   voiceCredentials: (
     channelId: number,
-  ): Promise<{ ice_servers: RTCIceServer[]; ttl: number }> =>
+  ): Promise<{ sfu_url: string; sfu_token: string; ttl: number }> =>
     req(`/api/channels/${channelId}/voice-credentials`, { method: 'POST' }),
 }

@@ -17,9 +17,6 @@ interface GatewayCtx {
   editMessage: (messageId: number, content: string) => void
   voiceJoin: (channelId: number) => void
   voiceLeave: () => void
-  voiceOffer: (toUserId: number, sdp: string) => void
-  voiceAnswer: (toUserId: number, sdp: string) => void
-  voiceIceCandidate: (toUserId: number, candidate: RTCIceCandidateInit) => void
   voiceMuteUpdate: (muted: boolean, deafened: boolean) => void
   voiceTopicUpdate: (topic: string) => void
   setStatus: (status: UserStatus) => void
@@ -99,12 +96,6 @@ export function GatewayProvider({ children }: { children: ReactNode }) {
       raw({ op: 'edit_message', message_id: messageId, content }),
     voiceJoin: (channelId) => raw({ op: 'voice_join', channel_id: channelId }),
     voiceLeave: () => raw({ op: 'voice_leave' }),
-    voiceOffer: (toUserId, sdp) =>
-      raw({ op: 'voice_offer', to_user_id: toUserId, sdp }),
-    voiceAnswer: (toUserId, sdp) =>
-      raw({ op: 'voice_answer', to_user_id: toUserId, sdp }),
-    voiceIceCandidate: (toUserId, candidate) =>
-      raw({ op: 'voice_ice_candidate', to_user_id: toUserId, candidate }),
     voiceMuteUpdate: (muted, deafened) =>
       raw({ op: 'voice_mute_update', muted, deafened }),
     voiceTopicUpdate: (topic) => raw({ op: 'voice_topic_update', topic }),

@@ -12,8 +12,8 @@ echo "[deploy] fetching latest main..."
 git fetch origin
 git reset --hard origin/main
 
-echo "[deploy] building backend image..."
-$COMPOSE build backend
+echo "[deploy] building images (backend + sfu)..."
+$COMPOSE build
 
 echo "[deploy] starting stack..."
 $COMPOSE up -d
