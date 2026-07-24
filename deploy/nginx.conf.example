@@ -30,6 +30,18 @@ server {
         proxy_set_header Host $host;
         proxy_read_timeout 3600s;
     }
+
+    # Сигналинг SFU (mediasoup, порт 4443 на хосте — наружу НЕ открыт).
+    # Через тот же домен и TLS, поэтому клиент ходит по wss:// без mixed content.
+    # Сам медиапоток идёт мимо nginx — напрямую на UDP/TCP 40000-40100.
+    location /sfu {
+        proxy_pass http://127.0.0.1:4443;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_read_timeout 3600s;
+    }
 }
 
 server {

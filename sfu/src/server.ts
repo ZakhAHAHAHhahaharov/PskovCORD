@@ -67,9 +67,9 @@ export function startServer(): void {
     ws.on('error', cleanup)
   })
 
-  httpServer.listen(config.listenPort, () => {
+  httpServer.listen(config.listenPort, config.listenHost, () => {
     console.log(
-      `[sfu] listening ws on :${config.listenPort} ` +
+      `[sfu] listening ws on ${config.listenHost}:${config.listenPort} ` +
         `(announcedIp=${config.announcedIp}, rtc ${config.rtcMinPort}-${config.rtcMaxPort})`,
     )
   })

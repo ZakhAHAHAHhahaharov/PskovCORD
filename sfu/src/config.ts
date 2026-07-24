@@ -6,6 +6,9 @@ import type { types } from 'mediasoup'
  */
 export const config = {
   listenPort: Number(process.env.SFU_LISTEN_PORT || 4443),
+  // Интерфейс WS-сигналинга. В проде — 127.0.0.1: наружу его проксирует nginx
+  // (wss), поэтому порт не должен торчать в интернет.
+  listenHost: process.env.SFU_LISTEN_HOST || '0.0.0.0',
   sfuSecret: process.env.SFU_SECRET || 'dev-insecure-sfu-secret',
   // IP, который SFU сообщает клиентам в ICE-кандидатах. Локально — 127.0.0.1,
   // на сервере — реальный публичный IP (иначе медиа не дойдёт).

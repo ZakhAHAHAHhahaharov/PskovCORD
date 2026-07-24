@@ -49,11 +49,37 @@ services:
       - "--no-cli"
     restart: unless-stopped
 
+  sfu:
+    # Медиа-сервер голоса (mediasoup). Клиент держит к нему один WebRTC-транспорт,
+    # SFU разветвляет потоки остальным участникам канала.
+    build:
+      context: ../sfu
+    # host-сеть по той же причине, что у coturn: медиа-диапазон портов нужно
+    # принимать напрямую на публичном IP, без docker NAT.
+    network_mode: host
+    environment:
+      # Сигналинг слушаем только на localhost — наружу его проксирует nginx (wss).
+      SFU_LISTEN_HOST: "127.0.0.1"
+      SFU_LISTEN_PORT: "4443"
+      # Один секрет на Django и SFU — берётся из корневого .env.
+      SFU_SECRET: ${SFU_SECRET:-dev-insecure-sfu-secret}
+      # IP, который SFU сообщает клиентам в ICE-кандидатах.
+      SFU_ANNOUNCED_IP: ${SFU_ANNOUNCED_IP:-94.26.90.101}
+      SFU_RTC_MIN_PORT: ${SFU_RTC_MIN_PORT:-40000}
+      SFU_RTC_MAX_PORT: ${SFU_RTC_MAX_PORT:-40100}
+    restart: unless-stopped
+
   backend:
     build:
       context: ..
       dockerfile: deploy/backend.Dockerfile
     env_file: ../backend/.env
+    environment:
+      # Прод-значения голоса задаём здесь (перекрывают backend/.env), чтобы не
+      # приходилось править файл на сервере руками:
+      # клиент ходит на SFU через nginx по тому же домену (wss, без mixed content).
+      SFU_PUBLIC_URL: ${SFU_PUBLIC_URL:-wss://pskord.zlgvpn.org/sfu}
+      SFU_SECRET: ${SFU_SECRET:-dev-insecure-sfu-secret}
     depends_on:
       postgres:
         condition: service_healthy
