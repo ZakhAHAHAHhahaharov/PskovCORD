@@ -23,7 +23,7 @@ export function startServer(): void {
   const httpServer = http.createServer()
   const wss = new WebSocketServer({ server: httpServer })
 
-  wss.on('connection', async (ws: WebSocket, req) => {
+  wss.on('connection', (ws: WebSocket, req) => {
     let claims: TokenClaims
     try {
       claims = verifyToken(req.url)
@@ -32,12 +32,28 @@ export function startServer(): void {
       return
     }
 
-    const room = await Rooms.get(String(claims.room))
     const peer = new Peer(Number(claims.uid), ws)
-    room.addPeer(peer)
-    console.log(`[sfu] peer ${peer.id} (uid=${peer.userId}) joined room ${room.id} (${room.peers.size} in room)`)
+    // Комната резолвится асинхронно (первый вход создаёт mediasoup Router),
+    // но 'message'/'close' вешаем СРАЗУ и синхронно — если бы мы сначала
+    // ждали Rooms.get(), а слушатель добавляли после await, самое первое
+    // сообщение клиента (обычно getRouterRtpCapabilities, отправленное сразу
+    // по открытию сокета) могло прийти раньше, чем появится listener, и
+    // просто терялось бы без ответа — весь хендшейк вис бы до таймаута.
+    const roomPromise = Rooms.get(String(claims.room))
+    let room: import('./room').Room | undefined
+    let joined = false
+
+    const ensureJoined = async () => {
+      if (joined) return room!
+      room = await roomPromise
+      room.addPeer(peer)
+      joined = true
+      console.log(`[sfu] peer ${peer.id} (uid=${peer.userId}) joined room ${room.id} (${room.peers.size} in room)`)
+      return room
+    }
 
     ws.on('message', async (raw) => {
+      const r = await ensureJoined()
       let msg: any
       try {
         msg = JSON.parse(raw.toString())
@@ -47,20 +63,21 @@ export function startServer(): void {
       const { id, action, data } = msg
       if (typeof action !== 'string') return
       try {
-        const result = await handleRequest(room, peer, action, data)
+        const result = await handleRequest(r, peer, action, data)
         peer.send({ id, data: result })
       } catch (err) {
         peer.send({ id, error: (err as Error).message })
       }
     })
 
-    const cleanup = () => {
-      if (!room.peers.has(peer.id)) return
+    const cleanup = async () => {
+      const r = await roomPromise.catch(() => undefined)
+      if (!r || !r.peers.has(peer.id)) return
       peer.close()
-      room.removePeer(peer)
-      room.broadcast(peer, 'peerClosed', { userId: peer.userId })
-      Rooms.maybeClose(room)
-      console.log(`[sfu] peer ${peer.id} (uid=${peer.userId}) left room ${room.id} (${room.peers.size} in room)`)
+      r.removePeer(peer)
+      r.broadcast(peer, 'peerClosed', { userId: peer.userId })
+      Rooms.maybeClose(r)
+      console.log(`[sfu] peer ${peer.id} (uid=${peer.userId}) left room ${r.id} (${r.peers.size} in room)`)
     }
 
     ws.on('close', cleanup)

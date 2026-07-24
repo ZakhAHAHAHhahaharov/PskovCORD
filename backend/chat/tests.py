@@ -56,25 +56,45 @@ class PresenceVoiceTests(TestCase):
         self.assertEqual(peers, [])
 
     def test_voice_flags_default_to_false(self):
-        self.assertEqual(presence.voice_flags(1), {"muted": False, "deafened": False})
+        self.assertEqual(
+            presence.voice_flags(1),
+            {"muted": False, "deafened": False, "sharing_screen": False},
+        )
 
     def test_voice_flags_roundtrip(self):
         presence.set_voice_flags(1, muted=True, deafened=False)
-        self.assertEqual(presence.voice_flags(1), {"muted": True, "deafened": False})
+        self.assertEqual(
+            presence.voice_flags(1),
+            {"muted": True, "deafened": False, "sharing_screen": False},
+        )
+
+    def test_screen_sharing_roundtrip_independent_of_mute(self):
+        presence.set_voice_flags(1, muted=True, deafened=False)
+        presence.set_screen_sharing(1, True)
+        self.assertEqual(
+            presence.voice_flags(1),
+            {"muted": True, "deafened": False, "sharing_screen": True},
+        )
 
     def test_voice_members_flags_bulk(self):
         presence.join_voice(1, 100)
         presence.join_voice(2, 100)
         presence.set_voice_flags(1, muted=True, deafened=True)
         flags = presence.voice_members_flags(100)
-        self.assertEqual(flags["1"], {"muted": True, "deafened": True})
-        self.assertEqual(flags["2"], {"muted": False, "deafened": False})
+        self.assertEqual(
+            flags["1"], {"muted": True, "deafened": True, "sharing_screen": False})
+        self.assertEqual(
+            flags["2"], {"muted": False, "deafened": False, "sharing_screen": False})
 
     def test_clear_voice_resets_flags(self):
         presence.join_voice(1, 100)
         presence.set_voice_flags(1, muted=True, deafened=True)
+        presence.set_screen_sharing(1, True)
         presence.clear_voice(1)
-        self.assertEqual(presence.voice_flags(1), {"muted": False, "deafened": False})
+        self.assertEqual(
+            presence.voice_flags(1),
+            {"muted": False, "deafened": False, "sharing_screen": False},
+        )
 
 
 class CallStateTests(TestCase):
@@ -278,10 +298,12 @@ class ServerMembersMicStatusTests(APITestCase):
         talker_row = next(r for r in resp.data if r["username"] == "talker1")
         self.assertEqual(talker_row["muted"], False)
         self.assertEqual(talker_row["deafened"], False)
+        self.assertEqual(talker_row["sharing_screen"], False)
 
     def test_reflects_current_flags_without_being_in_the_channel(self):
         presence.join_voice(self.talker.id, self.voice_channel.id)
         presence.set_voice_flags(self.talker.id, muted=True, deafened=True)
+        presence.set_screen_sharing(self.talker.id, True)
 
         # viewer не в голосовом канале вообще — но статус всё равно виден.
         self.client.force_authenticate(self.viewer)
@@ -289,6 +311,7 @@ class ServerMembersMicStatusTests(APITestCase):
         talker_row = next(r for r in resp.data if r["username"] == "talker1")
         self.assertEqual(talker_row["muted"], True)
         self.assertEqual(talker_row["deafened"], True)
+        self.assertEqual(talker_row["sharing_screen"], True)
 
 
 class ChannelCreatePermissionTests(APITestCase):
@@ -427,8 +450,48 @@ class GatewayVoiceSignalingTests(TransactionTestCase):
         bob_peers = await self._join_and_drain(bob_ws, self.voice_channel.id)
         self.assertEqual(
             bob_peers["peer_flags"][str(self.alice.id)],
-            {"muted": True, "deafened": False},
+            {"muted": True, "deafened": False, "sharing_screen": False},
         )
+
+        await alice_ws.disconnect()
+        await bob_ws.disconnect()
+
+    async def test_screen_share_update_relayed_and_seen_in_new_peer_flags(self):
+        alice_ws = await self._connect(self.alice)
+        bob_ws = await self._connect(self.bob)
+
+        await self._join_and_drain(alice_ws, self.voice_channel.id)
+
+        await alice_ws.send_json_to({
+            "op": "voice_screen_share_update", "sharing": True,
+        })
+        # Как и voice_mute_update — рассылка всем на сервере, не только
+        # участникам этого голосового канала (бейдж «демка» виден всем).
+        seen = await self._receive_until(bob_ws, "voice_screen_share_update")
+        self.assertEqual(seen["user_id"], self.alice.id)
+        self.assertTrue(seen["sharing"])
+
+        bob_peers = await self._join_and_drain(bob_ws, self.voice_channel.id)
+        self.assertEqual(
+            bob_peers["peer_flags"][str(self.alice.id)],
+            {"muted": False, "deafened": False, "sharing_screen": True},
+        )
+
+        await alice_ws.disconnect()
+        await bob_ws.disconnect()
+
+    async def test_screen_share_update_ignored_when_not_in_voice(self):
+        alice_ws = await self._connect(self.alice)  # не в голосе
+        bob_ws = await self._connect(self.bob)
+        # connect() шлёт bob'у и "ready" (direct), и его собственный
+        # presence_update — иначе они "протекут" в проверку receive_nothing.
+        await bob_ws.receive_json_from(timeout=2)
+        await bob_ws.receive_json_from(timeout=2)
+
+        await alice_ws.send_json_to({
+            "op": "voice_screen_share_update", "sharing": True,
+        })
+        self.assertTrue(await bob_ws.receive_nothing(timeout=0.3))
 
         await alice_ws.disconnect()
         await bob_ws.disconnect()

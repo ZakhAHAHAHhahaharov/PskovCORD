@@ -9,7 +9,7 @@ import MessageList from './MessageList'
 import MessageInput from './MessageInput'
 import MembersList from './MembersList'
 import VoiceProvider, { VoiceStatus } from './VoiceProvider'
-import ScreenStage from './ScreenStage'
+import VoiceStage from './VoiceStage'
 import DiscoverModal from './DiscoverModal'
 
 export interface VoiceState {
@@ -33,6 +33,12 @@ export default function AppShell() {
   const [showDiscover, setShowDiscover] = useState(false)
   const [replyTarget, setReplyTarget] = useState<Message | null>(null)
   const [editTarget, setEditTarget] = useState<Message | null>(null)
+  // userId, чью демонстрацию нужно автоматически начать смотреть в
+  // указанном голосовом канале, как только она станет доступна — ставится
+  // кликом по бейджу «демка» или по превью в VoiceStage (см. handleWatchScreen).
+  const [pendingWatch, setPendingWatch] = useState<{ channelId: number; userId: number } | null>(
+    null,
+  )
 
   const currentServer = servers.find((s) => s.id === serverId) || null
   const channels = currentServer?.channels || []
@@ -133,6 +139,7 @@ export default function AppShell() {
             voice_channel: vc,
             muted: false,
             deafened: false,
+            sharing_screen: false,
           },
         ]
       })
@@ -143,6 +150,15 @@ export default function AppShell() {
       setMembers((prev) =>
         prev.map((m) =>
           m.id === d.user_id ? { ...m, muted: !!d.muted, deafened: !!d.deafened } : m,
+        ),
+      )
+    })
+    // Демонстрация экрана — тоже глобально, чтобы бейдж «демка» и клик по
+    // нему работали даже для тех, кто сам не подключён к этому каналу.
+    const offScreenShare = gateway.on('voice_screen_share_update', (d) => {
+      setMembers((prev) =>
+        prev.map((m) =>
+          m.id === d.user_id ? { ...m, sharing_screen: !!d.sharing } : m,
         ),
       )
     })
@@ -179,6 +195,7 @@ export default function AppShell() {
       offPresence()
       offVoice()
       offMicStatus()
+      offScreenShare()
       offChannelCreate()
       offCallState()
     }
@@ -249,6 +266,10 @@ export default function AppShell() {
       // WebRTC-транспорта к SFU внутри VoiceProvider (onStatus).
       gateway.voiceJoin(ch.id)
       setVoice({ channel: ch, sfuUrl: sfu_url, sfuToken: sfu_token })
+      // Клик по голосовому каналу — это и вход в него, и выбор того, что
+      // показывать в main (как и для текстовых каналов): переключаем main
+      // на VoiceStage этого канала.
+      setChannelId(ch.id)
     } catch (e) {
       alert('Не удалось подключиться к голосу: ' + (e as Error).message)
     }
@@ -258,6 +279,33 @@ export default function AppShell() {
     gateway.voiceLeave()
     setVoice(null)
   }, [gateway])
+
+  // Единая точка входа для просмотра демонстрации экрана — используется и
+  // кликом по бейджу «демка» в сайдбаре (для ЛЮБОГО голосового канала на
+  // сервере), и кликом по превью внутри VoiceStage (для текущего канала).
+  // Переключает main на нужный канал, при необходимости подключается к
+  // голосу (как обычный клик по каналу), а сам просмотр запускает VoiceStage
+  // через pendingWatch, как только демонстрация станет доступна в SFU.
+  const handleWatchScreen = useCallback(
+    (userId: number, targetChannelId: number) => {
+      const channel = channels.find((c) => c.id === targetChannelId)
+      if (!channel) return
+      setChannelId(channel.id)
+      if (voice?.channel.id !== channel.id) {
+        void handleJoinVoice(channel)
+      }
+      setPendingWatch({ channelId: channel.id, userId })
+    },
+    [channels, voice],
+  )
+
+  const handleWatchBadge = useCallback(
+    (member: Member) => {
+      if (!member.voice_channel) return
+      handleWatchScreen(member.id, Number(member.voice_channel))
+    },
+    [handleWatchScreen],
+  )
 
   // Реальный статус mesh-соединения (не оптимистичный).
   const handleVoiceStatus = useCallback(
@@ -344,11 +392,22 @@ export default function AppShell() {
         onLeaveVoice={handleLeaveVoice}
         onCreateChannel={handleCreateChannel}
         onLogout={logout}
+        onWatchScreen={handleWatchBadge}
       />
 
-      <main className="chat">
-        <ScreenStage members={members} />
-        {currentChannel && currentChannel.kind === 'text' ? (
+      <main className={`chat ${currentChannel?.kind === 'voice' ? 'chat-voice' : ''}`}>
+        {currentChannel && currentChannel.kind === 'voice' ? (
+          <VoiceStage
+            channel={currentChannel}
+            members={members}
+            selfUserId={user!.id}
+            pendingWatchUserId={
+              pendingWatch?.channelId === currentChannel.id ? pendingWatch.userId : null
+            }
+            onConsumedPendingWatch={() => setPendingWatch(null)}
+            onRequestWatch={(userId) => handleWatchScreen(userId, currentChannel.id)}
+          />
+        ) : currentChannel && currentChannel.kind === 'text' ? (
           <>
             <header className="chat-header">
               <span className="hash">#</span>

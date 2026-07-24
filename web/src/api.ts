@@ -53,6 +53,8 @@ export interface Member extends Omit<User, 'status'> {
   /** Статус микрофона/наушников — виден всем, даже не подключённым к каналу. */
   muted: boolean
   deafened: boolean
+  /** Демонстрирует ли сейчас экран — тоже видно всем, не только в канале. */
+  sharing_screen: boolean
 }
 
 export interface DiscoverServer {

@@ -127,6 +127,16 @@ export async function handleRequest(
       return {}
     }
 
+    case 'closeConsumer': {
+      // Явный "перестать смотреть" (демонстрация экрана продолжается для
+      // остальных — просто освобождаем ресурсы этого конкретного зрителя).
+      const consumer = peer.consumers.get(data.consumerId)
+      if (!consumer) return {}
+      consumer.close()
+      peer.consumers.delete(consumer.id)
+      return {}
+    }
+
     default:
       throw new Error(`unknown action: ${action}`)
   }
