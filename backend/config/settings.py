@@ -128,6 +128,12 @@ CORS_ALLOWED_ORIGINS = [
 ]
 
 STATIC_URL = "static/"
+# В деве отдаёт сам runserver (DEBUG=1 — Django-стафайлы обслуживают их
+# автоматически). В проде DEBUG=0, поэтому raw-сервер их не раздаёт —
+# collectstatic (см. deploy/backend.Dockerfile) складывает сюда, а
+# nginx на хосте отдаёт /static/ напрямую из смонтированного volume'а
+# (см. deploy/docker-compose.prod.yml, deploy/nginx.conf.example).
+STATIC_ROOT = BASE_DIR / "staticfiles"
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 USE_TZ = True
 

@@ -21,6 +21,10 @@ web/.vite/
 postgres_data/
 redis_data/
 
+# Django collectstatic (прод — раздаёт nginx на хосте, см. DEPLOY.md)
+backend/staticfiles/
+deploy/staticfiles/
+
 # IDE / OS
 .idea/
 .vscode/
