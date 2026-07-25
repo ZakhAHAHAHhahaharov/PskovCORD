@@ -9,6 +9,82 @@ import Avatar from './Avatar'
  * и рассылается всем через WS при смене. */
 const AVATAR_SIZE = 256
 
+/** Максимальное разрешение и вес гифки-баннера карточки профиля. Баннер
+ * гифку нельзя пережать на клиенте без потери анимации (canvas хватает
+ * только первый кадр), поэтому вместо сжатия — просто валидация; лимиты
+ * подобраны под реальный размер баннера в status-menu (260×130 при 86px
+ * аватаре) с запасом под retina. Должны совпадать с backend (accounts/
+ * serializers.py: MAX_BANNER_BYTES/ALLOWED_BANNER_MIME).
+ */
+const BANNER_MAX_W = 640
+const BANNER_MAX_H = 320
+const BANNER_MAX_BYTES = 4_000_000
+
+const GRADIENT_PRESETS: [string, string][] = [
+  ['#5865f2', '#eb459e'],
+  ['#23a55a', '#5865f2'],
+  ['#f0b232', '#f23f43'],
+  ['#8b5cf6', '#23a55a'],
+  ['#1e1f22', '#5865f2'],
+]
+const DEFAULT_GRADIENT_ANGLE = 135
+const DEFAULT_GRADIENT: [string, string] = ['#5865f2', '#eb459e']
+
+/** Разбирает `linear-gradient(<angle>deg, <hex> 0%, <hex> 100%)` обратно на
+ * составляющие для полей редактирования; формат жёстко совпадает с тем, что
+ * строит buildGradient (и с чем валидирует backend — см. GRADIENT_RE). */
+function parseGradient(css: string): { angle: number; from: string; to: string } {
+  const m = /^linear-gradient\((\d{1,3})deg, (#[0-9a-fA-F]{6}) 0%, (#[0-9a-fA-F]{6}) 100%\)$/.exec(
+    css,
+  )
+  if (!m) return { angle: DEFAULT_GRADIENT_ANGLE, from: DEFAULT_GRADIENT[0], to: DEFAULT_GRADIENT[1] }
+  return { angle: Number(m[1]), from: m[2], to: m[3] }
+}
+
+function buildGradient(angle: number, from: string, to: string): string {
+  return `linear-gradient(${angle}deg, ${from} 0%, ${to} 100%)`
+}
+
+function readImageSize(dataUrl: string): Promise<{ width: number; height: number }> {
+  return new Promise((resolve, reject) => {
+    const img = new Image()
+    img.onerror = () => reject(new Error('Файл не похож на картинку.'))
+    img.onload = () => resolve({ width: img.naturalWidth, height: img.naturalHeight })
+    img.src = dataUrl
+  })
+}
+
+/** Читает файл баннера как есть (без пережатия — см. комментарий у
+ * BANNER_MAX_W) и проверяет вес и разрешение. */
+function fileToBannerDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    if (file.size > BANNER_MAX_BYTES) {
+      reject(new Error(`Файл слишком большой (макс. ${Math.round(BANNER_MAX_BYTES / 1_000_000)} МБ).`))
+      return
+    }
+    const reader = new FileReader()
+    reader.onerror = () => reject(new Error('Не удалось прочитать файл.'))
+    reader.onload = async () => {
+      const dataUrl = reader.result as string
+      try {
+        const { width, height } = await readImageSize(dataUrl)
+        if (width > BANNER_MAX_W || height > BANNER_MAX_H) {
+          reject(
+            new Error(
+              `Слишком большое разрешение — макс. ${BANNER_MAX_W}×${BANNER_MAX_H}, а тут ${width}×${height}.`,
+            ),
+          )
+          return
+        }
+        resolve(dataUrl)
+      } catch (err) {
+        reject(err as Error)
+      }
+    }
+    reader.readAsDataURL(file)
+  })
+}
+
 /** Читает файл, кроп по центру до квадрата и сжимает в JPEG data-URL. */
 function fileToAvatarDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -47,12 +123,23 @@ function fileToAvatarDataUrl(file: File): Promise<string> {
 export default function ProfileModal({ onClose }: { onClose: () => void }) {
   const { user, updateLocalUser } = useAuth()
   const fileRef = useRef<HTMLInputElement>(null)
+  const bannerFileRef = useRef<HTMLInputElement>(null)
 
   const [username, setUsername] = useState(user?.username ?? '')
   const [avatarImage, setAvatarImage] = useState(user?.avatar_image ?? '')
   const [savingProfile, setSavingProfile] = useState(false)
   const [profileError, setProfileError] = useState('')
   const [profileSaved, setProfileSaved] = useState(false)
+
+  const initialGradient = parseGradient(user?.banner_gradient ?? '')
+  const [bannerMode, setBannerMode] = useState<'gradient' | 'gif'>(
+    user?.banner_image ? 'gif' : 'gradient',
+  )
+  const [gradientFrom, setGradientFrom] = useState(initialGradient.from)
+  const [gradientTo, setGradientTo] = useState(initialGradient.to)
+  const [gradientAngle, setGradientAngle] = useState(initialGradient.angle)
+  const [bannerImage, setBannerImage] = useState(user?.banner_image ?? '')
+  const [bannerError, setBannerError] = useState('')
 
   const [currentPassword, setCurrentPassword] = useState('')
   const [newPassword, setNewPassword] = useState('')
@@ -63,8 +150,15 @@ export default function ProfileModal({ onClose }: { onClose: () => void }) {
 
   if (!user) return null
 
+  const currentGradientCss = buildGradient(gradientAngle, gradientFrom, gradientTo)
+  const desiredGradient = bannerMode === 'gradient' ? currentGradientCss : ''
+  const desiredBannerImage = bannerMode === 'gif' ? bannerImage : ''
+  const bannerDirty =
+    desiredGradient !== (user.banner_gradient || '') ||
+    desiredBannerImage !== (user.banner_image || '')
+
   const profileDirty =
-    username.trim() !== user.username || avatarImage !== user.avatar_image
+    username.trim() !== user.username || avatarImage !== user.avatar_image || bannerDirty
 
   const handleFileChange = async (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
@@ -79,6 +173,20 @@ export default function ProfileModal({ onClose }: { onClose: () => void }) {
     }
   }
 
+  const handleBannerFileChange = async (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file) return
+    setBannerError('')
+    setProfileSaved(false)
+    try {
+      setBannerImage(await fileToBannerDataUrl(file))
+      setBannerMode('gif')
+    } catch (err) {
+      setBannerError((err as Error).message)
+    }
+  }
+
   const handleSaveProfile = async () => {
     const trimmed = username.trim()
     if (!trimmed) {
@@ -89,9 +197,18 @@ export default function ProfileModal({ onClose }: { onClose: () => void }) {
     setProfileError('')
     setProfileSaved(false)
     try {
-      const patch: { username?: string; avatar_image?: string } = {}
+      const patch: {
+        username?: string
+        avatar_image?: string
+        banner_gradient?: string
+        banner_image?: string
+      } = {}
       if (trimmed !== user.username) patch.username = trimmed
       if (avatarImage !== user.avatar_image) patch.avatar_image = avatarImage
+      if (bannerDirty) {
+        patch.banner_gradient = desiredGradient
+        patch.banner_image = desiredBannerImage
+      }
       const updated = await api.updateProfile(patch)
       updateLocalUser(updated)
       setProfileSaved(true)
@@ -164,6 +281,130 @@ export default function ProfileModal({ onClose }: { onClose: () => void }) {
             </button>
           )}
         </div>
+
+        <div className="field-label">Фон карточки профиля</div>
+        <div
+          className="banner-preview"
+          style={{ background: bannerMode === 'gif' && bannerImage ? undefined : currentGradientCss }}
+        >
+          {bannerMode === 'gif' && bannerImage && (
+            <img src={bannerImage} alt="" className="banner-preview-img" />
+          )}
+        </div>
+
+        <div className="banner-mode-tabs">
+          <button
+            type="button"
+            className={`banner-mode-tab ${bannerMode === 'gradient' ? 'active' : ''}`}
+            onClick={() => {
+              setBannerMode('gradient')
+              setProfileSaved(false)
+            }}
+          >
+            Градиент
+          </button>
+          <button
+            type="button"
+            className={`banner-mode-tab ${bannerMode === 'gif' ? 'active' : ''}`}
+            onClick={() => {
+              setBannerMode('gif')
+              setProfileSaved(false)
+            }}
+          >
+            Гифка
+          </button>
+        </div>
+
+        {bannerMode === 'gradient' ? (
+          <>
+            <div className="gradient-presets">
+              {GRADIENT_PRESETS.map(([from, to]) => (
+                <button
+                  key={from + to}
+                  type="button"
+                  className="gradient-preset"
+                  style={{ background: buildGradient(gradientAngle, from, to) }}
+                  title="Применить пресет"
+                  onClick={() => {
+                    setGradientFrom(from)
+                    setGradientTo(to)
+                    setProfileSaved(false)
+                  }}
+                />
+              ))}
+            </div>
+            <div className="gradient-controls">
+              <label className="gradient-color-field">
+                От
+                <input
+                  type="color"
+                  value={gradientFrom}
+                  onChange={(e) => {
+                    setGradientFrom(e.target.value)
+                    setProfileSaved(false)
+                  }}
+                />
+              </label>
+              <label className="gradient-color-field">
+                До
+                <input
+                  type="color"
+                  value={gradientTo}
+                  onChange={(e) => {
+                    setGradientTo(e.target.value)
+                    setProfileSaved(false)
+                  }}
+                />
+              </label>
+              <label className="gradient-angle-field">
+                Угол
+                <input
+                  type="range"
+                  min={0}
+                  max={360}
+                  value={gradientAngle}
+                  onChange={(e) => {
+                    setGradientAngle(Number(e.target.value))
+                    setProfileSaved(false)
+                  }}
+                />
+              </label>
+            </div>
+          </>
+        ) : (
+          <div className="banner-gif-row">
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => bannerFileRef.current?.click()}
+            >
+              {bannerImage ? 'Заменить гифку' : 'Загрузить гифку'}
+            </button>
+            <input
+              ref={bannerFileRef}
+              type="file"
+              accept="image/gif,image/webp,image/png,image/jpeg"
+              className="profile-file-input"
+              onChange={handleBannerFileChange}
+            />
+            {bannerImage && (
+              <button
+                type="button"
+                className="profile-avatar-remove"
+                onClick={() => {
+                  setBannerImage('')
+                  setProfileSaved(false)
+                }}
+              >
+                <Trash2 size={13} /> Убрать
+              </button>
+            )}
+            <span className="banner-hint">
+              До {BANNER_MAX_W}×{BANNER_MAX_H}, макс. {Math.round(BANNER_MAX_BYTES / 1_000_000)} МБ.
+            </span>
+          </div>
+        )}
+        {bannerError && <div className="login-error">{bannerError}</div>}
 
         <div className="field-label">Никнейм</div>
         <input

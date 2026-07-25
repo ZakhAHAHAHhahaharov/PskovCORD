@@ -9,6 +9,10 @@ export interface User {
   avatar_color: string
   /** Картинка аватара (data-URL), пусто — цветной кружок с буквой. */
   avatar_image: string
+  /** CSS linear-gradient() для фона карточки профиля; пусто — дефолтный градиент. */
+  banner_gradient: string
+  /** Гифка фона карточки профиля (data-URL); если задана — приоритетнее градиента. */
+  banner_image: string
   status: UserStatus
 }
 
@@ -48,7 +52,7 @@ export interface Message {
   edited_at: string | null
 }
 
-export interface Member extends Omit<User, 'status'> {
+export interface Member extends Omit<User, 'status' | 'banner_gradient' | 'banner_image'> {
   online: boolean
   voice_channel: string | null
   status: EffectiveStatus
@@ -126,8 +130,12 @@ export const api = {
     }),
   logout: () => req('/api/auth/logout', { method: 'POST' }),
   me: (): Promise<User> => req('/api/auth/me'),
-  updateProfile: (data: { username?: string; avatar_image?: string }): Promise<User> =>
-    req('/api/auth/me', { method: 'PATCH', body: JSON.stringify(data) }),
+  updateProfile: (data: {
+    username?: string
+    avatar_image?: string
+    banner_gradient?: string
+    banner_image?: string
+  }): Promise<User> => req('/api/auth/me', { method: 'PATCH', body: JSON.stringify(data) }),
   changePassword: (current_password: string, new_password: string) =>
     req('/api/auth/change-password', {
       method: 'POST',
