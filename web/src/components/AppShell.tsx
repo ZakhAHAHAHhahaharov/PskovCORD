@@ -20,6 +20,8 @@ import SettingsModal from './SettingsModal'
 import ProfileModal from './ProfileModal'
 import MiniProfilePopup, { ProfilePopupTarget, ProfilePopupUser } from './MiniProfilePopup'
 
+const APP_NAME: string = import.meta.env.VITE_APP_NAME || 'PskovCord'
+
 export interface VoiceState {
   channel: Channel
   /** WS-адрес сигналинга SFU и токен доступа (из voice-credentials). */
@@ -369,6 +371,12 @@ export default function AppShell() {
     const t = setTimeout(() => handleVoiceStatus('failed'), 15000)
     return () => clearTimeout(t)
   }, [voice, voiceStatus, handleVoiceStatus])
+
+  // Заголовок вкладки — имя голосового канала, в котором мы сейчас сидим
+  // (как в Discord), иначе просто название приложения.
+  useEffect(() => {
+    document.title = voice ? `${voice.channel.name} - ${APP_NAME}` : APP_NAME
+  }, [voice])
 
   // Ростер участников ТЕКУЩЕГО голосового канала — с чистого листа при
   // каждом входе/выходе, чтобы не проигрывать "звук входа" для всех, кто
