@@ -720,7 +720,11 @@ class MessageOpsTests(TransactionTestCase):
         await self._receive_until(member_ws, "message_create")
 
         await member_ws.send_json_to({"op": "delete_message", "message_id": sent["id"]})
-        self.assertTrue(await owner_ws.receive_nothing(timeout=0.3))
+        nothing = await owner_ws.receive_nothing(timeout=0.3)
+        if not nothing:
+            leaked = await owner_ws.receive_json_from(timeout=0.1)
+            print("DEBUG LEAKED MESSAGE (delete test):", leaked)
+        self.assertTrue(nothing)
         exists = await sync_to_async(Message.objects.filter(id=sent["id"]).exists)()
         self.assertTrue(exists)
 
@@ -754,7 +758,11 @@ class MessageOpsTests(TransactionTestCase):
         await owner_ws.send_json_to({
             "op": "edit_message", "message_id": sent["id"], "content": "подделка",
         })
-        self.assertTrue(await member_ws.receive_nothing(timeout=0.3))
+        nothing = await member_ws.receive_nothing(timeout=0.3)
+        if not nothing:
+            leaked = await member_ws.receive_json_from(timeout=0.1)
+            print("DEBUG LEAKED MESSAGE (edit test):", leaked)
+        self.assertTrue(nothing)
         content = await sync_to_async(
             lambda: Message.objects.get(id=sent["id"]).content)()
         self.assertEqual(content, "оригинал")
