@@ -135,13 +135,6 @@ class GatewayConsumer(AsyncWebsocketConsumer):
             self.server_groups.append(group)
             await self.channel_layer.group_add(group, self.channel_name)
 
-        for cid in await self._conversation_ids():
-            group = f"conversation_{cid}"
-            self.conversation_groups.append(group)
-            await self.channel_layer.group_add(group, self.channel_name)
-
-        await self.channel_layer.group_add(self.personal_group, self.channel_name)
-
         await asyncio.to_thread(presence.user_connected, self.uid)
         await asyncio.to_thread(presence.heartbeat, self.uid)
         await self._broadcast_presence(True)
@@ -150,6 +143,21 @@ class GatewayConsumer(AsyncWebsocketConsumer):
             "op": "ready",
             "user": {"id": self.user.id, "username": self.user.username},
         })
+
+        # Диалоги/группы и персональная группа — после presence/"ready", той же
+        # очерёдностью, что и раньше (до этой фичи): лишний запрос к БД и
+        # group_add здесь иначе откладывают _broadcast_presence(True) ровно
+        # настолько, что она может прилететь ПОЗЖЕ следующего же сообщения от
+        # другого сокета в том же server_-канале — это ломает тесты вида
+        # "проверить, что сокет ничего не получил" (см. chat/tests.py
+        # MessageOpsTests): _receive_until находит нужный op раньше и уже не
+        # вычитывает запоздавший presence_update, который потом "протекает".
+        for cid in await self._conversation_ids():
+            group = f"conversation_{cid}"
+            self.conversation_groups.append(group)
+            await self.channel_layer.group_add(group, self.channel_name)
+
+        await self.channel_layer.group_add(self.personal_group, self.channel_name)
 
     async def disconnect(self, code):
         user = getattr(self, "user", None)
