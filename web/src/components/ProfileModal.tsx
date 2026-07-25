@@ -1,8 +1,14 @@
 import { useRef, useState, ChangeEvent } from 'react'
 import { Camera, Trash2, Loader2 } from 'lucide-react'
 import { useAuth } from '../auth'
-import { api } from '../api'
+import { api, DmPrivacy } from '../api'
 import Avatar from './Avatar'
+
+const DM_PRIVACY_LABELS: Record<DmPrivacy, string> = {
+  friends: 'Только друзья',
+  nobody: 'Никто',
+  everyone: 'Любой зарегистрированный',
+}
 
 /** Сторона квадрата, до которого сжимается аватар перед отправкой — держит
  * data-URL небольшим (десятки КБ): он летит в каждой строке ростера/сообщении
@@ -141,6 +147,8 @@ export default function ProfileModal({ onClose }: { onClose: () => void }) {
   const [bannerImage, setBannerImage] = useState(user?.banner_image ?? '')
   const [bannerError, setBannerError] = useState('')
 
+  const [dmPrivacy, setDmPrivacy] = useState<DmPrivacy>(user?.dm_privacy ?? 'everyone')
+
   const [currentPassword, setCurrentPassword] = useState('')
   const [newPassword, setNewPassword] = useState('')
   const [newPassword2, setNewPassword2] = useState('')
@@ -158,7 +166,10 @@ export default function ProfileModal({ onClose }: { onClose: () => void }) {
     desiredBannerImage !== (user.banner_image || '')
 
   const profileDirty =
-    username.trim() !== user.username || avatarImage !== user.avatar_image || bannerDirty
+    username.trim() !== user.username ||
+    avatarImage !== user.avatar_image ||
+    bannerDirty ||
+    dmPrivacy !== user.dm_privacy
 
   const handleFileChange = async (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
@@ -202,6 +213,7 @@ export default function ProfileModal({ onClose }: { onClose: () => void }) {
         avatar_image?: string
         banner_gradient?: string
         banner_image?: string
+        dm_privacy?: DmPrivacy
       } = {}
       if (trimmed !== user.username) patch.username = trimmed
       if (avatarImage !== user.avatar_image) patch.avatar_image = avatarImage
@@ -209,6 +221,7 @@ export default function ProfileModal({ onClose }: { onClose: () => void }) {
         patch.banner_gradient = desiredGradient
         patch.banner_image = desiredBannerImage
       }
+      if (dmPrivacy !== user.dm_privacy) patch.dm_privacy = dmPrivacy
       const updated = await api.updateProfile(patch)
       updateLocalUser(updated)
       setProfileSaved(true)
@@ -416,6 +429,22 @@ export default function ProfileModal({ onClose }: { onClose: () => void }) {
           }}
           maxLength={150}
         />
+
+        <div className="field-label">Кто может мне писать личные сообщения</div>
+        <select
+          className="field-input"
+          value={dmPrivacy}
+          onChange={(e) => {
+            setDmPrivacy(e.target.value as DmPrivacy)
+            setProfileSaved(false)
+          }}
+        >
+          {(Object.keys(DM_PRIVACY_LABELS) as DmPrivacy[]).map((value) => (
+            <option key={value} value={value}>
+              {DM_PRIVACY_LABELS[value]}
+            </option>
+          ))}
+        </select>
 
         {profileError && <div className="login-error">{profileError}</div>}
         {profileSaved && !profileError && <div className="profile-success">Сохранено.</div>}

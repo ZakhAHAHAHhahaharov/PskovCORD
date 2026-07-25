@@ -50,5 +50,52 @@ class User(AbstractUser):
         verbose_name="Иконка вкладки",
     )
 
+    DM_FRIENDS = "friends"
+    DM_NOBODY = "nobody"
+    DM_EVERYONE = "everyone"
+    DM_PRIVACY_CHOICES = [
+        (DM_FRIENDS, "Только друзья"),
+        (DM_NOBODY, "Никто"),
+        (DM_EVERYONE, "Любой зарегистрированный"),
+    ]
+    # Кто может НАЧАТЬ новую личку со мной (см. chat.permissions.can_dm).
+    # Не влияет на уже существующие диалоги — если переписка уже началась,
+    # ужесточение потом её не рвёт (проверяется только при создании).
+    dm_privacy = models.CharField(
+        max_length=10, choices=DM_PRIVACY_CHOICES, default=DM_EVERYONE)
+
     def __str__(self) -> str:
         return self.username
+
+
+class Friendship(models.Model):
+    """Заявка в друзья/дружба. Одна строка на пару, направленная
+    (from_user отправил to_user), но симметричная по смыслу — is_friend
+    смотрит в обе стороны (см. chat.permissions.are_friends). Взаимная
+    заявка (B шлёт A, пока уже висит pending A->B) не создаёт вторую
+    строку, а сразу принимает существующую — см. chat.views.FriendRequests.post.
+    """
+
+    PENDING = "pending"
+    ACCEPTED = "accepted"
+    STATUS_CHOICES = [
+        (PENDING, "В ожидании"),
+        (ACCEPTED, "Приняты"),
+    ]
+
+    from_user = models.ForeignKey(
+        "accounts.User", related_name="sent_friend_requests",
+        on_delete=models.CASCADE)
+    to_user = models.ForeignKey(
+        "accounts.User", related_name="received_friend_requests",
+        on_delete=models.CASCADE)
+    status = models.CharField(
+        max_length=10, choices=STATUS_CHOICES, default=PENDING)
+    created_at = models.DateTimeField(auto_now_add=True)
+    responded_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        unique_together = ("from_user", "to_user")
+
+    def __str__(self) -> str:
+        return f"{self.from_user_id} -> {self.to_user_id} ({self.status})"

@@ -1,6 +1,6 @@
 import { useEffect, useRef, MouseEvent as ReactMouseEvent } from 'react'
 import { Reply, Pencil, Trash2 } from 'lucide-react'
-import { Message } from '../api'
+import { ChatMessageBase } from '../api'
 import Avatar from './Avatar'
 import { ProfilePopupUser } from './MiniProfilePopup'
 
@@ -24,15 +24,16 @@ export default function MessageList({
   onReply,
   onOpenProfile,
 }: {
-  messages: Message[]
+  messages: ChatMessageBase[]
   currentUserId: number
-  /** Владелец сервера — может удалять чужие сообщения (но не редактировать). */
+  /** Владелец сервера — может удалять чужие сообщения (но не редактировать).
+   * Для диалогов/групп всегда false — там нет модератора, см. ProfileModal/AppShell. */
   canModerate: boolean
   /** id сообщения, которое сейчас редактируется внизу в композере. */
   editingId: number | null
   onDelete: (messageId: number) => void
-  onEditRequest: (message: Message) => void
-  onReply: (message: Message) => void
+  onEditRequest: (message: ChatMessageBase) => void
+  onReply: (message: ChatMessageBase) => void
   onOpenProfile: (user: ProfilePopupUser, e: ReactMouseEvent) => void
 }) {
   const bottomRef = useRef<HTMLDivElement>(null)
@@ -41,7 +42,7 @@ export default function MessageList({
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
 
-  const confirmDelete = (m: Message) => {
+  const confirmDelete = (m: ChatMessageBase) => {
     if (window.confirm('Удалить это сообщение? Действие необратимо.')) {
       onDelete(m.id)
     }

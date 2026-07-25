@@ -874,6 +874,11 @@ input {
   padding: 20px 12px;
   background: var(--sidebar-bg);
   border-radius: 8px;
+  cursor: pointer;
+}
+
+.participant-tile:hover {
+  background: var(--channel-hover);
 }
 
 
@@ -937,6 +942,26 @@ input {
   justify-content: center;
   gap: 8px;
   color: var(--text-muted);
+}
+
+/* Развёрнутая карточка участника без демонстрации экрана (клик по тайлу
+   в сетке — см. VoiceStage.expanded, mode:'participant') — большой аватар
+   вместо видео, тот же контейнер voice-stage-expanded-video. */
+.participant-expanded {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  background: var(--sidebar-bg);
+}
+
+.participant-expanded-name {
+  color: #fff;
+  font-size: 20px;
+  font-weight: 600;
 }
 
 .screen-preview-tile .screen-tile-label {
@@ -1797,5 +1822,231 @@ input {
 }
 ::-webkit-scrollbar-track {
   background: transparent;
+}
+
+/* ---- домашний экран (HomeSidebar): диалоги/группы/друзья ---- */
+.home-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 8px 8px 0;
+  flex-shrink: 0;
+}
+
+.home-tab {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  position: relative;
+  padding: 8px;
+  border-radius: 4px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.home-tab:hover {
+  background: var(--channel-hover);
+}
+
+.home-tab.active {
+  background: var(--channel-active);
+  color: #fff;
+}
+
+.home-tab-badge {
+  position: absolute;
+  top: 2px;
+  right: 8px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 3px;
+  border-radius: 8px;
+  background: var(--red);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 15px;
+  text-align: center;
+}
+
+.home-scroll {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.home-new-btn {
+  width: 100%;
+  padding: 8px;
+  margin-bottom: 6px;
+  border-radius: 4px;
+  background: var(--channel-hover);
+  color: var(--text-normal);
+  font-size: 13px;
+  font-weight: 600;
+  text-align: center;
+}
+
+.home-new-btn:hover {
+  background: var(--channel-active);
+}
+
+.home-empty {
+  padding: 12px 8px;
+  color: var(--text-muted);
+  font-size: 13px;
+  text-align: center;
+}
+
+.home-add-friend {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.home-add-friend input {
+  flex: 1;
+  background: #1e1f22;
+  border: 1px solid #111214;
+  border-radius: 4px;
+  padding: 8px 10px;
+  color: var(--text-normal);
+  font-size: 13px;
+  outline: none;
+}
+
+.home-add-friend input:focus {
+  border-color: var(--blurple);
+}
+
+.friend-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 8px;
+  border-radius: 4px;
+}
+
+.friend-row-actions {
+  display: flex;
+  gap: 2px;
+  margin-left: auto;
+}
+
+/* ---- новый диалог/группа (NewConversationModal) ---- */
+.new-conversation-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 260px;
+  overflow-y: auto;
+  margin-bottom: 8px;
+}
+
+.new-conversation-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 6px 8px;
+  border-radius: 4px;
+  text-align: left;
+}
+
+.new-conversation-row:hover {
+  background: var(--channel-hover);
+}
+
+.new-conversation-row.active {
+  background: var(--channel-active);
+}
+
+/* ---- звонок в диалоге/группе (main-панель) ---- */
+.dm-call-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  background: rgba(35, 165, 90, 0.08);
+  border-bottom: 1px solid rgba(0, 0, 0, 0.2);
+}
+
+.dm-call-label {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin-left: 4px;
+}
+
+.dm-call-leave {
+  color: var(--red);
+}
+
+/* ---- входящий звонок (IncomingCallBanner) ---- */
+.incoming-call-banner {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  background: var(--modal-bg);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+
+.incoming-call-info {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.incoming-call-title {
+  font-weight: 700;
+  color: #fff;
+  font-size: 14px;
+}
+
+.incoming-call-subtitle {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.incoming-call-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.incoming-call-btn {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+}
+
+.incoming-call-btn.accept {
+  background: var(--green);
+}
+
+.incoming-call-btn.accept:hover {
+  background: #1a8a48;
+}
+
+.incoming-call-btn.decline {
+  background: var(--red);
+}
+
+.incoming-call-btn.decline:hover {
+  background: #c8393c;
 }
 
