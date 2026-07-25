@@ -1,34 +1,12 @@
-import {
-  Volume2,
-  MicOff,
-  HeadphoneOff,
-  Wifi,
-  WifiOff,
-  Loader2,
-  PhoneOff,
-  Mic,
-  Headphones,
-  Monitor,
-  Circle,
-  Settings,
-} from 'lucide-react'
+import { Volume2, MicOff, HeadphoneOff, Monitor } from 'lucide-react'
 import { Channel, Member, Server, User } from '../api'
 import Avatar from './Avatar'
-import MicButton from './MicButton'
-import StatusMenu from './StatusMenu'
-import DeafenButton from './DeafenButton'
-import ScreenShareButton from './ScreenShareButton'
 import CallDuration from './CallDuration'
 import CallTopic from './CallTopic'
+import SidebarBottomBar from './SidebarBottomBar'
 import { useVoice } from '../voice'
 import { VoiceState } from './AppShell'
 import { VoiceStatus } from './VoiceProvider'
-
-function pingColor(ms: number): string {
-  if (ms < 80) return 'var(--green)'
-  if (ms < 180) return 'var(--yellow)'
-  return 'var(--red)'
-}
 
 export default function ChannelSidebar({
   server,
@@ -63,7 +41,7 @@ export default function ChannelSidebar({
    * участника (с автоподключением к его каналу, если мы не там). */
   onWatchScreen: (member: Member) => void
 }) {
-  const { speakingUserIds, muted, deafened, pingMs } = useVoice()
+  const { speakingUserIds, muted, deafened } = useVoice()
   // Для себя — локальное состояние mesh'а (мгновенный отклик на клик);
   // для остальных — то, что пришло в members (видно всем, даже не
   // подключённым к этому голосовому каналу вообще).
@@ -137,7 +115,7 @@ export default function ChannelSidebar({
                 <div key={c.id} className="voice-channel-block">
                   <button
                     className={`channel-item ${
-                      voice?.channel.id === c.id ? 'active' : ''
+                      voice?.room.id === c.id ? 'active' : ''
                     }`}
                     onClick={() => onJoinVoice(c)}
                   >
@@ -151,7 +129,7 @@ export default function ChannelSidebar({
                       {c.call_started_at != null && (
                         <CallDuration startedAt={c.call_started_at} />
                       )}
-                      <CallTopic topic={c.topic} canEdit={voice?.channel.id === c.id} />
+                      <CallTopic topic={c.topic} canEdit={voice?.room.id === c.id} />
                     </div>
                   )}
                   {inChannel.map((m) => {
@@ -198,83 +176,19 @@ export default function ChannelSidebar({
         )}
       </div>
 
-      {/* Прибита к низу absolute и шире колонки сайдбара (см. .sidebar-bottom) —
-          иначе 5 иконок действий не помещаются рядом с ником+статусом и
-          съезжают друг на друга. Раз она "плывёт" поверх main, .channel-scroll
-          выше получает нижний паддинг под её высоту (см. inline style). */}
-      <div className="sidebar-bottom">
-      {voice && (
-        <div className="voice-connected">
-          <div className="voice-connected-info">
-            <span
-              className={`voice-signal ${
-                voiceStatus === 'reconnecting' ? 'warn' : voiceStatus === 'failed' ? 'error' : ''
-              }`}
-            >
-              {voiceStatus === 'connected' && (
-                <>
-                  <Wifi size={14} /> Голос подключён
-                </>
-              )}
-              {voiceStatus === 'connecting' && (
-                <>
-                  <Loader2 size={14} className="spin" /> Подключение…
-                </>
-              )}
-              {voiceStatus === 'reconnecting' && (
-                <>
-                  <Loader2 size={14} className="spin" /> Переподключение…
-                </>
-              )}
-              {voiceStatus === 'failed' && (
-                <>
-                  <WifiOff size={14} /> Нет связи
-                </>
-              )}
-              {voiceStatus === 'connected' && pingMs != null && (
-                <span className="voice-ping">
-                  <Circle size={8} fill={pingColor(pingMs)} color={pingColor(pingMs)} /> {pingMs} мс
-                </span>
-              )}
-            </span>
-            <span className="voice-connected-channel">
-              <Volume2 size={12} /> {voice.channel.name}
-            </span>
-          </div>
-          <button className="voice-disconnect" title="Отключиться" onClick={onLeaveVoice}>
-            <PhoneOff size={17} />
-          </button>
-        </div>
-      )}
-
-      <div className="user-panel">
-        <StatusMenu speaking={speakingUserIds.has(user.id)} onOpenProfile={onOpenProfile} />
-        <div className="user-panel-actions">
-          {voice ? (
-            <>
-              <MicButton />
-              <DeafenButton />
-              <ScreenShareButton />
-            </>
-          ) : (
-            <>
-              <button className="icon-btn" title="Микрофон (войдите в голосовой канал)" disabled>
-                <Mic size={17} />
-              </button>
-              <button className="icon-btn" title="Звук (войдите в голосовой канал)" disabled>
-                <Headphones size={17} />
-              </button>
-              <button className="icon-btn" title="Демонстрация экрана (войдите в голосовой канал)" disabled>
-                <Monitor size={17} />
-              </button>
-            </>
-          )}
-          <button className="icon-btn" title="Настройки" onClick={onOpenSettings}>
-            <Settings size={17} />
-          </button>
-        </div>
-      </div>
-      </div>
+      {/* Прибита к низу absolute и шире колонки сайдбара (см. .sidebar-bottom в
+          SidebarBottomBar) — иначе 5 иконок действий не помещаются рядом с
+          ником+статусом и съезжают друг на друга. Раз она "плывёт" поверх
+          main, .channel-scroll выше получает нижний паддинг под её высоту
+          (см. inline style). */}
+      <SidebarBottomBar
+        voice={voice}
+        voiceStatus={voiceStatus}
+        user={user}
+        onLeaveVoice={onLeaveVoice}
+        onOpenSettings={onOpenSettings}
+        onOpenProfile={onOpenProfile}
+      />
     </aside>
   )
 }

@@ -2,6 +2,8 @@
 export type UserStatus = 'online' | 'dnd' | 'invisible'
 /** Что видят другие: invisible всегда маскируется под offline. */
 export type EffectiveStatus = 'online' | 'dnd' | 'offline'
+/** Кто может НАЧАТЬ новую личку со мной — не действует на уже идущие диалоги. */
+export type DmPrivacy = 'friends' | 'nobody' | 'everyone'
 
 export interface User {
   id: number
@@ -14,6 +16,7 @@ export interface User {
   /** Гифка фона карточки профиля (data-URL); если задана — приоритетнее градиента. */
   banner_image: string
   status: UserStatus
+  dm_privacy: DmPrivacy
 }
 
 export interface Channel {
@@ -36,23 +39,31 @@ export interface Server {
   channels: Channel[]
 }
 
-export interface MessageReply {
+export interface ChatMessageReplyBase {
   id: number
   author: User
   content: string
 }
 
-export interface Message {
+/** Общая форма сообщения — и серверного (Message), и личного/группового
+ * (ConversationMessage). MessageList/MessageInput работают только с этими
+ * полями и не знают, откуда сообщение (см. web/src/components/MessageList.tsx,
+ * MessageInput.tsx) — общий базовый тип позволяет переиспользовать оба
+ * компонента для диалогов без дублирования. */
+export interface ChatMessageBase {
   id: number
-  channel: number
   author: User
   content: string
-  reply_to: MessageReply | null
+  reply_to: ChatMessageReplyBase | null
   created_at: string
   edited_at: string | null
 }
 
-export interface Member extends Omit<User, 'status'> {
+export interface Message extends ChatMessageBase {
+  channel: number
+}
+
+export interface Member extends Omit<User, 'status' | 'dm_privacy'> {
   online: boolean
   voice_channel: string | null
   status: EffectiveStatus
@@ -68,6 +79,46 @@ export interface DiscoverServer {
   name: string
   member_count: number
   is_member: boolean
+}
+
+export interface FriendRequestEntry {
+  id: number
+  user: User
+}
+
+export interface FriendsState {
+  friends: User[]
+  incoming: FriendRequestEntry[]
+  outgoing: FriendRequestEntry[]
+}
+
+/** Человек для пикера «новый диалог/группа» — друзья + те, с кем есть общий сервер. */
+export interface KnownPerson extends User {
+  is_friend: boolean
+}
+
+export type ConversationKind = 'dm' | 'group'
+
+export interface ConversationLastMessage {
+  content: string
+  author_id: number
+  created_at: string
+}
+
+export interface Conversation {
+  id: number
+  kind: ConversationKind
+  /** Только для group; пусто — фронт сам собирает заголовок из участников. */
+  name: string
+  created_at: string
+  /** Без меня самого. */
+  participants: User[]
+  last_message: ConversationLastMessage | null
+  call_started_at: number | null
+}
+
+export interface ConversationMessage extends ChatMessageBase {
+  conversation: number
 }
 
 // Пусто => same-origin (относительные запросы). Для dev задаётся в web/.env.
@@ -135,6 +186,7 @@ export const api = {
     avatar_image?: string
     banner_gradient?: string
     banner_image?: string
+    dm_privacy?: DmPrivacy
   }): Promise<User> => req('/api/auth/me', { method: 'PATCH', body: JSON.stringify(data) }),
   changePassword: (current_password: string, new_password: string) =>
     req('/api/auth/change-password', {
@@ -163,4 +215,37 @@ export const api = {
     channelId: number,
   ): Promise<{ sfu_url: string; sfu_token: string; ttl: number }> =>
     req(`/api/channels/${channelId}/voice-credentials`, { method: 'POST' }),
+
+  friends: (): Promise<FriendsState> => req('/api/friends'),
+  sendFriendRequest: (
+    target: { userId: number } | { username: string },
+  ): Promise<{ id: number; status: string }> =>
+    req('/api/friends/requests', {
+      method: 'POST',
+      body: JSON.stringify(
+        'userId' in target ? { user_id: target.userId } : { username: target.username },
+      ),
+    }),
+  acceptFriendRequest: (requestId: number): Promise<{ id: number; status: string }> =>
+    req(`/api/friends/requests/${requestId}/accept`, { method: 'POST' }),
+  declineFriendRequest: (requestId: number) =>
+    req(`/api/friends/requests/${requestId}`, { method: 'DELETE' }),
+  removeFriend: (userId: number) =>
+    req(`/api/friends/${userId}`, { method: 'DELETE' }),
+
+  knownPeople: (): Promise<KnownPerson[]> => req('/api/people/known'),
+
+  conversations: (): Promise<Conversation[]> => req('/api/conversations'),
+  createConversation: (data: {
+    kind: ConversationKind
+    user_ids: number[]
+    name?: string
+  }): Promise<Conversation> =>
+    req('/api/conversations', { method: 'POST', body: JSON.stringify(data) }),
+  conversationMessages: (conversationId: number): Promise<ConversationMessage[]> =>
+    req(`/api/conversations/${conversationId}/messages`),
+  conversationVoiceCredentials: (
+    conversationId: number,
+  ): Promise<{ sfu_url: string; sfu_token: string; ttl: number }> =>
+    req(`/api/conversations/${conversationId}/voice-credentials`, { method: 'POST' }),
 }

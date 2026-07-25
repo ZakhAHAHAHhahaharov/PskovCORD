@@ -17,6 +17,15 @@ GatewayConsumer — единственный WebSocket на клиента (по
     {"op": "set_status", "status": "online" | "dnd" | "invisible"}
     {"op": "ping"}  — хартбит, см. presence.heartbeat/chat.heartbeat_sweep
 
+    {"op": "dm_send_message", "conversation_id": <id>, "content": "...", "reply_to": <id|null>}
+    {"op": "dm_delete_message", "message_id": <id>}
+    {"op": "dm_edit_message", "message_id": <id>, "content": "..."}
+    {"op": "dm_voice_join", "conversation_id": <id>}
+    (voice_leave/voice_mute_update/voice_screen_share_update — те же клиентские
+     op'ы, что и для голосовых каналов серверов: presence не различает
+     сервер/диалог, см. models.is_dm_room — консьюмер сам разбирает, куда
+     разослать broadcast)
+
 События сервер -> клиент:
     {"op": "ready", "user": {...}}
     {"op": "message_create", "message": {...}}
@@ -32,6 +41,30 @@ GatewayConsumer — единственный WebSocket на клиента (по
      "call_started_at": <float|null>, "topic": "..."|null}
     {"op": "profile_update", "user_id": <id>, "username": "...",
      "avatar_color": "#RRGGBB", "avatar_image": "data:image/...;base64,..."|""}
+
+    {"op": "dm_message_create", "message": {...}}
+    {"op": "dm_message_update", "message": {...}}
+    {"op": "dm_message_delete", "message_id": <id>, "conversation_id": <id>}
+    {"op": "dm_voice_state_update", "user_id": <id>, "conversation_id": <id>, "in_call": bool}
+    {"op": "dm_voice_peers", "conversation_id": <id>, "peer_ids": [<id>, ...],
+     "peer_flags": {...}}
+    {"op": "conversation_create", "conversation": {...}} — новый диалог/группа
+     (или существующий DM, отданный повторно из get-or-create) — рассылается
+     персонально каждому участнику через user_{id} (см. chat.views); консьюмер
+     сам доподписывает своё соединение на conversation_{id} при получении.
+    {"op": "conversation_call_ring", "conversation_id": <id>, "caller": {...}}
+     — кто-то начал звонок в диалоге/группе (был первым зашедшим — см.
+     _handle_dm_voice_join), персонально всем ОСТАЛЬНЫМ участникам через
+     user_{id}, а не в conversation_{id} — они могут не иметь этот диалог
+     открытым прямо сейчас.
+    {"op": "friend_request_create", "id": <id>, "from_user": {...}}
+    {"op": "friend_request_accept", "id": <id>, "user": {...}}
+     — оба лично адресатy через user_{id} (см. accounts/chat.views).
+
+Персональная группа user_{id} — для событий адресованных конкретному
+человеку, а не всем на сервере/в диалоге (заявка в друзья, новый диалог,
+входящий звонок): участник мог не успеть подписаться ни на одну общую
+группу к моменту события.
 
 profile_update — смена ника и/или аватара (см. accounts.views.MeView.patch,
 не через этот gateway — обычный REST PATCH /api/auth/me). Рассылается всем
@@ -76,8 +109,11 @@ from channels.generic.websocket import AsyncWebsocketConsumer
 from django.utils import timezone
 
 from . import presence
-from .models import Channel, Membership, Message
-from .serializers import MessageSerializer
+from .models import (
+    Channel, ConversationMessage, ConversationParticipant,
+    Membership, Message, dm_conversation_id, dm_room, is_dm_room,
+)
+from .serializers import ConversationMessageSerializer, MessageSerializer
 
 
 class GatewayConsumer(AsyncWebsocketConsumer):
@@ -89,6 +125,8 @@ class GatewayConsumer(AsyncWebsocketConsumer):
 
         self.uid = str(self.user.id)
         self.server_groups = []
+        self.conversation_groups = []
+        self.personal_group = f"user_{self.user.id}"
 
         await self.accept()
 
@@ -96,6 +134,13 @@ class GatewayConsumer(AsyncWebsocketConsumer):
             group = f"server_{sid}"
             self.server_groups.append(group)
             await self.channel_layer.group_add(group, self.channel_name)
+
+        for cid in await self._conversation_ids():
+            group = f"conversation_{cid}"
+            self.conversation_groups.append(group)
+            await self.channel_layer.group_add(group, self.channel_name)
+
+        await self.channel_layer.group_add(self.personal_group, self.channel_name)
 
         await asyncio.to_thread(presence.user_connected, self.uid)
         await asyncio.to_thread(presence.heartbeat, self.uid)
@@ -114,11 +159,16 @@ class GatewayConsumer(AsyncWebsocketConsumer):
         prev_voice = await asyncio.to_thread(presence.voice_channel, self.uid)
         remaining = await asyncio.to_thread(presence.user_disconnected, self.uid)
 
-        for group in getattr(self, "server_groups", []):
+        for group in getattr(self, "server_groups", []) + getattr(self, "conversation_groups", []):
             await self.channel_layer.group_discard(group, self.channel_name)
+        if getattr(self, "personal_group", None):
+            await self.channel_layer.group_discard(self.personal_group, self.channel_name)
 
         if remaining == 0:
-            if prev_voice:
+            if prev_voice and is_dm_room(prev_voice):
+                await self._broadcast_dm_voice(
+                    self.user.id, dm_conversation_id(prev_voice), False)
+            elif prev_voice:
                 server_id = await self._channel_server(prev_voice)
                 await self._broadcast_voice(self.user.id, None, server_id)
                 await self._broadcast_call_state(prev_voice, server_id)
@@ -149,6 +199,14 @@ class GatewayConsumer(AsyncWebsocketConsumer):
             await self._handle_voice_topic_update(data)
         elif op == "set_status":
             await self._handle_set_status(data)
+        elif op == "dm_send_message":
+            await self._handle_dm_send(data)
+        elif op == "dm_delete_message":
+            await self._handle_dm_delete_message(data)
+        elif op == "dm_edit_message":
+            await self._handle_dm_edit_message(data)
+        elif op == "dm_voice_join":
+            await self._handle_dm_voice_join(data)
         elif op == "ping":
             # Хартбит живости соединения — см. presence.heartbeat и
             # chat.heartbeat_sweep (страховка на случай, если WS оборвётся
@@ -201,6 +259,51 @@ class GatewayConsumer(AsyncWebsocketConsumer):
                 "op": "message_update", "message": result["data"]}},
         )
 
+    async def _handle_dm_send(self, data):
+        conversation_id = data.get("conversation_id")
+        content = (data.get("content") or "").strip()
+        if not conversation_id or not content:
+            return
+        result = await self._create_dm_message(
+            conversation_id, content[:4000], data.get("reply_to"))
+        if not result:
+            return
+        await self.channel_layer.group_send(
+            f"conversation_{conversation_id}",
+            {"type": "broadcast", "payload": {
+                "op": "dm_message_create", "message": result}},
+        )
+
+    async def _handle_dm_delete_message(self, data):
+        message_id = data.get("message_id")
+        if not message_id:
+            return
+        result = await self._delete_dm_message(message_id)
+        if not result:
+            return
+        await self.channel_layer.group_send(
+            f"conversation_{result['conversation_id']}",
+            {"type": "broadcast", "payload": {
+                "op": "dm_message_delete",
+                "message_id": message_id,
+                "conversation_id": result["conversation_id"],
+            }},
+        )
+
+    async def _handle_dm_edit_message(self, data):
+        message_id = data.get("message_id")
+        content = (data.get("content") or "").strip()
+        if not message_id or not content:
+            return
+        result = await self._edit_dm_message(message_id, content[:4000])
+        if not result:
+            return
+        await self.channel_layer.group_send(
+            f"conversation_{result['conversation_id']}",
+            {"type": "broadcast", "payload": {
+                "op": "dm_message_update", "message": result["data"]}},
+        )
+
     async def _handle_voice_join(self, data):
         channel_id = data.get("channel_id")
         if not channel_id:
@@ -208,14 +311,20 @@ class GatewayConsumer(AsyncWebsocketConsumer):
         server_id = await self._voice_channel_server(channel_id)
         if not server_id:
             return
-        peer_ids, emptied_channel = await asyncio.to_thread(
+        peer_ids, emptied_room = await asyncio.to_thread(
             presence.join_voice, self.uid, channel_id)
         peer_flags = await asyncio.to_thread(
             presence.voice_members_flags, channel_id)
         await self._broadcast_voice(self.user.id, channel_id, server_id)
         await self._broadcast_call_state(channel_id, server_id)
-        if emptied_channel:
-            await self._broadcast_call_state(emptied_channel, server_id)
+        # Комната, которую мы только что покинули переключением, могла быть
+        # либо голосовым каналом сервера, либо диалогом/группой (dm_room) —
+        # presence этого не различает, ветвим здесь (см. models.is_dm_room).
+        if emptied_room and is_dm_room(emptied_room):
+            await self._broadcast_dm_voice(
+                self.user.id, dm_conversation_id(emptied_room), False)
+        elif emptied_room:
+            await self._broadcast_call_state(emptied_room, server_id)
         await self._send({
             "op": "voice_peers",
             "channel_id": channel_id,
@@ -225,6 +334,55 @@ class GatewayConsumer(AsyncWebsocketConsumer):
                 if uid != self.uid
             },
         })
+
+    async def _handle_dm_voice_join(self, data):
+        conversation_id = data.get("conversation_id")
+        if not conversation_id:
+            return
+        ok = await self._is_conversation_participant(conversation_id)
+        if not ok:
+            return
+        room = dm_room(conversation_id)
+        peer_ids, emptied_room = await asyncio.to_thread(
+            presence.join_voice, self.uid, room)
+        peer_flags = await asyncio.to_thread(
+            presence.voice_members_flags, room)
+        await self._broadcast_dm_voice(self.user.id, conversation_id, True)
+        if emptied_room and is_dm_room(emptied_room):
+            await self._broadcast_dm_voice(
+                self.user.id, dm_conversation_id(emptied_room), False)
+        elif emptied_room:
+            server_id = await self._channel_server(emptied_room)
+            await self._broadcast_call_state(emptied_room, server_id)
+        if not peer_ids:
+            # Мы первые в комнате — звонок только начинается, разбудить
+            # остальных участников звонком (см. models docstring dm_room).
+            await self._ring_others(conversation_id)
+        await self._send({
+            "op": "dm_voice_peers",
+            "conversation_id": conversation_id,
+            "peer_ids": [int(p) for p in peer_ids],
+            "peer_flags": {
+                int(uid): flags for uid, flags in peer_flags.items()
+                if uid != self.uid
+            },
+        })
+
+    async def _ring_others(self, conversation_id):
+        other_ids = await self._conversation_other_participant_ids(conversation_id)
+        caller = {
+            "id": self.user.id,
+            "username": self.user.username,
+            "avatar_color": self.user.avatar_color,
+            "avatar_image": self.user.avatar_image,
+        }
+        for uid in other_ids:
+            await self.channel_layer.group_send(
+                f"user_{uid}", {"type": "broadcast", "payload": {
+                    "op": "conversation_call_ring",
+                    "conversation_id": conversation_id,
+                    "caller": caller,
+                }})
 
     async def _handle_set_status(self, data):
         value = data.get("status")
@@ -237,15 +395,20 @@ class GatewayConsumer(AsyncWebsocketConsumer):
 
     async def _handle_voice_leave(self):
         prev = await asyncio.to_thread(presence.clear_voice, self.uid)
-        if prev:
-            server_id = await self._channel_server(prev)
-            await self._broadcast_voice(self.user.id, None, server_id)
-            await self._broadcast_call_state(prev, server_id)
+        if not prev:
+            return
+        if is_dm_room(prev):
+            await self._broadcast_dm_voice(self.user.id, dm_conversation_id(prev), False)
+            return
+        server_id = await self._channel_server(prev)
+        await self._broadcast_voice(self.user.id, None, server_id)
+        await self._broadcast_call_state(prev, server_id)
 
     async def _handle_voice_topic_update(self, data):
         topic = (data.get("topic") or "").strip()[:120]
         channel_id = await asyncio.to_thread(presence.voice_channel, self.uid)
-        if not channel_id:
+        if not channel_id or is_dm_room(channel_id):
+            # Тема разговора — фича голосовых КАНАЛОВ сервера; в личке/группе её нет.
             return
         await asyncio.to_thread(presence.set_call_topic, channel_id, topic)
         server_id = await self._channel_server(channel_id)
@@ -254,37 +417,46 @@ class GatewayConsumer(AsyncWebsocketConsumer):
     async def _handle_voice_mute_update(self, data):
         muted = bool(data.get("muted"))
         deafened = bool(data.get("deafened"))
-        channel_id = await asyncio.to_thread(presence.voice_channel, self.uid)
-        if not channel_id:
+        room = await asyncio.to_thread(presence.voice_channel, self.uid)
+        if not room:
             return
         await asyncio.to_thread(
             presence.set_voice_flags, self.uid, muted, deafened)
-        server_id = await self._channel_server(channel_id)
-        if not server_id:
-            return
-        await self.channel_layer.group_send(
-            f"server_{server_id}", {"type": "broadcast", "payload": {
-                "op": "voice_mute_update",
-                "user_id": self.user.id,
-                "muted": muted,
-                "deafened": deafened,
-            }})
+        payload = {
+            "op": "voice_mute_update",
+            "user_id": self.user.id,
+            "muted": muted,
+            "deafened": deafened,
+        }
+        await self._send_to_room_group(room, payload)
 
     async def _handle_voice_screen_share_update(self, data):
         sharing = bool(data.get("sharing"))
-        channel_id = await asyncio.to_thread(presence.voice_channel, self.uid)
-        if not channel_id:
+        room = await asyncio.to_thread(presence.voice_channel, self.uid)
+        if not room:
             return
         await asyncio.to_thread(presence.set_screen_sharing, self.uid, sharing)
-        server_id = await self._channel_server(channel_id)
+        payload = {
+            "op": "voice_screen_share_update",
+            "user_id": self.user.id,
+            "sharing": sharing,
+        }
+        await self._send_to_room_group(room, payload)
+
+    async def _send_to_room_group(self, room, payload):
+        """room — то, что вернул presence.voice_channel: либо настоящий
+        Channel.id (сервер), либо dm_room(conversation_id) (личка/группа).
+        presence сам не различает — различаем здесь, при рассылке."""
+        if is_dm_room(room):
+            await self.channel_layer.group_send(
+                f"conversation_{dm_conversation_id(room)}",
+                {"type": "broadcast", "payload": payload})
+            return
+        server_id = await self._channel_server(room)
         if not server_id:
             return
         await self.channel_layer.group_send(
-            f"server_{server_id}", {"type": "broadcast", "payload": {
-                "op": "voice_screen_share_update",
-                "user_id": self.user.id,
-                "sharing": sharing,
-            }})
+            f"server_{server_id}", {"type": "broadcast", "payload": payload})
 
     # --- рассылка -----------------------------------------------------------
     async def _broadcast_presence(self, online: bool):
@@ -318,6 +490,25 @@ class GatewayConsumer(AsyncWebsocketConsumer):
         await self.channel_layer.group_send(
             f"server_{server_id}", {"type": "broadcast", "payload": payload})
 
+    async def _broadcast_dm_voice(self, user_id, conversation_id, in_call: bool):
+        """Аналог _broadcast_voice для диалога/группы. conversation_id — какого
+        диалога касается событие (и куда слать) — ВСЕГДА конкретный, в отличие
+        от _broadcast_voice(channel_id) он не бывает None: там channel_id=None
+        обозначало "вышел", здесь для этого отдельный in_call=False, потому
+        что клиенту иначе неоткуда узнать, из какого диалога кто-то вышел."""
+        payload = {
+            "op": "dm_voice_state_update",
+            "user_id": user_id,
+            "username": self.user.username,
+            "avatar_color": self.user.avatar_color,
+            "avatar_image": self.user.avatar_image,
+            "conversation_id": conversation_id,
+            "in_call": in_call,
+        }
+        await self.channel_layer.group_send(
+            f"conversation_{conversation_id}",
+            {"type": "broadcast", "payload": payload})
+
     async def _broadcast_call_state(self, channel_id, server_id):
         if not server_id:
             return
@@ -332,7 +523,20 @@ class GatewayConsumer(AsyncWebsocketConsumer):
 
     async def broadcast(self, event):
         """Обработчик group_send(type="broadcast")."""
-        await self._send(event["payload"])
+        payload = event["payload"]
+        if payload.get("op") == "conversation_create":
+            # Новый диалог/группа создаётся REST-вьюхой (chat.views), не этим
+            # консьюмером — уже открытое соединение ещё не подписано на
+            # conversation_{id} (группа собиралась один раз в connect() из
+            # БД). Доподписываемся прямо здесь, до пересылки клиенту, чтобы
+            # следующие dm_message_create/dm_voice_state_update в этом
+            # диалоге сразу доходили без переподключения.
+            conversation_id = payload["conversation"]["id"]
+            group = f"conversation_{conversation_id}"
+            if group not in self.conversation_groups:
+                self.conversation_groups.append(group)
+                await self.channel_layer.group_add(group, self.channel_name)
+        await self._send(payload)
 
     async def _send(self, obj):
         await self.send(text_data=json.dumps(obj))
@@ -425,3 +629,73 @@ class GatewayConsumer(AsyncWebsocketConsumer):
     def _save_status(self, value):
         self.user.status = value
         self.user.save(update_fields=["status"])
+
+    @database_sync_to_async
+    def _conversation_ids(self):
+        return list(
+            ConversationParticipant.objects.filter(user=self.user).values_list(
+                "conversation_id", flat=True)
+        )
+
+    @database_sync_to_async
+    def _is_conversation_participant(self, conversation_id):
+        return ConversationParticipant.objects.filter(
+            user=self.user, conversation_id=conversation_id).exists()
+
+    @database_sync_to_async
+    def _conversation_other_participant_ids(self, conversation_id):
+        return list(
+            ConversationParticipant.objects.filter(conversation_id=conversation_id)
+            .exclude(user=self.user).values_list("user_id", flat=True)
+        )
+
+    @database_sync_to_async
+    def _create_dm_message(self, conversation_id, content, reply_to_id=None):
+        if not ConversationParticipant.objects.filter(
+            user=self.user, conversation_id=conversation_id
+        ).exists():
+            return None
+        reply_to = None
+        if reply_to_id:
+            # Только сообщение из ЭТОГО ЖЕ диалога — как и в _create_message.
+            reply_to = ConversationMessage.objects.filter(
+                id=reply_to_id, conversation_id=conversation_id).first()
+        msg = ConversationMessage.objects.create(
+            conversation_id=conversation_id, author=self.user,
+            content=content, reply_to=reply_to)
+        return ConversationMessageSerializer(msg).data
+
+    @database_sync_to_async
+    def _delete_dm_message(self, message_id):
+        try:
+            msg = ConversationMessage.objects.get(id=message_id)
+        except ConversationMessage.DoesNotExist:
+            return None
+        if not ConversationParticipant.objects.filter(
+            user=self.user, conversation_id=msg.conversation_id
+        ).exists():
+            return None
+        # В отличие от серверного канала — тут нет "владельца", удалить
+        # может только автор (у диалога/группы нет модератора).
+        if msg.author_id != self.user.id:
+            return None
+        conversation_id = msg.conversation_id
+        msg.delete()
+        return {"conversation_id": conversation_id}
+
+    @database_sync_to_async
+    def _edit_dm_message(self, message_id, content):
+        try:
+            msg = ConversationMessage.objects.select_related(
+                "author", "reply_to__author").get(id=message_id)
+        except ConversationMessage.DoesNotExist:
+            return None
+        if msg.author_id != self.user.id:
+            return None
+        msg.content = content
+        msg.edited_at = timezone.now()
+        msg.save(update_fields=["content", "edited_at"])
+        return {
+            "conversation_id": msg.conversation_id,
+            "data": ConversationMessageSerializer(msg).data,
+        }

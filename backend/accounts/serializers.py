@@ -32,7 +32,7 @@ class UserSerializer(serializers.ModelSerializer):
         model = User
         fields = [
             "id", "username", "avatar_color", "avatar_image", "status",
-            "banner_gradient", "banner_image",
+            "banner_gradient", "banner_image", "dm_privacy",
         ]
 
 
@@ -65,12 +65,16 @@ class ProfileUpdateSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = User
-        fields = ["username", "avatar_image", "banner_gradient", "banner_image"]
+        fields = [
+            "username", "avatar_image", "banner_gradient", "banner_image",
+            "dm_privacy",
+        ]
         extra_kwargs = {
             "username": {"required": False},
             "avatar_image": {"required": False, "allow_blank": True},
             "banner_gradient": {"required": False, "allow_blank": True},
             "banner_image": {"required": False, "allow_blank": True},
+            "dm_privacy": {"required": False},
         }
 
     def validate_username(self, value):

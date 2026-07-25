@@ -16,18 +16,22 @@ export default function ServerRail({
   onSelect,
   onCreate,
   onDiscover,
+  onHome,
 }: {
   servers: Server[]
   activeId: number | null
   onSelect: (s: Server) => void
   onCreate: () => void
   onDiscover: () => void
+  /** Клик по «домику» — личные сообщения/друзья вместо сервера. */
+  onHome: () => void
 }) {
   return (
     <nav className="server-rail">
       <button
         className={`rail-pill home ${activeId == null ? 'active' : ''}`}
         title={APP_NAME}
+        onClick={onHome}
       >
         {APP_NAME.charAt(0)}
       </button>

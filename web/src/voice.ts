@@ -401,7 +401,7 @@ export function useVoiceMesh(
       setAvailableScreenUserIds(new Set())
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [voice?.channel.id])
+  }, [voice?.room.id])
 
   // Рассылаем свой статус мьюта/дефена остальным участникам канала — им
   // нужно рисовать значок у себя, а не только знать о самом факте.
@@ -409,7 +409,7 @@ export function useVoiceMesh(
     if (!voice) return
     gateway.voiceMuteUpdate(muted, deafened)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [voice?.channel.id, muted, deafened])
+  }, [voice?.room.id, muted, deafened])
 
   // Рассылаем факт демонстрации экрана — виден всем на сервере (не только
   // участникам этого голосового канала), на нём держится бейдж «демка».
@@ -417,7 +417,7 @@ export function useVoiceMesh(
     if (!voice) return
     gateway.voiceScreenShareUpdate(isSharingScreen)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [voice?.channel.id, isSharingScreen])
+  }, [voice?.room.id, isSharingScreen])
 
   // VAD: анализируем реальные аудио-потоки (свой + remote), которые уже текут
   // через WebRTC, вместо того чтобы гонять "speaking"-события через сеть.
@@ -498,7 +498,7 @@ export function useVoiceMesh(
       audioCtx.close().catch(() => {})
       micLevelRef.current = 0
     }
-  }, [voice?.channel.id, selfUserId])
+  }, [voice?.room.id, selfUserId])
 
   const toggleMute = () => {
     if (!localStream.current) return

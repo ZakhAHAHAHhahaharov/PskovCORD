@@ -21,6 +21,13 @@ interface GatewayCtx {
   voiceScreenShareUpdate: (sharing: boolean) => void
   voiceTopicUpdate: (topic: string) => void
   setStatus: (status: UserStatus) => void
+  dmSendMessage: (conversationId: number, content: string, replyTo?: number | null) => void
+  dmDeleteMessage: (messageId: number) => void
+  dmEditMessage: (messageId: number, content: string) => void
+  /** voiceLeave/voiceMuteUpdate/voiceScreenShareUpdate — те же клиентские
+   * op'ы для звонка в диалоге/группе (сервер сам различает по текущей
+   * комнате, см. chat.consumers._send_to_room_group). */
+  dmVoiceJoin: (conversationId: number) => void
 }
 
 const Ctx = createContext<GatewayCtx>(null as unknown as GatewayCtx)
@@ -119,6 +126,16 @@ export function GatewayProvider({ children }: { children: ReactNode }) {
       raw({ op: 'voice_screen_share_update', sharing }),
     voiceTopicUpdate: (topic) => raw({ op: 'voice_topic_update', topic }),
     setStatus: (status) => raw({ op: 'set_status', status }),
+    dmSendMessage: (conversationId, content, replyTo) =>
+      raw({
+        op: 'dm_send_message', conversation_id: conversationId, content,
+        reply_to: replyTo ?? null,
+      }),
+    dmDeleteMessage: (messageId) => raw({ op: 'dm_delete_message', message_id: messageId }),
+    dmEditMessage: (messageId, content) =>
+      raw({ op: 'dm_edit_message', message_id: messageId, content }),
+    dmVoiceJoin: (conversationId) =>
+      raw({ op: 'dm_voice_join', conversation_id: conversationId }),
   }
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>

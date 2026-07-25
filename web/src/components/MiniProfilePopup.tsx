@@ -29,13 +29,18 @@ export default function MiniProfilePopup({
   target,
   currentUserId,
   onClose,
+  onAddFriend,
+  onSendMessage,
 }: {
   target: ProfilePopupTarget
   currentUserId: number
   onClose: () => void
+  onAddFriend: (userId: number) => void
+  onSendMessage: (userId: number, content: string) => void
 }) {
   const ref = useRef<HTMLDivElement>(null)
   const [composing, setComposing] = useState(false)
+  const [message, setMessage] = useState('')
   const { user } = target
   const isSelf = user.id === currentUserId
 
@@ -73,12 +78,12 @@ export default function MiniProfilePopup({
     }
   }, [onClose])
 
-  const notImplemented = () => alert('not implemented yet')
-
   const handleComposeKeyDown = (e: ReactKeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') {
       e.preventDefault()
-      alert('not implemented yet')
+      const content = message.trim()
+      if (!content) return
+      onSendMessage(user.id, content)
     }
   }
 
@@ -111,7 +116,7 @@ export default function MiniProfilePopup({
           <button
             type="button"
             className="profile-popup-item mini-profile-action"
-            onClick={notImplemented}
+            onClick={() => onAddFriend(user.id)}
           >
             <UserPlus size={15} /> Добавить в друзья
           </button>
@@ -120,14 +125,16 @@ export default function MiniProfilePopup({
               <input
                 className="mini-profile-compose-input"
                 placeholder={`Сообщение для ${user.username}`}
+                value={message}
+                onChange={(e) => setMessage(e.target.value)}
                 onKeyDown={handleComposeKeyDown}
                 autoFocus
               />
               <button
                 type="button"
                 className="mini-profile-compose-emoji"
-                title="Эмодзи"
-                onClick={notImplemented}
+                title="Эмодзи (пока не реализовано)"
+                disabled
               >
                 <Smile size={16} />
               </button>

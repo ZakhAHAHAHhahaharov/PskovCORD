@@ -85,3 +85,25 @@ export function playReconnectedSound() {
   beep(440, 80, 0, 0.16)
   beep(660, 120, 80, 0.16)
 }
+
+let ringInterval: ReturnType<typeof setInterval> | null = null
+
+/** Входящий звонок в личке/группе — короткая двухтоновая трель по кругу,
+ * пока баннер открыт (см. IncomingCallBanner). Синтетический тон, как и
+ * остальные короткие сигналы в этом файле — не нужен отдельный аудиофайл. */
+export function playIncomingCallRing() {
+  if (ringInterval) return
+  const ring = () => {
+    beep(880, 220, 0, 0.16)
+    beep(660, 220, 260, 0.16)
+  }
+  ring()
+  ringInterval = setInterval(ring, 1600)
+}
+
+export function stopIncomingCallRing() {
+  if (ringInterval) {
+    clearInterval(ringInterval)
+    ringInterval = null
+  }
+}

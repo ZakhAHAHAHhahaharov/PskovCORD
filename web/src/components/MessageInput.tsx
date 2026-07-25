@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Pencil, X } from 'lucide-react'
-import { Message } from '../api'
+import { ChatMessageBase } from '../api'
 
 export default function MessageInput({
   channelName,
@@ -10,12 +10,16 @@ export default function MessageInput({
   editTarget,
   onSaveEdit,
   onCancelEdit,
+  hash = true,
 }: {
+  /** Название текстового канала/собеседника/группы для плейсхолдера. */
   channelName: string
+  /** "#" перед именем — только для текстовых каналов сервера; в диалогах/группах не показываем. */
+  hash?: boolean
   onSend: (content: string) => void
-  replyTarget: Message | null
+  replyTarget: ChatMessageBase | null
   onCancelReply: () => void
-  editTarget: Message | null
+  editTarget: ChatMessageBase | null
   onSaveEdit: (messageId: number, content: string) => void
   onCancelEdit: () => void
 }) {
@@ -73,7 +77,9 @@ export default function MessageInput({
           value={value}
           onChange={(e) => setValue(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder={editTarget ? 'Изменить сообщение…' : `Написать в #${channelName}`}
+          placeholder={
+            editTarget ? 'Изменить сообщение…' : `Написать в ${hash ? '#' : ''}${channelName}`
+          }
         />
       </form>
     </div>
