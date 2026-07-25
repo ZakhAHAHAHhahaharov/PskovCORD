@@ -579,6 +579,71 @@ input {
   z-index: 50;
 }
 
+/* ---- profile popup (карточка над status-menu) ---- */
+.profile-popup {
+  padding: 0;
+  overflow: hidden;
+  width: 240px;
+}
+
+.profile-popup-banner {
+  background: var(
+    --profile-banner-gradient,
+    linear-gradient(135deg, #5865f2 0%, #8b5cf6 55%, #eb459e 100%)
+  );
+  padding: 5px 12px 10px 5px;
+  display: flex;
+  flex-direction: column;
+}
+
+.profile-popup-name {
+  margin-top: 6px;
+  padding-left: 5px;
+  font-size: 15px;
+  font-weight: 700;
+  color: #fff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+}
+
+.profile-popup-menu {
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.profile-popup-item {
+  display: flex;
+  align-items: center;
+  padding: 8px 10px;
+  border-radius: 4px;
+  font-size: 14px;
+  color: var(--text-normal);
+  text-align: left;
+}
+
+.profile-popup-item:hover {
+  background: var(--channel-hover);
+}
+
+.profile-popup-divider {
+  height: 1px;
+  background: var(--border-color, rgba(255, 255, 255, 0.08));
+  margin: 6px 4px;
+}
+
+.profile-popup-label {
+  padding: 2px 10px 4px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
 .status-menu-item {
   display: flex;
   align-items: center;

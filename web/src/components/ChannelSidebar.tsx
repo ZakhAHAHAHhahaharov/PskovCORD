@@ -11,7 +11,6 @@ import {
   Monitor,
   Circle,
   Settings,
-  UserCog,
 } from 'lucide-react'
 import { Channel, Member, Server, User } from '../api'
 import Avatar from './Avatar'
@@ -249,7 +248,7 @@ export default function ChannelSidebar({
       )}
 
       <div className="user-panel">
-        <StatusMenu speaking={speakingUserIds.has(user.id)} />
+        <StatusMenu speaking={speakingUserIds.has(user.id)} onOpenProfile={onOpenProfile} />
         <div className="user-panel-actions">
           {voice ? (
             <>
@@ -270,9 +269,6 @@ export default function ChannelSidebar({
               </button>
             </>
           )}
-          <button className="icon-btn" title="Мой профиль" onClick={onOpenProfile}>
-            <UserCog size={17} />
-          </button>
           <button className="icon-btn" title="Настройки" onClick={onOpenSettings}>
             <Settings size={17} />
           </button>
