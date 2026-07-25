@@ -4,6 +4,16 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>PskovCord</title>
+    <!--
+      Пути стабильны, а какой именно favicon отдать (стандартный или личный
+      выбранный) резолвится на бэкенде per-request по сессионной куке — см.
+      core.views.favicon_file/_resolve_favicon_id.
+    -->
+    <link rel="icon" type="image/x-icon" href="/api/favicon/favicon.ico" />
+    <link rel="icon" type="image/png" sizes="16x16" href="/api/favicon/icon-16x16.png" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/api/favicon/icon-32x32.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/api/favicon/apple-touch-icon.png" />
+    <link rel="manifest" href="/api/favicon/site.webmanifest" />
   </head>
   <body>
     <div id="root"></div>

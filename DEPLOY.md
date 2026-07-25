@@ -106,6 +106,10 @@ bash /opt/pskovcord/deploy/deploy.sh
 Это значит: **nginx-конфиг на сервере нужно обновить руками** (см. ниже) — сам
 `deploy.sh` его не трогает, только код/контейнеры.
 
+Тем же приёмом раздаются favicon-наборы (`core.models.Favicon`) — bind-mount
+`/opt/pskovcord/deploy/media/` (создать вручную при первом деплое, `docker compose`
+сам директорию не создаст) на `location /media/` в nginx (см. `deploy/nginx.conf.example`).
+
 ## TLS-сертификат
 
 Используется **общий wildcard-сертификат `*.zlgvpn.org`**, лежит на сервере в
