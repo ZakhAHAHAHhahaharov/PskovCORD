@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useState, ReactNode } from 'react'
 import { api, setToken, getToken, User, UserStatus } from './api'
+import { loadCachedUser, saveCachedUser, clearCachedUser } from './userCache'
 
 interface AuthCtx {
   user: User | null
@@ -25,10 +26,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     ;(async () => {
       if (getToken()) {
+        // Мгновенно показать последний известный профиль (ник/аватар/баннер)
+        // из кэша, не дожидаясь сети — см. userCache.ts. Ответ /api/auth/me
+        // ниже всё равно приходит следом и остаётся источником истины.
+        const cached = loadCachedUser()
+        if (cached) setUser(cached)
         try {
-          setUser(await api.me())
+          const fresh = await api.me()
+          setUser(fresh)
+          saveCachedUser(fresh)
         } catch {
           setToken(null)
+          clearCachedUser()
         }
       }
       setLoading(false)
@@ -38,13 +47,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const login = async (username: string, password: string) => {
     const { access } = await api.login(username, password)
     setToken(access)
-    setUser(await api.me())
+    const fresh = await api.me()
+    setUser(fresh)
+    saveCachedUser(fresh)
   }
 
   const register = async (username: string, password: string) => {
     const data = await api.register(username, password)
     setToken(data.access)
     setUser(data.user)
+    saveCachedUser(data.user)
   }
 
   const logout = () => {
@@ -54,14 +66,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     void api.logout().catch(() => {})
     setToken(null)
     setUser(null)
+    clearCachedUser()
   }
 
   const updateLocalStatus = (status: UserStatus) => {
-    setUser((u) => (u ? { ...u, status } : u))
+    setUser((u) => {
+      const next = u ? { ...u, status } : u
+      if (next) saveCachedUser(next)
+      return next
+    })
   }
 
   const updateLocalUser = (updated: User) => {
     setUser(updated)
+    saveCachedUser(updated)
   }
 
   return (

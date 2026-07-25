@@ -72,12 +72,19 @@ export default function StatusMenu({
 
       {open && (
         <div className="status-menu-popup profile-popup">
-          <div className="profile-popup-banner">
+          <div
+            className="profile-popup-banner"
+            style={{
+              background:
+                user.banner_image ? undefined : user.banner_gradient || undefined,
+              backgroundImage: user.banner_image ? `url(${user.banner_image})` : undefined,
+            }}
+          >
             <Avatar
               name={user.username}
               color={user.avatar_color}
               image={user.avatar_image}
-              size={56}
+              size={86}
               status={user.status}
               showStatus
             />
