@@ -25,35 +25,29 @@ export default function MembersList({
   const renderMember = (m: Member) => {
     const voice = channelName(m.voice_channel)
     return (
-      <div key={m.id} className="member-row">
-        <button
-          type="button"
-          className="avatar-trigger"
-          onClick={(e) => onOpenProfile(m, e)}
-        >
-          <Avatar
-            name={m.username}
-            color={m.avatar_color}
-            image={m.avatar_image}
-            size={32}
-            status={m.status}
-            showStatus
-          />
-        </button>
+      <button
+        key={m.id}
+        type="button"
+        className="member-row"
+        onClick={(e) => onOpenProfile(m, e)}
+      >
+        <Avatar
+          name={m.username}
+          color={m.avatar_color}
+          image={m.avatar_image}
+          size={32}
+          status={m.status}
+          showStatus
+        />
         <div className="member-info">
-          <span
-            className={`member-name profile-trigger-name ${m.online ? '' : 'dim'}`}
-            onClick={(e) => onOpenProfile(m, e)}
-          >
-            {m.username}
-          </span>
+          <span className={`member-name ${m.online ? '' : 'dim'}`}>{m.username}</span>
           {voice && (
             <span className="member-voice">
               <Volume2 size={12} /> {voice}
             </span>
           )}
         </div>
-      </div>
+      </button>
     )
   }
 
