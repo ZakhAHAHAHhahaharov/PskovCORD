@@ -1967,20 +1967,34 @@ input {
   background: var(--channel-active);
 }
 
-/* ---- звонок в диалоге/группе (main-панель) ---- */
-.dm-call-bar {
+/* ---- звонок в диалоге/группе (main-панель) ----
+   Тот же VoiceStage, что и у голосовых каналов сервера, сверху над текстовым
+   чатом — .dm-voicestage-wrap задаёт высоту (тянется за resize-хендл снизу),
+   VoiceStage внутри просто flex:1 на всю эту высоту. */
+.dm-voicestage-wrap {
+  position: relative;
+  flex-shrink: 0;
   display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 10px 16px;
-  background: rgba(35, 165, 90, 0.08);
-  border-bottom: 1px solid rgba(0, 0, 0, 0.2);
+  flex-direction: column;
+  min-height: 0;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.3);
 }
 
-.dm-call-label {
-  font-size: 13px;
-  color: var(--text-muted);
-  margin-left: 4px;
+.dm-voicestage-wrap .voice-stage {
+  flex: 1;
+  min-height: 0;
+}
+
+.dm-voicestage-resize {
+  height: 6px;
+  flex-shrink: 0;
+  cursor: ns-resize;
+  background: transparent;
+}
+
+.dm-voicestage-resize:hover,
+.dm-voicestage-resize:active {
+  background: var(--blurple);
 }
 
 .dm-call-leave {

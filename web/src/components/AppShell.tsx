@@ -12,7 +12,6 @@ import {
   playScreenShareStartSound,
   playScreenShareStopSound,
 } from '../sounds'
-import Avatar from './Avatar'
 import ServerRail from './ServerRail'
 import ChannelSidebar from './ChannelSidebar'
 import HomeSidebar from './HomeSidebar'
@@ -22,7 +21,7 @@ import MessageList from './MessageList'
 import MessageInput from './MessageInput'
 import MembersList from './MembersList'
 import VoiceProvider, { VoiceStatus } from './VoiceProvider'
-import VoiceStage from './VoiceStage'
+import VoiceStage, { VoiceRosterMember } from './VoiceStage'
 import DiscoverModal from './DiscoverModal'
 import SettingsModal from './SettingsModal'
 import ProfileModal from './ProfileModal'
@@ -59,6 +58,9 @@ interface CallParticipant {
   username: string
   avatar_color: string
   avatar_image: string
+  muted: boolean
+  deafened: boolean
+  sharing_screen: boolean
 }
 
 interface IncomingCall {
@@ -98,6 +100,13 @@ export default function AppShell() {
   // приходит прямо в событии (dm_voice_state_update) — отдельно грузить не нужно.
   const [dmCallParticipants, setDmCallParticipants] = useState<Record<number, CallParticipant>>({})
   const [incomingCall, setIncomingCall] = useState<IncomingCall | null>(null)
+  // Аналог pendingWatch, но для демонстрации экрана в звонке диалога/группы —
+  // отдельное состояние, потому что pendingWatch завязан на channelId сервера.
+  const [dmPendingWatchUserId, setDmPendingWatchUserId] = useState<number | null>(null)
+  // Высота VoiceStage над текстовым чатом в открытом диалоге/группе — тянется
+  // за resize-handle (см. handleDmVoiceStageResizeStart), персональна для
+  // сессии (не сохраняется между перезагрузками — не критично).
+  const [dmVoiceStageHeight, setDmVoiceStageHeight] = useState(320)
   // userId, чью демонстрацию нужно автоматически начать смотреть в
   // указанном голосовом канале, как только она станет доступна — ставится
   // кликом по бейджу «демка» или по превью в VoiceStage (см. handleWatchScreen).
@@ -110,6 +119,12 @@ export default function AppShell() {
   const currentChannel = channels.find((c) => c.id === channelId) || null
   const isServerOwner = currentServer?.owner === user?.id
   const activeConversation = conversations.find((c) => c.id === activeConversationId) || null
+  const dmRoster: VoiceRosterMember[] = Object.values(dmCallParticipants).map((p) => ({
+    id: p.id, username: p.username, avatar_color: p.avatar_color, avatar_image: p.avatar_image,
+    muted: p.muted, deafened: p.deafened, sharing_screen: p.sharing_screen,
+  }))
+  const isInDmCall =
+    voice?.room.kind === 'conversation' && activeConversation != null && voice.room.id === activeConversation.id
 
   const selectServer = useCallback((s: Server) => {
     setServerId(s.id)
@@ -268,6 +283,14 @@ export default function AppShell() {
           m.id === d.user_id ? { ...m, muted: !!d.muted, deafened: !!d.deafened } : m,
         ),
       )
+      // Тот же op обслуживает и звонки в диалогах/группах (сервер сам
+      // различает по текущей комнате — см. chat.consumers._send_to_room_group);
+      // применяем и туда, если этот userId сейчас в roster'е звонка.
+      setDmCallParticipants((prev) =>
+        prev[d.user_id]
+          ? { ...prev, [d.user_id]: { ...prev[d.user_id], muted: !!d.muted, deafened: !!d.deafened } }
+          : prev,
+      )
     })
     // Демонстрация экрана — тоже глобально, чтобы бейдж «демка» и клик по
     // нему работали даже для тех, кто сам не подключён к этому каналу.
@@ -276,6 +299,11 @@ export default function AppShell() {
         prev.map((m) =>
           m.id === d.user_id ? { ...m, sharing_screen: !!d.sharing } : m,
         ),
+      )
+      setDmCallParticipants((prev) =>
+        prev[d.user_id]
+          ? { ...prev, [d.user_id]: { ...prev[d.user_id], sharing_screen: !!d.sharing } }
+          : prev,
       )
     })
     // Смена ника/аватара — свою уже применили локально сразу после ответа
@@ -367,6 +395,7 @@ export default function AppShell() {
           next[d.user_id] = {
             id: d.user_id, username: d.username,
             avatar_color: d.avatar_color, avatar_image: d.avatar_image,
+            muted: false, deafened: false, sharing_screen: false,
           }
         } else {
           delete next[d.user_id]
@@ -381,14 +410,20 @@ export default function AppShell() {
       if (voice?.room.kind !== 'conversation' || voice.room.id !== d.conversation_id) return
       const conv = conversations.find((c) => c.id === d.conversation_id)
       const lookup = new Map((conv?.participants ?? []).map((p) => [p.id, p]))
+      const peerFlags = (d.peer_flags ?? {}) as Record<
+        number, { muted?: boolean; deafened?: boolean; sharing_screen?: boolean }
+      >
       setDmCallParticipants((prev) => {
         const next = { ...prev }
         for (const id of d.peer_ids as number[]) {
           const p = lookup.get(id)
           if (p) {
+            const flags = peerFlags[id] ?? {}
             next[id] = {
               id: p.id, username: p.username,
               avatar_color: p.avatar_color, avatar_image: p.avatar_image,
+              muted: !!flags.muted, deafened: !!flags.deafened,
+              sharing_screen: !!flags.sharing_screen,
             }
           }
         }
@@ -634,6 +669,38 @@ export default function AppShell() {
   const handleDeclineIncomingCall = useCallback(() => {
     setIncomingCall(null)
   }, [])
+
+  // Аналог handleWatchScreen, но для звонка в диалоге/группе — раз VoiceStage
+  // тут показывается только пока мы УЖЕ в звонке (см. isInDmCall), не нужно
+  // ни выбирать канал, ни авто-подключаться, только попросить показ.
+  const handleDmRequestWatch = useCallback((userId: number) => {
+    setDmPendingWatchUserId(userId)
+  }, [])
+
+  // Тянем нижнюю границу VoiceStage над текстовым чатом в открытом диалоге/
+  // группе — тот же приём, что и везде в проекте для ресайза (глобальные
+  // mousemove/mouseup на document, снимаются в конце драга).
+  const dmResizeStartRef = useRef<{ startY: number; startHeight: number } | null>(null)
+  const handleDmVoiceStageResizeStart = useCallback(
+    (e: ReactMouseEvent) => {
+      e.preventDefault()
+      dmResizeStartRef.current = { startY: e.clientY, startHeight: dmVoiceStageHeight }
+      const onMove = (ev: MouseEvent) => {
+        const drag = dmResizeStartRef.current
+        if (!drag) return
+        const next = drag.startHeight + (ev.clientY - drag.startY)
+        setDmVoiceStageHeight(Math.max(180, Math.min(next, window.innerHeight - 240)))
+      }
+      const onUp = () => {
+        dmResizeStartRef.current = null
+        document.removeEventListener('mousemove', onMove)
+        document.removeEventListener('mouseup', onUp)
+      }
+      document.addEventListener('mousemove', onMove)
+      document.addEventListener('mouseup', onUp)
+    },
+    [dmVoiceStageHeight],
+  )
 
   // Незамеченный звонок сам перестаёт "звонить" — некому его отклонить,
   // если человек просто не смотрит в экран (нет push-уведомлений вне вкладки).
@@ -891,12 +958,24 @@ export default function AppShell() {
                   </button>
                 )}
               </header>
-              {voice?.room.kind === 'conversation' && voice.room.id === activeConversation.id && (
-                <div className="dm-call-bar">
-                  {Object.values(dmCallParticipants).map((p) => (
-                    <Avatar key={p.id} name={p.username} color={p.avatar_color} image={p.avatar_image} size={28} />
-                  ))}
-                  <span className="dm-call-label">В звонке</span>
+              {isInDmCall && (
+                <div className="dm-voicestage-wrap" style={{ height: dmVoiceStageHeight }}>
+                  <VoiceStage
+                    key={activeConversation.id}
+                    roomId={activeConversation.id}
+                    roomName={conversationDisplayName(activeConversation)}
+                    roster={dmRoster}
+                    selfUserId={user!.id}
+                    pendingWatchUserId={dmPendingWatchUserId}
+                    onConsumedPendingWatch={() => setDmPendingWatchUserId(null)}
+                    onRequestWatch={handleDmRequestWatch}
+                    onOpenProfile={openProfilePopup}
+                  />
+                  <div
+                    className="dm-voicestage-resize"
+                    onMouseDown={handleDmVoiceStageResizeStart}
+                    title="Потянуть, чтобы изменить размер"
+                  />
                 </div>
               )}
               <MessageList
@@ -925,8 +1004,10 @@ export default function AppShell() {
           )
         ) : currentChannel && currentChannel.kind === 'voice' ? (
           <VoiceStage
-            channel={currentChannel}
-            members={members}
+            key={currentChannel.id}
+            roomId={currentChannel.id}
+            roomName={currentChannel.name}
+            roster={members.filter((m) => m.voice_channel === String(currentChannel.id))}
             selfUserId={user!.id}
             pendingWatchUserId={
               pendingWatch?.channelId === currentChannel.id ? pendingWatch.userId : null
