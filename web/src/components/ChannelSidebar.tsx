@@ -1,4 +1,4 @@
-import { Volume2, MicOff, HeadphoneOff, Monitor } from 'lucide-react'
+import { Volume2, MicOff, HeadphoneOff, Monitor, Settings } from 'lucide-react'
 import { Channel, Member, Server, User } from '../api'
 import Avatar from './Avatar'
 import CallDuration from './CallDuration'
@@ -23,6 +23,7 @@ export default function ChannelSidebar({
   onOpenSettings,
   onOpenProfile,
   onWatchScreen,
+  onOpenServerSettings,
 }: {
   server: Server | null
   channels: Channel[]
@@ -40,6 +41,8 @@ export default function ChannelSidebar({
   /** Клик по бейджу «демка» рядом с ником — открыть демонстрацию этого
    * участника (с автоподключением к его каналу, если мы не там). */
   onWatchScreen: (member: Member) => void
+  /** Шестерёнка у названия сервера — редактор сервера поверх всей страницы. */
+  onOpenServerSettings: () => void
 }) {
   const { speakingUserIds, muted, deafened } = useVoice()
   // Для себя — локальное состояние mesh'а (мгновенный отклик на клик);
@@ -53,12 +56,28 @@ export default function ChannelSidebar({
   const voiceMembersOf = (channelId: number) =>
     members.filter((m) => m.voice_channel === String(channelId))
 
-  const isOwner = server?.owner === user.id
+  // Что можно на этом сервере, решают роли (см. chat/roles.py) — владелец
+  // просто получает все права разом, отдельной ветки под него нет.
+  const perms = server?.my_permissions
+  const canManageChannels = !!perms?.manage_channels
+  // Редактор сервера открывается, если есть хоть одна доступная вкладка.
+  const canEditServer =
+    !!perms && (perms.manage_server || perms.manage_roles || perms.manage_members)
 
   return (
     <aside className="channel-sidebar">
       <header className="sidebar-header">
         <span className="sidebar-title">{server ? server.name : 'Нет сервера'}</span>
+        {canEditServer && (
+          <button
+            type="button"
+            className="icon-btn"
+            title="Редактор сервера"
+            onClick={onOpenServerSettings}
+          >
+            <Settings size={16} />
+          </button>
+        )}
       </header>
 
       <div className="channel-scroll" style={{ paddingBottom: voice ? 116 : 60 }}>
@@ -67,11 +86,11 @@ export default function ChannelSidebar({
             <div className="channel-category">
               <span
                 className="cat-label"
-                onClick={isOwner ? () => onCreateChannel('text') : undefined}
+                onClick={canManageChannels ? () => onCreateChannel('text') : undefined}
               >
                 Текстовые каналы
               </span>
-              {isOwner && (
+              {canManageChannels && (
                 <button
                   className="cat-add"
                   title="Создать текстовый канал"
@@ -95,11 +114,11 @@ export default function ChannelSidebar({
             <div className="channel-category">
               <span
                 className="cat-label"
-                onClick={isOwner ? () => onCreateChannel('voice') : undefined}
+                onClick={canManageChannels ? () => onCreateChannel('voice') : undefined}
               >
                 Голосовые каналы
               </span>
-              {isOwner && (
+              {canManageChannels && (
                 <button
                   className="cat-add"
                   title="Создать голосовой канал"

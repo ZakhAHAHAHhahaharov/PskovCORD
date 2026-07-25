@@ -31,12 +31,77 @@ export interface Channel {
   topic: string | null
 }
 
+/** Права роли на сервере — 1:1 с булевыми полями chat.models.Role
+ * (список и порядок для UI — chat/roles.py PERMISSION_FIELDS). */
+export type ServerPermission =
+  | 'view_channels'
+  | 'manage_channels'
+  | 'manage_roles'
+  | 'manage_server'
+  | 'manage_invites'
+  | 'manage_nicknames'
+  | 'manage_members'
+  | 'send_messages'
+  | 'delete_messages'
+  | 'mention_everyone'
+  | 'speak'
+  | 'video'
+
+export type ServerPermissions = Record<ServerPermission, boolean>
+
+export interface Role extends ServerPermissions {
+  id: number
+  name: string
+  color: string
+  position: number
+  /** Роль «для всех» (аналог @everyone) — её нельзя удалить и не нужно выдавать. */
+  is_default: boolean
+}
+
+/** Как попасть на сервер — вкладка «Доступ» редактора. */
+export type ServerAccessMode = 'invite' | 'request' | 'public'
+
+export interface ServerRule {
+  title: string
+  text: string
+}
+
 export interface Server {
   id: number
   name: string
   owner: number
   created_at: string
   channels: Channel[]
+  /** Значок сервера (data-URL, до 512×512); пусто — инициалы в ServerRail. */
+  icon: string
+  banner_gradient: string
+  banner_image: string
+  description: string
+  /** «Особенности» — короткие теги для поиска серверов и подсказки. */
+  tags: string[]
+  /** Приватный: описание/особенности видят только участники. */
+  is_private: boolean
+  access_mode: ServerAccessMode
+  age_restricted: boolean
+  rules: ServerRule[]
+  /** Мои права на этом сервере — по ним прячутся кнопки редактора. */
+  my_permissions: ServerPermissions
+  member_count: number
+}
+
+export interface ServerJoinRequestEntry {
+  id: number
+  user: User
+  message: string
+  created_at: string
+}
+
+export interface ServerBanEntry {
+  id: number
+  user: User
+  banned_by: User | null
+  reason: string
+  created_at: string
 }
 
 export interface ChatMessageReplyBase {
@@ -67,6 +132,9 @@ export interface Member extends Omit<User, 'status' | 'dm_privacy'> {
   online: boolean
   voice_channel: string | null
   status: EffectiveStatus
+  /** Персонально выданные роли (без роли по умолчанию — она у всех). */
+  role_ids: number[]
+  is_owner: boolean
   /** Статус микрофона/наушников — виден всем, даже не подключённым к каналу. */
   muted: boolean
   deafened: boolean
@@ -77,8 +145,17 @@ export interface Member extends Omit<User, 'status' | 'dm_privacy'> {
 export interface DiscoverServer {
   id: number
   name: string
+  icon: string
   member_count: number
   is_member: boolean
+  /** У приватного сервера description/tags приходят пустыми, пока не вступишь. */
+  is_private: boolean
+  access_mode: ServerAccessMode
+  age_restricted: boolean
+  /** Заявка на вступление уже отправлена и ждёт одобрения. */
+  request_pending: boolean
+  description: string
+  tags: string[]
 }
 
 export interface FriendRequestEntry {
@@ -199,10 +276,68 @@ export const api = {
   createServer: (name: string): Promise<Server> =>
     req('/api/servers', { method: 'POST', body: JSON.stringify({ name }) }),
   discover: (): Promise<DiscoverServer[]> => req('/api/servers/discover'),
-  joinServer: (id: number): Promise<Server> =>
+  /** Сервер «по заявке» вместо вступления отдаёт {status:'pending'} —
+   * членства ещё нет, ждём одобрения (см. chat.views.ServerJoin). */
+  joinServer: (id: number): Promise<Server | { status: 'pending'; detail: string }> =>
     req(`/api/servers/${id}/join`, { method: 'POST' }),
   members: (serverId: number): Promise<Member[]> =>
     req(`/api/servers/${serverId}/members`),
+
+  // --- редактор сервера ---------------------------------------------------
+  updateServer: (
+    id: number,
+    data: Partial<{
+      name: string
+      icon: string
+      banner_gradient: string
+      banner_image: string
+      description: string
+      tags: string[]
+      is_private: boolean
+      access_mode: ServerAccessMode
+      age_restricted: boolean
+      rules: ServerRule[]
+    }>,
+  ): Promise<Server> =>
+    req(`/api/servers/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+
+  roles: (serverId: number): Promise<Role[]> => req(`/api/servers/${serverId}/roles`),
+  createRole: (serverId: number, data: Partial<Role>): Promise<Role> =>
+    req(`/api/servers/${serverId}/roles`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  updateRole: (serverId: number, roleId: number, data: Partial<Role>): Promise<Role> =>
+    req(`/api/servers/${serverId}/roles/${roleId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    }),
+  deleteRole: (serverId: number, roleId: number) =>
+    req(`/api/servers/${serverId}/roles/${roleId}`, { method: 'DELETE' }),
+  setMemberRoles: (serverId: number, userId: number, roleIds: number[]) =>
+    req(`/api/servers/${serverId}/members/${userId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ role_ids: roleIds }),
+    }),
+  kickMember: (serverId: number, userId: number) =>
+    req(`/api/servers/${serverId}/members/${userId}`, { method: 'DELETE' }),
+
+  serverJoinRequests: (serverId: number): Promise<ServerJoinRequestEntry[]> =>
+    req(`/api/servers/${serverId}/requests`),
+  approveJoinRequest: (serverId: number, requestId: number) =>
+    req(`/api/servers/${serverId}/requests/${requestId}`, { method: 'POST' }),
+  declineJoinRequest: (serverId: number, requestId: number) =>
+    req(`/api/servers/${serverId}/requests/${requestId}`, { method: 'DELETE' }),
+
+  serverBans: (serverId: number): Promise<ServerBanEntry[]> =>
+    req(`/api/servers/${serverId}/bans`),
+  banMember: (serverId: number, userId: number, reason = ''): Promise<ServerBanEntry> =>
+    req(`/api/servers/${serverId}/bans`, {
+      method: 'POST',
+      body: JSON.stringify({ user_id: userId, reason }),
+    }),
+  unbanMember: (serverId: number, userId: number) =>
+    req(`/api/servers/${serverId}/bans/${userId}`, { method: 'DELETE' }),
   createChannel: (serverId: number, name: string, kind: string): Promise<Channel> =>
     req(`/api/servers/${serverId}/channels`, {
       method: 'POST',

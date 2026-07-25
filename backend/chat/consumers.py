@@ -108,7 +108,7 @@ from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
 from django.utils import timezone
 
-from . import presence
+from . import presence, roles
 from .models import (
     Channel, ConversationMessage, ConversationParticipant,
     Membership, Message, dm_conversation_id, dm_room, is_dm_room,
@@ -567,6 +567,8 @@ class GatewayConsumer(AsyncWebsocketConsumer):
             user=self.user, server=channel.server
         ).exists():
             return None
+        if not roles.has_permission(self.user, channel.server, "send_messages"):
+            return None
         reply_to = None
         if reply_to_id:
             # Разрешаем отвечать только на сообщение из ЭТОГО ЖЕ канала —
@@ -586,8 +588,11 @@ class GatewayConsumer(AsyncWebsocketConsumer):
         server = msg.channel.server
         if not Membership.objects.filter(user=self.user, server=server).exists():
             return None
-        # Удалить может автор ИЛИ владелец сервера.
-        if msg.author_id != self.user.id and server.owner_id != self.user.id:
+        # Удалить может автор ИЛИ тот, кому роль даёт «Удаление сообщений»
+        # (владельцу сервера chat.roles выдаёт все права безусловно).
+        if msg.author_id != self.user.id and not roles.has_permission(
+            self.user, server, "delete_messages"
+        ):
             return None
         channel_id, server_id = msg.channel_id, server.id
         msg.delete()

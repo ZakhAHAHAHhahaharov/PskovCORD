@@ -5,6 +5,16 @@ from django.db import models
 class Server(models.Model):
     """Аналог Discord-сервера (гильдии)."""
 
+    # Как попасть на сервер (вкладка «Доступ» редактора сервера).
+    ACCESS_INVITE = "invite"
+    ACCESS_REQUEST = "request"
+    ACCESS_PUBLIC = "public"
+    ACCESS_CHOICES = [
+        (ACCESS_INVITE, "Только по приглашению"),
+        (ACCESS_REQUEST, "По заявке"),
+        (ACCESS_PUBLIC, "Публичный"),
+    ]
+
     name = models.CharField(max_length=100)
     owner = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -13,8 +23,76 @@ class Server(models.Model):
     )
     created_at = models.DateTimeField(auto_now_add=True)
 
+    # data-URL значка сервера (до 512x512, жмётся клиентом) — тот же приём
+    # хранения, что и accounts.User.avatar_image: картинка маленькая, ради
+    # неё не заводим MEDIA_ROOT. Пусто — в ServerRail рисуются инициалы.
+    icon = models.TextField(blank=True, default="")
+    # Баннер карточки сервера — ровно как баннер профиля (accounts.User):
+    # либо строгий CSS-градиент, либо гифка/картинка data-URL (побеждает она).
+    banner_gradient = models.CharField(max_length=120, blank=True, default="")
+    banner_image = models.TextField(blank=True, default="")
+    description = models.TextField(blank=True, default="")
+    # «Особенности» сервера — короткие теги для поиска серверов и подсказки
+    # при наведении. Список строк; JSONField, потому что это чистые данные
+    # для отображения, отдельная таблица под них избыточна.
+    tags = models.JSONField(default=list, blank=True)
+    # Приватный сервер: описание/особенности/участников видят только свои
+    # (см. chat.views.ServerDiscover и ServerSerializer.to_representation).
+    is_private = models.BooleanField(default=False)
+    access_mode = models.CharField(
+        max_length=10, choices=ACCESS_CHOICES, default=ACCESS_PUBLIC)
+    age_restricted = models.BooleanField(default=False)
+    # Правила сервера — список {"title": ..., "text": ...}, показывается
+    # новичкам. Тоже JSONField по той же причине, что и tags.
+    rules = models.JSONField(default=list, blank=True)
+
     def __str__(self) -> str:
         return self.name
+
+
+class Role(models.Model):
+    """Роль на сервере — набор прав, выдаваемый участникам (Membership.roles).
+
+    Права хранятся отдельными булевыми полями, а не битовой маской: их
+    немного, они редко меняются, а читаемость в админке/миграциях и
+    возможность фильтровать запросом того стоят. Полный список полей (и их
+    порядок в UI) — chat.roles.PERMISSION_FIELDS; при добавлении права
+    правьте оба места.
+    """
+
+    server = models.ForeignKey(
+        Server, on_delete=models.CASCADE, related_name="roles")
+    name = models.CharField(max_length=100)
+    color = models.CharField(max_length=7, default="#99aab5")
+    position = models.PositiveIntegerField(default=0)
+    # Роль по умолчанию (аналог @everyone): её права действуют на всех
+    # участников сервера, её нельзя удалить и не нужно никому выдавать.
+    is_default = models.BooleanField(default=False)
+
+    # --- общие права сервера ---
+    view_channels = models.BooleanField(default=True)
+    manage_channels = models.BooleanField(default=False)
+    manage_roles = models.BooleanField(default=False)
+    manage_server = models.BooleanField(default=False)
+    manage_invites = models.BooleanField(default=False)
+    manage_nicknames = models.BooleanField(default=False)
+    # Выгонять/одобрять заявки/банить/разбанить участников.
+    manage_members = models.BooleanField(default=False)
+
+    # --- права текстового канала ---
+    send_messages = models.BooleanField(default=True)
+    delete_messages = models.BooleanField(default=False)
+    mention_everyone = models.BooleanField(default=False)
+
+    # --- права голосового канала ---
+    speak = models.BooleanField(default=True)
+    video = models.BooleanField(default=True)
+
+    class Meta:
+        ordering = ["-position", "id"]
+
+    def __str__(self) -> str:
+        return f"{self.name} @ {self.server_id}"
 
 
 class Membership(models.Model):
@@ -29,12 +107,59 @@ class Membership(models.Model):
         related_name="memberships",
     )
     joined_at = models.DateTimeField(auto_now_add=True)
+    # Роль по умолчанию (is_default) сюда не пишется — она и так действует
+    # на всех участников, см. chat.roles.permissions_for.
+    roles = models.ManyToManyField(Role, blank=True, related_name="members")
 
     class Meta:
         unique_together = ("user", "server")
 
     def __str__(self) -> str:
         return f"{self.user} @ {self.server}"
+
+
+class ServerJoinRequest(models.Model):
+    """Заявка на вступление — создаётся вместо мгновенного Membership, если
+    сервер принимает по заявке (Server.ACCESS_REQUEST). Одобрение/отклонение —
+    вкладка «Запросы» редактора сервера (нужно право manage_members)."""
+
+    server = models.ForeignKey(
+        Server, on_delete=models.CASCADE, related_name="join_requests")
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+        related_name="server_join_requests")
+    message = models.TextField(blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ("server", "user")
+        ordering = ["created_at", "id"]
+
+    def __str__(self) -> str:
+        return f"{self.user} -> {self.server}"
+
+
+class ServerBan(models.Model):
+    """Бан на сервере («ЧС списочек»). Пока строка есть — вступить нельзя,
+    а участник при бане теряет Membership (см. chat.views.ServerMemberBan)."""
+
+    server = models.ForeignKey(
+        Server, on_delete=models.CASCADE, related_name="bans")
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+        related_name="server_bans")
+    banned_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True,
+        blank=True, related_name="issued_server_bans")
+    reason = models.CharField(max_length=300, blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ("server", "user")
+        ordering = ["-created_at", "id"]
+
+    def __str__(self) -> str:
+        return f"{self.user} banned @ {self.server}"
 
 
 class Channel(models.Model):

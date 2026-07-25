@@ -15,15 +15,16 @@ from rest_framework.views import APIView
 from accounts.models import Friendship
 from accounts.serializers import UserSerializer
 
-from . import presence, sfu
+from . import presence, roles, sfu
 from .models import (
     Channel, Conversation, ConversationMessage, ConversationParticipant,
-    Membership, Message, Server, dm_room,
+    Membership, Message, Role, Server, ServerBan, ServerJoinRequest, dm_room,
 )
 from .permissions import are_friends, can_dm
 from .serializers import (
     ChannelSerializer, ConversationMessageSerializer, ConversationSerializer,
-    MessageSerializer, ServerSerializer,
+    MessageSerializer, RoleSerializer, ServerBanSerializer,
+    ServerJoinRequestSerializer, ServerSerializer, ServerUpdateSerializer,
 )
 
 User = get_user_model()
@@ -31,6 +32,31 @@ User = get_user_model()
 
 def is_member(user, server) -> bool:
     return Membership.objects.filter(user=user, server=server).exists()
+
+
+def _require_permission(request, server, permission):
+    """Общая проверка доступа к «управляющим» ручкам сервера: возвращает
+    готовый 403-Response, если права нет, иначе None. Не участник сервера
+    прав не имеет вообще (см. chat.roles.permissions_for), так что отдельная
+    проверка членства тут не нужна."""
+    if roles.has_permission(request.user, server, permission):
+        return None
+    return Response({"detail": "Недостаточно прав на сервере."}, status=403)
+
+
+def _broadcast_server_update(server, request=None):
+    """Разослать участникам обновлённый сервер — иначе изменения из редактора
+    (имя, значок, каналы в правах и т.п.) видит только тот, кто их внёс, до
+    перезагрузки страницы. Тот же приём, что и channel_create."""
+    channel_layer = get_channel_layer()
+    async_to_sync(channel_layer.group_send)(
+        f"server_{server.id}", {"type": "broadcast", "payload": {
+            "op": "server_update",
+            # Без request в контексте my_permissions уедет пустым — фронт
+            # мержит только «общие» поля сервера, свои права он уже знает
+            # из первоначальной загрузки (см. AppShell: server_update).
+            "server": ServerSerializer(server).data,
+        }})
 
 
 def is_participant(user, conversation) -> bool:
@@ -52,7 +78,8 @@ def _notify_user(user_id, payload):
 class ServerListCreate(APIView):
     def get(self, request):
         servers = Server.objects.filter(memberships__user=request.user).distinct()
-        return Response(ServerSerializer(servers, many=True).data)
+        return Response(
+            ServerSerializer(servers, many=True, context={"request": request}).data)
 
     @transaction.atomic
     def post(self, request):
@@ -61,12 +88,16 @@ class ServerListCreate(APIView):
             return Response({"detail": "Нужно имя сервера."}, status=400)
         server = Server.objects.create(name=name, owner=request.user)
         Membership.objects.create(user=request.user, server=server)
+        # Роль по умолчанию (аналог @everyone) — есть на каждом сервере,
+        # именно её права действуют на всех участников без ролей.
+        roles.create_default_role(server)
         # Каналы по умолчанию — как в Discord.
         Channel.objects.create(server=server, name="general",
                                kind=Channel.TEXT, position=0)
         Channel.objects.create(server=server, name="General",
                                kind=Channel.VOICE, position=1)
-        return Response(ServerSerializer(server).data, status=201)
+        return Response(
+            ServerSerializer(server, context={"request": request}).data, status=201)
 
 
 class ServerDiscover(APIView):
@@ -74,14 +105,31 @@ class ServerDiscover(APIView):
 
     def get(self, request):
         servers = Server.objects.all().order_by("-created_at")
+        my_requests = set(
+            ServerJoinRequest.objects.filter(user=request.user).values_list(
+                "server_id", flat=True)
+        )
         data = []
         for s in servers:
-            data.append({
+            member = is_member(request.user, s)
+            entry = {
                 "id": s.id,
                 "name": s.name,
+                "icon": s.icon,
                 "member_count": s.memberships.count(),
-                "is_member": is_member(request.user, s),
-            })
+                "is_member": member,
+                "is_private": s.is_private,
+                "access_mode": s.access_mode,
+                "age_restricted": s.age_restricted,
+                "request_pending": s.id in my_requests,
+            }
+            # Приватный сервер показывает посторонним только имя и значок —
+            # описание/особенности видят лишь участники (см. Server.is_private).
+            if s.is_private and not member:
+                entry.update({"description": "", "tags": []})
+            else:
+                entry.update({"description": s.description, "tags": s.tags})
+            data.append(entry)
         return Response(data)
 
 
@@ -90,14 +138,70 @@ class ServerDetail(APIView):
         server = get_object_or_404(Server, id=server_id)
         if not is_member(request.user, server):
             return Response({"detail": "Вы не участник сервера."}, status=403)
-        return Response(ServerSerializer(server).data)
+        return Response(
+            ServerSerializer(server, context={"request": request}).data)
+
+    def patch(self, request, server_id):
+        """Вкладки «Профиль» и «Доступ» редактора сервера."""
+        server = get_object_or_404(Server, id=server_id)
+        denied = _require_permission(request, server, "manage_server")
+        if denied:
+            return denied
+        serializer = ServerUpdateSerializer(server, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        _broadcast_server_update(server)
+        return Response(
+            ServerSerializer(server, context={"request": request}).data)
 
 
 class ServerJoin(APIView):
+    """Вступление с учётом вкладки «Доступ»: публичный сервер пускает сразу,
+    «по заявке» — создаёт ServerJoinRequest (ждём одобрения), «только по
+    приглашению» — отказ. Забаненных не пускает ни в каком режиме."""
+
     def post(self, request, server_id):
         server = get_object_or_404(Server, id=server_id)
+        if is_member(request.user, server):
+            return Response(
+                ServerSerializer(server, context={"request": request}).data, status=200)
+
+        if ServerBan.objects.filter(server=server, user=request.user).exists():
+            return Response({"detail": "Вы забанены на этом сервере."}, status=403)
+
+        if server.access_mode == Server.ACCESS_INVITE:
+            return Response(
+                {"detail": "Сервер только по приглашению."}, status=403)
+
+        if server.access_mode == Server.ACCESS_REQUEST:
+            join_request, created = ServerJoinRequest.objects.get_or_create(
+                server=server, user=request.user,
+                defaults={"message": str(request.data.get("message") or "")[:2000]},
+            )
+            if created:
+                _notify_server_managers(server, {
+                    "op": "server_join_request",
+                    "server_id": server.id,
+                    "request": ServerJoinRequestSerializer(join_request).data,
+                })
+            return Response(
+                {"status": "pending", "detail": "Заявка отправлена — ждите одобрения."},
+                status=202,
+            )
+
         Membership.objects.get_or_create(user=request.user, server=server)
-        return Response(ServerSerializer(server).data, status=200)
+        return Response(
+            ServerSerializer(server, context={"request": request}).data, status=200)
+
+
+def _notify_server_managers(server, payload):
+    """Уведомление о событии, которое интересно только модерации сервера
+    (новая заявка на вступление). Шлём в общую группу сервера — фронт сам
+    решает, показывать ли (у него уже есть свои my_permissions), потому что
+    персональные группы пришлось бы перебирать по всем участникам."""
+    channel_layer = get_channel_layer()
+    async_to_sync(channel_layer.group_send)(
+        f"server_{server.id}", {"type": "broadcast", "payload": payload})
 
 
 class ServerMembers(APIView):
@@ -105,9 +209,10 @@ class ServerMembers(APIView):
         server = get_object_or_404(Server, id=server_id)
         if not is_member(request.user, server):
             return Response({"detail": "Вы не участник сервера."}, status=403)
-        members = [m.user for m in server.memberships.select_related("user")]
+        memberships = server.memberships.select_related("user").prefetch_related("roles")
         data = []
-        for u in members:
+        for m in memberships:
+            u = m.user
             is_on = presence.is_online(u.id)
             eff_status = presence.effective_status(u, is_on)
             flags = presence.voice_flags(u.id)
@@ -119,10 +224,178 @@ class ServerMembers(APIView):
                 "muted": flags["muted"],
                 "deafened": flags["deafened"],
                 "sharing_screen": flags["sharing_screen"],
+                "role_ids": [r.id for r in m.roles.all()],
+                "is_owner": u.id == server.owner_id,
             })
         # Онлайн сверху, затем по имени.
         data.sort(key=lambda x: (not x["online"], x["username"].lower()))
         return Response(data)
+
+
+class ServerMemberDetail(APIView):
+    """Выдача ролей участнику (PATCH {"role_ids": [...]}) и исключение
+    его с сервера (DELETE) — вкладка «Роли» редактора."""
+
+    def patch(self, request, server_id, user_id):
+        server = get_object_or_404(Server, id=server_id)
+        denied = _require_permission(request, server, "manage_roles")
+        if denied:
+            return denied
+        membership = get_object_or_404(Membership, server=server, user_id=user_id)
+        role_ids = request.data.get("role_ids")
+        if not isinstance(role_ids, list):
+            return Response({"detail": "role_ids — список id ролей."}, status=400)
+        # Роль по умолчанию действует на всех и не выдаётся персонально —
+        # молча отбрасываем её, чтобы фронт не мог создать расхождение.
+        valid = Role.objects.filter(
+            server=server, id__in=role_ids, is_default=False)
+        membership.roles.set(valid)
+        return Response({"user_id": user_id, "role_ids": [r.id for r in valid]})
+
+    def delete(self, request, server_id, user_id):
+        """Выгнать участника (без бана — вступить сможет снова)."""
+        server = get_object_or_404(Server, id=server_id)
+        denied = _require_permission(request, server, "manage_members")
+        if denied:
+            return denied
+        if user_id == server.owner_id:
+            return Response({"detail": "Нельзя выгнать владельца сервера."}, status=400)
+        Membership.objects.filter(server=server, user_id=user_id).delete()
+        return Response(status=204)
+
+
+class ServerRoles(APIView):
+    """GET — список ролей сервера (виден всем участникам: фронту нужны имена
+    и цвета), POST — создать роль (нужно manage_roles)."""
+
+    def get(self, request, server_id):
+        server = get_object_or_404(Server, id=server_id)
+        if not is_member(request.user, server):
+            return Response({"detail": "Вы не участник сервера."}, status=403)
+        return Response(RoleSerializer(server.roles.all(), many=True).data)
+
+    def post(self, request, server_id):
+        server = get_object_or_404(Server, id=server_id)
+        denied = _require_permission(request, server, "manage_roles")
+        if denied:
+            return denied
+        serializer = RoleSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        # Роль по умолчанию на сервере ровно одна и создаётся вместе с ним —
+        # через API вторую завести нельзя.
+        serializer.save(server=server, is_default=False)
+        return Response(serializer.data, status=201)
+
+
+class ServerRoleDetail(APIView):
+    def patch(self, request, server_id, role_id):
+        server = get_object_or_404(Server, id=server_id)
+        denied = _require_permission(request, server, "manage_roles")
+        if denied:
+            return denied
+        role = get_object_or_404(Role, id=role_id, server=server)
+        serializer = RoleSerializer(role, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save(is_default=role.is_default)
+        return Response(serializer.data)
+
+    def delete(self, request, server_id, role_id):
+        server = get_object_or_404(Server, id=server_id)
+        denied = _require_permission(request, server, "manage_roles")
+        if denied:
+            return denied
+        role = get_object_or_404(Role, id=role_id, server=server)
+        if role.is_default:
+            return Response(
+                {"detail": "Роль по умолчанию удалить нельзя."}, status=400)
+        role.delete()
+        return Response(status=204)
+
+
+class ServerJoinRequests(APIView):
+    """Вкладка «Запросы» — заявки на вступление."""
+
+    def get(self, request, server_id):
+        server = get_object_or_404(Server, id=server_id)
+        denied = _require_permission(request, server, "manage_members")
+        if denied:
+            return denied
+        qs = server.join_requests.select_related("user")
+        return Response(ServerJoinRequestSerializer(qs, many=True).data)
+
+
+class ServerJoinRequestDecision(APIView):
+    """POST — одобрить заявку (создаёт Membership), DELETE — отклонить."""
+
+    def post(self, request, server_id, request_id):
+        server = get_object_or_404(Server, id=server_id)
+        denied = _require_permission(request, server, "manage_members")
+        if denied:
+            return denied
+        join_request = get_object_or_404(
+            ServerJoinRequest, id=request_id, server=server)
+        Membership.objects.get_or_create(user=join_request.user, server=server)
+        user_id = join_request.user_id
+        join_request.delete()
+        # Заявитель узнаёт об одобрении сразу — он не подписан на группу
+        # сервера, пока не стал участником, поэтому личным уведомлением.
+        _notify_user(user_id, {
+            "op": "server_join_approved",
+            "server": ServerSerializer(server).data,
+        })
+        return Response({"status": "approved", "user_id": user_id})
+
+    def delete(self, request, server_id, request_id):
+        server = get_object_or_404(Server, id=server_id)
+        denied = _require_permission(request, server, "manage_members")
+        if denied:
+            return denied
+        get_object_or_404(
+            ServerJoinRequest, id=request_id, server=server).delete()
+        return Response(status=204)
+
+
+class ServerBans(APIView):
+    """Вкладка «ЧС списочек»: GET — список банов, POST {"user_id", "reason"} —
+    забанить (участник заодно теряет членство)."""
+
+    def get(self, request, server_id):
+        server = get_object_or_404(Server, id=server_id)
+        denied = _require_permission(request, server, "manage_members")
+        if denied:
+            return denied
+        qs = server.bans.select_related("user", "banned_by")
+        return Response(ServerBanSerializer(qs, many=True).data)
+
+    @transaction.atomic
+    def post(self, request, server_id):
+        server = get_object_or_404(Server, id=server_id)
+        denied = _require_permission(request, server, "manage_members")
+        if denied:
+            return denied
+        target = get_object_or_404(User, id=request.data.get("user_id"))
+        if target.id == server.owner_id:
+            return Response({"detail": "Нельзя забанить владельца сервера."}, status=400)
+        ban, _created = ServerBan.objects.get_or_create(
+            server=server, user=target,
+            defaults={
+                "banned_by": request.user,
+                "reason": str(request.data.get("reason") or "")[:300],
+            },
+        )
+        Membership.objects.filter(server=server, user=target).delete()
+        ServerJoinRequest.objects.filter(server=server, user=target).delete()
+        return Response(ServerBanSerializer(ban).data, status=201)
+
+
+class ServerBanDetail(APIView):
+    def delete(self, request, server_id, user_id):
+        server = get_object_or_404(Server, id=server_id)
+        denied = _require_permission(request, server, "manage_members")
+        if denied:
+            return denied
+        ServerBan.objects.filter(server=server, user_id=user_id).delete()
+        return Response(status=204)
 
 
 class FriendsView(APIView):
@@ -370,11 +643,9 @@ class ChannelCreate(APIView):
         server = get_object_or_404(Server, id=server_id)
         if not is_member(request.user, server):
             return Response({"detail": "Вы не участник сервера."}, status=403)
-        if request.user.id != server.owner_id:
-            return Response(
-                {"detail": "Только владелец сервера может создавать каналы."},
-                status=403,
-            )
+        denied = _require_permission(request, server, "manage_channels")
+        if denied:
+            return denied
         name = (request.data.get("name") or "").strip()
         kind = request.data.get("kind", Channel.TEXT)
         if not name:

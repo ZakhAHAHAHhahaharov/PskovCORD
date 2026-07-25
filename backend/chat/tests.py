@@ -17,10 +17,12 @@ from django.test import TestCase, TransactionTestCase
 from rest_framework.test import APIClient, APITestCase
 from rest_framework_simplejwt.tokens import AccessToken
 
-from . import presence, sfu, turn
+from . import presence, roles, sfu, turn
 from .consumers import GatewayConsumer
 from .middleware import JWTAuthMiddleware
-from .models import Channel, Membership, Message, Server
+from .models import (
+    Channel, Membership, Message, Role, Server, ServerJoinRequest,
+)
 
 User = get_user_model()
 
@@ -346,6 +348,241 @@ class ChannelCreatePermissionTests(APITestCase):
             {"name": "объявления", "kind": "text"},
         )
         self.assertEqual(resp.status_code, 403)
+
+
+class ServerRolePermissionTests(APITestCase):
+    """Права из ролей (chat/roles.py): роль по умолчанию действует на всех,
+    выданная роль добавляет права, владелец всегда может всё."""
+
+    def setUp(self):
+        self.owner = User.objects.create_user(username="rp_owner", password="pw12345")
+        self.member = User.objects.create_user(username="rp_member", password="pw12345")
+        self.server = Server.objects.create(name="s", owner=self.owner)
+        Membership.objects.create(user=self.owner, server=self.server)
+        self.membership = Membership.objects.create(user=self.member, server=self.server)
+        self.default_role = roles.create_default_role(self.server)
+
+    def test_owner_has_every_permission(self):
+        perms = roles.permissions_for(self.owner, self.server)
+        self.assertTrue(all(perms.values()))
+
+    def test_plain_member_gets_only_default_role_permissions(self):
+        perms = roles.permissions_for(self.member, self.server)
+        self.assertTrue(perms["send_messages"])
+        self.assertFalse(perms["manage_server"])
+
+    def test_granted_role_adds_permission(self):
+        role = Role.objects.create(
+            server=self.server, name="модер", manage_server=True)
+        self.membership.roles.add(role)
+        perms = roles.permissions_for(self.member, self.server)
+        self.assertTrue(perms["manage_server"])
+        # Права складываются, а не заменяются — базовые остаются.
+        self.assertTrue(perms["send_messages"])
+
+    def test_non_member_has_no_permissions(self):
+        stranger = User.objects.create_user(username="rp_stranger", password="pw12345")
+        perms = roles.permissions_for(stranger, self.server)
+        self.assertFalse(any(perms.values()))
+
+    def test_default_role_can_revoke_sending(self):
+        self.default_role.send_messages = False
+        self.default_role.save(update_fields=["send_messages"])
+        perms = roles.permissions_for(self.member, self.server)
+        self.assertFalse(perms["send_messages"])
+
+    def test_server_without_default_role_falls_back_to_base(self):
+        """Роль по умолчанию удалили мимо API — участник остаётся рядовым,
+        а не теряет вообще всё (см. roles.BASE_MEMBER_PERMISSIONS)."""
+        self.default_role.delete()
+        perms = roles.permissions_for(self.member, self.server)
+        self.assertTrue(perms["send_messages"])
+        self.assertFalse(perms["manage_server"])
+
+    def test_patch_server_requires_manage_server(self):
+        self.client.force_authenticate(self.member)
+        resp = self.client.patch(
+            f"/api/servers/{self.server.id}", {"name": "чужой"}, format="json")
+        self.assertEqual(resp.status_code, 403)
+
+        self.client.force_authenticate(self.owner)
+        resp = self.client.patch(
+            f"/api/servers/{self.server.id}", {"name": "новое имя"}, format="json")
+        self.assertEqual(resp.status_code, 200)
+        self.server.refresh_from_db()
+        self.assertEqual(self.server.name, "новое имя")
+
+    def test_roles_crud_requires_manage_roles(self):
+        self.client.force_authenticate(self.member)
+        self.assertEqual(
+            self.client.post(
+                f"/api/servers/{self.server.id}/roles", {"name": "x"}, format="json",
+            ).status_code,
+            403,
+        )
+
+        self.client.force_authenticate(self.owner)
+        resp = self.client.post(
+            f"/api/servers/{self.server.id}/roles", {"name": "модер"}, format="json")
+        self.assertEqual(resp.status_code, 201)
+        role_id = resp.data["id"]
+        # Роль по умолчанию через API не создаётся — только вместе с сервером.
+        self.assertFalse(resp.data["is_default"])
+        self.assertEqual(
+            self.client.delete(
+                f"/api/servers/{self.server.id}/roles/{role_id}").status_code,
+            204,
+        )
+
+    def test_default_role_cannot_be_deleted(self):
+        self.client.force_authenticate(self.owner)
+        resp = self.client.delete(
+            f"/api/servers/{self.server.id}/roles/{self.default_role.id}")
+        self.assertEqual(resp.status_code, 400)
+
+    def test_member_role_assignment(self):
+        role = Role.objects.create(server=self.server, name="модер")
+        self.client.force_authenticate(self.owner)
+        resp = self.client.patch(
+            f"/api/servers/{self.server.id}/members/{self.member.id}",
+            {"role_ids": [role.id, self.default_role.id]},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 200)
+        # Роль по умолчанию не выдаётся персонально — молча отбрасывается.
+        self.assertEqual(list(self.membership.roles.values_list("id", flat=True)), [role.id])
+
+
+class ServerAccessTests(APITestCase):
+    """Вкладка «Доступ»: режимы вступления, заявки и баны."""
+
+    def setUp(self):
+        self.owner = User.objects.create_user(username="ac_owner", password="pw12345")
+        self.outsider = User.objects.create_user(username="ac_out", password="pw12345")
+        self.server = Server.objects.create(name="s", owner=self.owner)
+        Membership.objects.create(user=self.owner, server=self.server)
+        roles.create_default_role(self.server)
+
+    def test_public_server_joins_immediately(self):
+        self.client.force_authenticate(self.outsider)
+        resp = self.client.post(f"/api/servers/{self.server.id}/join")
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(
+            Membership.objects.filter(user=self.outsider, server=self.server).exists())
+
+    def test_invite_only_server_refuses(self):
+        self.server.access_mode = Server.ACCESS_INVITE
+        self.server.save(update_fields=["access_mode"])
+        self.client.force_authenticate(self.outsider)
+        resp = self.client.post(f"/api/servers/{self.server.id}/join")
+        self.assertEqual(resp.status_code, 403)
+        self.assertFalse(
+            Membership.objects.filter(user=self.outsider, server=self.server).exists())
+
+    def test_request_mode_creates_join_request_and_approval_adds_member(self):
+        self.server.access_mode = Server.ACCESS_REQUEST
+        self.server.save(update_fields=["access_mode"])
+        self.client.force_authenticate(self.outsider)
+        resp = self.client.post(f"/api/servers/{self.server.id}/join")
+        self.assertEqual(resp.status_code, 202)
+        self.assertFalse(
+            Membership.objects.filter(user=self.outsider, server=self.server).exists())
+
+        join_request = ServerJoinRequest.objects.get(
+            server=self.server, user=self.outsider)
+        self.client.force_authenticate(self.owner)
+        resp = self.client.post(
+            f"/api/servers/{self.server.id}/requests/{join_request.id}")
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(
+            Membership.objects.filter(user=self.outsider, server=self.server).exists())
+        self.assertFalse(ServerJoinRequest.objects.filter(id=join_request.id).exists())
+
+    def test_join_requests_hidden_from_regular_member(self):
+        member = User.objects.create_user(username="ac_member", password="pw12345")
+        Membership.objects.create(user=member, server=self.server)
+        self.client.force_authenticate(member)
+        resp = self.client.get(f"/api/servers/{self.server.id}/requests")
+        self.assertEqual(resp.status_code, 403)
+
+    def test_ban_removes_membership_and_blocks_rejoin(self):
+        Membership.objects.create(user=self.outsider, server=self.server)
+        self.client.force_authenticate(self.owner)
+        resp = self.client.post(
+            f"/api/servers/{self.server.id}/bans",
+            {"user_id": self.outsider.id, "reason": "флуд"},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 201)
+        self.assertFalse(
+            Membership.objects.filter(user=self.outsider, server=self.server).exists())
+
+        self.client.force_authenticate(self.outsider)
+        self.assertEqual(
+            self.client.post(f"/api/servers/{self.server.id}/join").status_code, 403)
+
+        self.client.force_authenticate(self.owner)
+        self.assertEqual(
+            self.client.delete(
+                f"/api/servers/{self.server.id}/bans/{self.outsider.id}").status_code,
+            204,
+        )
+        self.client.force_authenticate(self.outsider)
+        self.assertEqual(
+            self.client.post(f"/api/servers/{self.server.id}/join").status_code, 200)
+
+    def test_owner_cannot_be_banned(self):
+        self.client.force_authenticate(self.owner)
+        resp = self.client.post(
+            f"/api/servers/{self.server.id}/bans",
+            {"user_id": self.owner.id},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 400)
+
+    def test_private_server_hides_description_from_outsiders(self):
+        self.server.is_private = True
+        self.server.description = "секретное описание"
+        self.server.tags = ["тайна"]
+        self.server.save(update_fields=["is_private", "description", "tags"])
+
+        self.client.force_authenticate(self.outsider)
+        entry = next(
+            s for s in self.client.get("/api/servers/discover").data
+            if s["id"] == self.server.id
+        )
+        self.assertEqual(entry["name"], self.server.name)  # имя видно всем
+        self.assertEqual(entry["description"], "")
+        self.assertEqual(entry["tags"], [])
+
+        self.client.force_authenticate(self.owner)
+        entry = next(
+            s for s in self.client.get("/api/servers/discover").data
+            if s["id"] == self.server.id
+        )
+        self.assertEqual(entry["description"], "секретное описание")
+
+    def test_server_profile_validation(self):
+        self.client.force_authenticate(self.owner)
+        resp = self.client.patch(
+            f"/api/servers/{self.server.id}",
+            {"banner_gradient": "url(javascript:alert(1))"},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 400)
+
+        resp = self.client.patch(
+            f"/api/servers/{self.server.id}",
+            {
+                "banner_gradient": "linear-gradient(90deg, #112233 0%, #445566 100%)",
+                "rules": [{"title": "Без флуда", "text": "Не спамьте.", "лишнее": 1}],
+            },
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 200)
+        # Лишние ключи в правилах отбрасываются — в JSONField только title/text.
+        self.assertEqual(
+            resp.data["rules"], [{"title": "Без флуда", "text": "Не спамьте."}])
 
 
 class GatewayVoiceSignalingTests(TransactionTestCase):
