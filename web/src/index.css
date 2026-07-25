@@ -1294,8 +1294,10 @@ input {
   display: flex;
   align-items: center;
   gap: 10px;
+  width: 100%;
   padding: 5px 8px;
   border-radius: 4px;
+  text-align: left;
 }
 
 .member-row:hover {
