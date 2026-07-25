@@ -1,5 +1,5 @@
-import { useLayoutEffect, useRef } from 'react'
-import { UserPlus, MessageSquare } from 'lucide-react'
+import { useLayoutEffect, useRef, useState, KeyboardEvent as ReactKeyboardEvent } from 'react'
+import { UserPlus, MessageSquare, Smile } from 'lucide-react'
 import Avatar from './Avatar'
 
 export interface ProfilePopupUser {
@@ -35,6 +35,7 @@ export default function MiniProfilePopup({
   onClose: () => void
 }) {
   const ref = useRef<HTMLDivElement>(null)
+  const [composing, setComposing] = useState(false)
   const { user } = target
   const isSelf = user.id === currentUserId
 
@@ -74,6 +75,13 @@ export default function MiniProfilePopup({
 
   const notImplemented = () => alert('not implemented yet')
 
+  const handleComposeKeyDown = (e: ReactKeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      e.preventDefault()
+      alert('not implemented yet')
+    }
+  }
+
   return (
     <div
       ref={ref}
@@ -100,12 +108,39 @@ export default function MiniProfilePopup({
 
       {!isSelf && (
         <div className="profile-popup-menu">
-          <button type="button" className="profile-popup-item" onClick={notImplemented}>
+          <button
+            type="button"
+            className="profile-popup-item mini-profile-action"
+            onClick={notImplemented}
+          >
             <UserPlus size={15} /> Добавить в друзья
           </button>
-          <button type="button" className="profile-popup-item" onClick={notImplemented}>
-            <MessageSquare size={15} /> Написать сообщение
-          </button>
+          {composing ? (
+            <div className="mini-profile-compose">
+              <input
+                className="mini-profile-compose-input"
+                placeholder={`Сообщение для ${user.username}`}
+                onKeyDown={handleComposeKeyDown}
+                autoFocus
+              />
+              <button
+                type="button"
+                className="mini-profile-compose-emoji"
+                title="Эмодзи"
+                onClick={notImplemented}
+              >
+                <Smile size={16} />
+              </button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              className="profile-popup-item mini-profile-action"
+              onClick={() => setComposing(true)}
+            >
+              <MessageSquare size={15} /> Написать сообщение
+            </button>
+          )}
         </div>
       )}
     </div>
