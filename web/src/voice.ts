@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, useRef, useState } from 'react'
 import type { VoiceState } from './components/AppShell'
 import { SfuClient } from './sfu'
-import { playDisconnectSound, playReconnectedSound, playScreenShareStopSound } from './sounds'
+import { playDisconnectSound, playReconnectedSound } from './sounds'
 import { useSettings } from './settings'
 
 interface VoiceGateway {
@@ -392,14 +392,6 @@ export function useVoiceMesh(
       mutedBeforeDeafen.current = false
       setMuted(true)
       setDeafened(false)
-      // Тот же баг, что и с обычным звуком выхода (см. AppShell.handleLeaveVoice):
-      // при выходе/переключении канала isChannelVoice/voice успевают стать
-      // false/сменить room.id раньше, чем members-эффект в AppShell заметит
-      // собственное исчезновение из ростера демонстрирующих — сами себе звук
-      // выключения демки никогда бы не услышали. Играем его здесь явно, раз
-      // уж это единственное место, которое достоверно знает, что демка была
-      // активна именно у нас в момент разрыва/смены комнаты.
-      if (isSharingScreenRef.current) playScreenShareStopSound()
       setIsSharingScreen(false)
       setOwnScreenStream(null)
       setStatus('connecting')
