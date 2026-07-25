@@ -1,7 +1,8 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, MouseEvent as ReactMouseEvent } from 'react'
 import { Reply, Pencil, Trash2 } from 'lucide-react'
 import { Message } from '../api'
 import Avatar from './Avatar'
+import { ProfilePopupUser } from './MiniProfilePopup'
 
 function formatTime(iso: string): string {
   const d = new Date(iso)
@@ -21,6 +22,7 @@ export default function MessageList({
   onDelete,
   onEditRequest,
   onReply,
+  onOpenProfile,
 }: {
   messages: Message[]
   currentUserId: number
@@ -31,6 +33,7 @@ export default function MessageList({
   onDelete: (messageId: number) => void
   onEditRequest: (message: Message) => void
   onReply: (message: Message) => void
+  onOpenProfile: (user: ProfilePopupUser, e: ReactMouseEvent) => void
 }) {
   const bottomRef = useRef<HTMLDivElement>(null)
 
@@ -56,12 +59,18 @@ export default function MessageList({
             key={m.id}
             className={`message-row ${editingId === m.id ? 'editing' : ''}`}
           >
-            <Avatar
-              name={m.author.username}
-              color={m.author.avatar_color}
-              image={m.author.avatar_image}
-              size={40}
-            />
+            <button
+              type="button"
+              className="avatar-trigger"
+              onClick={(e) => onOpenProfile(m.author, e)}
+            >
+              <Avatar
+                name={m.author.username}
+                color={m.author.avatar_color}
+                image={m.author.avatar_image}
+                size={40}
+              />
+            </button>
             <div className="message-body">
               {m.reply_to && (
                 <div className="message-reply-quote">
@@ -70,7 +79,12 @@ export default function MessageList({
                 </div>
               )}
               <div className="message-meta">
-                <span className="message-author">{m.author.username}</span>
+                <span
+                  className="message-author profile-trigger-name"
+                  onClick={(e) => onOpenProfile(m.author, e)}
+                >
+                  {m.author.username}
+                </span>
                 <span className="message-time">{formatTime(m.created_at)}</span>
                 {m.edited_at && <span className="message-edited">(изменено)</span>}
               </div>

@@ -620,6 +620,7 @@ input {
 .profile-popup-item {
   display: flex;
   align-items: center;
+  gap: 8px;
   padding: 8px 10px;
   border-radius: 4px;
   font-size: 14px;
@@ -629,6 +630,27 @@ input {
 
 .profile-popup-item:hover {
   background: var(--channel-hover);
+}
+
+/* ---- mini-profile popup (клик по аватарке/нику в чате, ростере, войсе) ---- */
+.mini-profile-popup {
+  position: fixed;
+  z-index: 90;
+  box-shadow: 0 8px 16px rgba(0, 0, 0, 0.32);
+}
+
+.avatar-trigger {
+  display: block;
+  padding: 0;
+  cursor: pointer;
+}
+
+.profile-trigger-name {
+  cursor: pointer;
+}
+
+.profile-trigger-name:hover {
+  text-decoration: underline;
 }
 
 .profile-popup-divider {

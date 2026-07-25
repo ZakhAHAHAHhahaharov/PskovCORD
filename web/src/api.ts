@@ -52,7 +52,7 @@ export interface Message {
   edited_at: string | null
 }
 
-export interface Member extends Omit<User, 'status' | 'banner_gradient' | 'banner_image'> {
+export interface Member extends Omit<User, 'status'> {
   online: boolean
   voice_channel: string | null
   status: EffectiveStatus
