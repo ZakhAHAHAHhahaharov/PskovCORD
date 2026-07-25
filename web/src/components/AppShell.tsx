@@ -587,6 +587,10 @@ export default function AppShell() {
   }
 
   const handleLeaveVoice = useCallback(() => {
+    // Себе самому звук выхода не прилетит через ростер (isChannelVoice/voice
+    // уже станут false к моменту, когда эффект ниже увидит изменение members),
+    // поэтому играем его явно здесь, в момент собственного выхода.
+    playLeaveSound()
     gateway.voiceLeave()
     setVoice(null)
   }, [gateway])
