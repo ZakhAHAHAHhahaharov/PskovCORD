@@ -698,6 +698,12 @@ class GatewayVoiceSignalingTests(TransactionTestCase):
         bob_ws = await self._connect(self.bob)
 
         await self._join_and_drain(alice_ws, self.voice_channel.id)
+        # voice_join сам сбрасывает и рассылает sharing=False на случай, если
+        # флаг демки унаследован из предыдущего канала (см. _handle_voice_join) —
+        # это тоже долетает до боба, отдельно от явного тоггла ниже.
+        join_reset = await self._receive_until(bob_ws, "voice_screen_share_update")
+        self.assertEqual(join_reset["user_id"], self.alice.id)
+        self.assertFalse(join_reset["sharing"])
 
         await alice_ws.send_json_to({
             "op": "voice_screen_share_update", "sharing": True,

@@ -321,6 +321,21 @@ class GatewayConsumer(AsyncWebsocketConsumer):
             return
         peer_ids, emptied_room = await asyncio.to_thread(
             presence.join_voice, self.uid, channel_id)
+        # Демонстрация экрана не переживает смену канала (WebRTC-сессия рвётся
+        # и пересобирается заново) — presence.voice_flags этого сама не знает
+        # (флаг живёт до explicit clear_voice), поэтому глушим его здесь явно
+        # и рассылаем всем на сервере, иначе кто угодно увидит в новом канале
+        # унаследованный из старого канала бейдж «демка», который тут же
+        # погаснет — заметно как ложное включение/выключение одним кликом.
+        await asyncio.to_thread(presence.set_screen_sharing, self.uid, False)
+        await self.channel_layer.group_send(
+            f"server_{server_id}",
+            {"type": "broadcast", "payload": {
+                "op": "voice_screen_share_update",
+                "user_id": self.user.id,
+                "sharing": False,
+            }},
+        )
         peer_flags = await asyncio.to_thread(
             presence.voice_members_flags, channel_id)
         await self._broadcast_voice(self.user.id, channel_id, server_id)

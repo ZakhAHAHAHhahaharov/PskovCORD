@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, useRef, useState } from 'react'
 import type { VoiceState } from './components/AppShell'
 import { SfuClient } from './sfu'
-import { playDisconnectSound, playReconnectedSound } from './sounds'
+import { playDisconnectSound, playReconnectedSound, playScreenShareStopSound } from './sounds'
 import { useSettings } from './settings'
 
 interface VoiceGateway {
@@ -392,6 +392,14 @@ export function useVoiceMesh(
       mutedBeforeDeafen.current = false
       setMuted(true)
       setDeafened(false)
+      // Тот же баг, что и с обычным звуком выхода (см. AppShell.handleLeaveVoice):
+      // при выходе/переключении канала isChannelVoice/voice успевают стать
+      // false/сменить room.id раньше, чем members-эффект в AppShell заметит
+      // собственное исчезновение из ростера демонстрирующих — сами себе звук
+      // выключения демки никогда бы не услышали. Играем его здесь явно, раз
+      // уж это единственное место, которое достоверно знает, что демка была
+      // активна именно у нас в момент разрыва/смены комнаты.
+      if (isSharingScreenRef.current) playScreenShareStopSound()
       setIsSharingScreen(false)
       setOwnScreenStream(null)
       setStatus('connecting')
@@ -413,11 +421,17 @@ export function useVoiceMesh(
 
   // Рассылаем факт демонстрации экрана — виден всем на сервере (не только
   // участникам этого голосового канала), на нём держится бейдж «демка».
+  // Намеренно НЕ зависит от voice?.room.id: при переключении канала cleanup
+  // выше сбрасывает isSharingScreen(false) отдельным рендером — если бы этот
+  // эффект перезапускался ещё и по смене комнаты, он успевал сработать раньше
+  // сброса, со СТАРЫМ isSharingScreen=true, и слал в новый канал ложное
+  // "демка включена", тут же поверх — настоящее "выключена" (сервер и так
+  // сбрасывает флаг при входе в канал, см. _handle_voice_join).
   useEffect(() => {
     if (!voice) return
     gateway.voiceScreenShareUpdate(isSharingScreen)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [voice?.room.id, isSharingScreen])
+  }, [isSharingScreen])
 
   // VAD: анализируем реальные аудио-потоки (свой + remote), которые уже текут
   // через WebRTC, вместо того чтобы гонять "speaking"-события через сеть.
