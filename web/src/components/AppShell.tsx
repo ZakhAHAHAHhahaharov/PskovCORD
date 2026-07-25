@@ -23,6 +23,7 @@ import MembersList from './MembersList'
 import VoiceProvider, { VoiceStatus } from './VoiceProvider'
 import VoiceStage, { VoiceRosterMember } from './VoiceStage'
 import DiscoverModal from './DiscoverModal'
+import ServerSettingsModal from './ServerSettingsModal'
 import SettingsModal from './SettingsModal'
 import ProfileModal from './ProfileModal'
 import MiniProfilePopup, { ProfilePopupTarget, ProfilePopupUser } from './MiniProfilePopup'
@@ -80,6 +81,7 @@ export default function AppShell() {
   const [voice, setVoice] = useState<VoiceState | null>(null)
   const [voiceStatus, setVoiceStatus] = useState<VoiceStatus>('connecting')
   const [showDiscover, setShowDiscover] = useState(false)
+  const [showServerSettings, setShowServerSettings] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
   const [showProfile, setShowProfile] = useState(false)
   const [profilePopup, setProfilePopup] = useState<ProfilePopupTarget | null>(null)
@@ -117,7 +119,8 @@ export default function AppShell() {
   const currentServer = servers.find((s) => s.id === serverId) || null
   const channels = currentServer?.channels || []
   const currentChannel = channels.find((c) => c.id === channelId) || null
-  const isServerOwner = currentServer?.owner === user?.id
+  // Модерация чата — по праву роли (владельцу chat/roles.py выдаёт всё).
+  const canDeleteMessages = !!currentServer?.my_permissions?.delete_messages
   const activeConversation = conversations.find((c) => c.id === activeConversationId) || null
   const dmRoster: VoiceRosterMember[] = Object.values(dmCallParticipants).map((p) => ({
     id: p.id, username: p.username, avatar_color: p.avatar_color, avatar_image: p.avatar_image,
@@ -141,17 +144,20 @@ export default function AppShell() {
     })()
   }, [selectServer])
 
-  // Участники при смене сервера.
-  useEffect(() => {
+  // Участники при смене сервера. Отдельным callback'ом, потому что после
+  // выдачи роли/кика/бана из редактора сервера список нужно перечитать.
+  const reloadMembers = useCallback(async () => {
     if (serverId == null) return
-    ;(async () => {
-      try {
-        setMembers(await api.members(serverId))
-      } catch {
-        setMembers([])
-      }
-    })()
+    try {
+      setMembers(await api.members(serverId))
+    } catch {
+      setMembers([])
+    }
   }, [serverId])
+
+  useEffect(() => {
+    void reloadMembers()
+  }, [reloadMembers])
 
   // Диалоги/группы и друзья — не завязаны на выбранный сервер, нужны сразу
   // (бейдж входящих заявок, доступность домашнего экрана в любой момент).
@@ -271,6 +277,11 @@ export default function AppShell() {
             muted: false,
             deafened: false,
             sharing_screen: false,
+            // Роли/владение приходят только из api.members() — здесь их нет,
+            // ставим пустые: строка ростера ими не пользуется, а редактор
+            // сервера работает с перезагруженным списком (reloadMembers).
+            role_ids: [],
+            is_owner: false,
           },
         ]
       })
@@ -331,6 +342,22 @@ export default function AppShell() {
             : s,
         ),
       )
+    })
+    // Настройки сервера изменил кто-то другой (редактор сервера). Свои
+    // права (my_permissions) в событие не кладутся — они у каждого свои,
+    // поэтому мержим только «общие» поля поверх уже загруженного сервера.
+    const offServerUpdate = gateway.on('server_update', (d) => {
+      setServers((prev) =>
+        prev.map((s) =>
+          s.id === d.server.id
+            ? { ...s, ...d.server, channels: s.channels, my_permissions: s.my_permissions }
+            : s,
+        ),
+      )
+    })
+    // Нашу заявку на вступление одобрили — сервер появляется в списке сразу.
+    const offJoinApproved = gateway.on('server_join_approved', (d) => {
+      setServers((prev) => (prev.some((s) => s.id === d.server.id) ? prev : [...prev, d.server]))
     })
     const offCallState = gateway.on('voice_call_state', (d) => {
       setServers((prev) =>
@@ -459,6 +486,8 @@ export default function AppShell() {
       offScreenShare()
       offProfileUpdate()
       offChannelCreate()
+      offServerUpdate()
+      offJoinApproved()
       offCallState()
       offDmMsg()
       offDmMsgDelete()
@@ -492,6 +521,12 @@ export default function AppShell() {
     selectServer(s)
     setShowDiscover(false)
   }
+
+  // Сохранение из редактора сервера — ответ PATCH уже содержит свежий сервер
+  // со всеми полями и правами, остальным он уедет через server_update.
+  const handleServerUpdated = useCallback((updated: Server) => {
+    setServers((prev) => prev.map((s) => (s.id === updated.id ? updated : s)))
+  }, [])
 
   const handleCreateChannel = async (kind: 'text' | 'voice') => {
     if (serverId == null) return
@@ -917,6 +952,7 @@ export default function AppShell() {
           onLeaveVoice={handleLeaveVoice}
           onOpenSettings={() => setShowSettings(true)}
           onOpenProfile={() => setShowProfile(true)}
+          onOpenUserProfile={openProfilePopup}
         />
       ) : (
         <ChannelSidebar
@@ -934,6 +970,7 @@ export default function AppShell() {
           onOpenSettings={() => setShowSettings(true)}
           onOpenProfile={() => setShowProfile(true)}
           onWatchScreen={handleWatchBadge}
+          onOpenServerSettings={() => setShowServerSettings(true)}
         />
       )}
 
@@ -1025,7 +1062,7 @@ export default function AppShell() {
             <MessageList
               messages={messages}
               currentUserId={user!.id}
-              canModerate={isServerOwner}
+              canModerate={canDeleteMessages}
               editingId={editTarget?.id ?? null}
               onDelete={handleDeleteMessage}
               onEditRequest={handleEditRequest}
@@ -1087,6 +1124,15 @@ export default function AppShell() {
           onJoined={handleJoined}
         />
       )}
+      {showServerSettings && currentServer && (
+        <ServerSettingsModal
+          server={currentServer}
+          members={members}
+          onClose={() => setShowServerSettings(false)}
+          onServerUpdated={handleServerUpdated}
+          onMembersChanged={reloadMembers}
+        />
+      )}
       {showSettings && (
         <SettingsModal onClose={() => setShowSettings(false)} onLogout={logout} />
       )}
@@ -1095,6 +1141,7 @@ export default function AppShell() {
         <MiniProfilePopup
           target={profilePopup}
           currentUserId={user!.id}
+          isFriend={friends.friends.some((f) => f.id === profilePopup.user.id)}
           onClose={() => setProfilePopup(null)}
           onAddFriend={handleMiniProfileAddFriend}
           onSendMessage={handleMiniProfileSendMessage}

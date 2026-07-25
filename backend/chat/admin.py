@@ -1,6 +1,8 @@
 from django.contrib import admin
 
-from .models import Channel, Membership, Message, Server
+from .models import (
+    Channel, Membership, Message, Role, Server, ServerBan, ServerJoinRequest,
+)
 
 
 class ChannelInline(admin.TabularInline):
@@ -30,6 +32,25 @@ class ChannelAdmin(admin.ModelAdmin):
 @admin.register(Membership)
 class MembershipAdmin(admin.ModelAdmin):
     list_display = ("user", "server", "joined_at")
+    search_fields = ("user__username", "server__name")
+
+
+@admin.register(Role)
+class RoleAdmin(admin.ModelAdmin):
+    list_display = ("name", "server", "position", "is_default")
+    list_filter = ("server", "is_default")
+    search_fields = ("name", "server__name")
+
+
+@admin.register(ServerJoinRequest)
+class ServerJoinRequestAdmin(admin.ModelAdmin):
+    list_display = ("user", "server", "created_at")
+    search_fields = ("user__username", "server__name")
+
+
+@admin.register(ServerBan)
+class ServerBanAdmin(admin.ModelAdmin):
+    list_display = ("user", "server", "banned_by", "created_at")
     search_fields = ("user__username", "server__name")
 
 

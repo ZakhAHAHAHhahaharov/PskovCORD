@@ -41,10 +41,16 @@ export default function ServerRail({
         <button
           key={s.id}
           className={`rail-pill ${activeId === s.id ? 'active' : ''}`}
-          title={s.name}
+          // Подсказка при наведении — имя, особенности и описание сервера
+          // (см. вкладку «Профиль» редактора сервера).
+          title={[s.name, s.tags?.join(' · '), s.description].filter(Boolean).join('\n')}
           onClick={() => onSelect(s)}
         >
-          {serverInitials(s.name)}
+          {s.icon ? (
+            <img className="rail-pill-icon" src={s.icon} alt="" />
+          ) : (
+            serverInitials(s.name)
+          )}
         </button>
       ))}
 

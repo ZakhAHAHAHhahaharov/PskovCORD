@@ -28,12 +28,16 @@ export interface ProfilePopupTarget {
 export default function MiniProfilePopup({
   target,
   currentUserId,
+  isFriend,
   onClose,
   onAddFriend,
   onSendMessage,
 }: {
   target: ProfilePopupTarget
   currentUserId: number
+  /** Уже друзья — вместо «Добавить в друзья» показываем пометку (попап
+   * теперь открывается и прямо из списка друзей, см. HomeSidebar). */
+  isFriend: boolean
   onClose: () => void
   onAddFriend: (userId: number) => void
   onSendMessage: (userId: number, content: string) => void
@@ -113,13 +117,19 @@ export default function MiniProfilePopup({
 
       {!isSelf && (
         <div className="profile-popup-menu">
-          <button
-            type="button"
-            className="profile-popup-item mini-profile-action"
-            onClick={() => onAddFriend(user.id)}
-          >
-            <UserPlus size={15} /> Добавить в друзья
-          </button>
+          {isFriend ? (
+            <div className="profile-popup-item mini-profile-note">
+              <UserPlus size={15} /> Уже в друзьях
+            </div>
+          ) : (
+            <button
+              type="button"
+              className="profile-popup-item mini-profile-action"
+              onClick={() => onAddFriend(user.id)}
+            >
+              <UserPlus size={15} /> Добавить в друзья
+            </button>
+          )}
           {composing ? (
             <div className="mini-profile-compose">
               <input

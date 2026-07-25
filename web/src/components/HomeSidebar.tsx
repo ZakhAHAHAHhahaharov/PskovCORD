@@ -1,10 +1,11 @@
-import { useState } from 'react'
+import { useState, MouseEvent as ReactMouseEvent } from 'react'
 import { MessageCircle, Users, UserPlus, Check, X } from 'lucide-react'
 import { Conversation, FriendsState, User } from '../api'
 import Avatar from './Avatar'
 import SidebarBottomBar from './SidebarBottomBar'
 import { VoiceState } from './AppShell'
 import { VoiceStatus } from './VoiceProvider'
+import { ProfilePopupUser } from './MiniProfilePopup'
 
 function conversationTitle(c: Conversation): string {
   if (c.kind === 'group') {
@@ -41,6 +42,7 @@ export default function HomeSidebar({
   onLeaveVoice,
   onOpenSettings,
   onOpenProfile,
+  onOpenUserProfile,
 }: {
   conversations: Conversation[]
   activeConversationId: number | null
@@ -56,6 +58,9 @@ export default function HomeSidebar({
   onLeaveVoice: () => void
   onOpenSettings: () => void
   onOpenProfile: () => void
+  /** Клик по строке друга/заявки — мини-профиль у курсора, как в списке
+   * участников сервера (см. MembersList). */
+  onOpenUserProfile: (user: ProfilePopupUser, e: ReactMouseEvent) => void
 }) {
   const [tab, setTab] = useState<'conversations' | 'friends'>('conversations')
   const [addUsername, setAddUsername] = useState('')
@@ -145,13 +150,19 @@ export default function HomeSidebar({
               <div className="member-category">Входящие заявки</div>
               {friends.incoming.map((r) => (
                 <div key={r.id} className="friend-row">
-                  <Avatar
-                    name={r.user.username}
-                    color={r.user.avatar_color}
-                    image={r.user.avatar_image}
-                    size={28}
-                  />
-                  <span className="member-name">{r.user.username}</span>
+                  <button
+                    type="button"
+                    className="member-row"
+                    onClick={(e) => onOpenUserProfile(r.user, e)}
+                  >
+                    <Avatar
+                      name={r.user.username}
+                      color={r.user.avatar_color}
+                      image={r.user.avatar_image}
+                      size={28}
+                    />
+                    <span className="member-name">{r.user.username}</span>
+                  </button>
                   <div className="friend-row-actions">
                     <button
                       type="button"
@@ -180,13 +191,29 @@ export default function HomeSidebar({
               <div className="member-category">Исходящие заявки</div>
               {friends.outgoing.map((r) => (
                 <div key={r.id} className="friend-row">
-                  <Avatar
-                    name={r.user.username}
-                    color={r.user.avatar_color}
-                    image={r.user.avatar_image}
-                    size={28}
-                  />
-                  <span className="member-name dim">{r.user.username}</span>
+                  <button
+                    type="button"
+                    className="member-row"
+                    onClick={(e) => onOpenUserProfile(r.user, e)}
+                  >
+                    <Avatar
+                      name={r.user.username}
+                      color={r.user.avatar_color}
+                      image={r.user.avatar_image}
+                      size={28}
+                    />
+                    <span className="member-name dim">{r.user.username}</span>
+                  </button>
+                  <div className="friend-row-actions">
+                    <button
+                      type="button"
+                      className="icon-btn"
+                      title="Отозвать заявку"
+                      onClick={() => onDeclineFriendRequest(r.id)}
+                    >
+                      <X size={15} />
+                    </button>
+                  </div>
                 </div>
               ))}
             </>
@@ -198,8 +225,14 @@ export default function HomeSidebar({
           )}
           {friends.friends.map((f) => (
             <div key={f.id} className="friend-row">
-              <Avatar name={f.username} color={f.avatar_color} image={f.avatar_image} size={28} />
-              <span className="member-name">{f.username}</span>
+              <button
+                type="button"
+                className="member-row"
+                onClick={(e) => onOpenUserProfile(f, e)}
+              >
+                <Avatar name={f.username} color={f.avatar_color} image={f.avatar_image} size={28} />
+                <span className="member-name">{f.username}</span>
+              </button>
             </div>
           ))}
         </div>
