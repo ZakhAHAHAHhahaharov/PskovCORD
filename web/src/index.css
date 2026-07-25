@@ -2092,6 +2092,51 @@ input {
   border-radius: inherit;
 }
 
+/* ---- карточка-подсказка при наведении на пилюлю в ServerRail ---- */
+.rail-tooltip {
+  position: fixed;
+  transform: translateY(-50%);
+  z-index: 60;
+  max-width: 260px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: var(--rail-bg, #111214);
+  box-shadow: 0 8px 16px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+}
+
+.rail-tooltip::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: -5px;
+  width: 10px;
+  height: 10px;
+  transform: translateY(-50%) rotate(45deg);
+  background: inherit;
+  border-radius: 2px;
+}
+
+.rail-tooltip-name {
+  font-weight: 700;
+  font-size: 15px;
+  line-height: 1.25;
+  color: var(--text-normal);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.rail-tooltip-sub {
+  font-size: 12px;
+  line-height: 1.35;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
 /* ---- шестерёнка редактора сервера в шапке сайдбара ---- */
 .sidebar-header .icon-btn {
   margin-left: auto;
