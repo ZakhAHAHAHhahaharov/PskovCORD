@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react'
-import { LogOut, Volume2, Mic, AudioWaveform, X } from 'lucide-react'
+import { LogOut, Volume2, Mic, AudioWaveform, X, Image as ImageIcon } from 'lucide-react'
 import { useSettings, DEFAULT_SETTINGS } from '../settings'
 import { useVoice } from '../voice'
 
@@ -150,6 +150,17 @@ export default function SettingsModal({
           срабатывания. Насколько громко нужно говорить, чтобы у остальных загорелось кольцо
           "говорит".
         </p>
+
+        <button
+          className="settings-logout"
+          onClick={() =>
+            window.alert(
+              'Выбор своей иконки вкладки скоро появится здесь. Пока стандартную иконку задаёт администратор через панель Django.',
+            )
+          }
+        >
+          <ImageIcon size={15} /> Иконка сайта (скоро)
+        </button>
 
         <button className="settings-logout" onClick={onLogout}>
           <LogOut size={15} /> Выйти из аккаунта
