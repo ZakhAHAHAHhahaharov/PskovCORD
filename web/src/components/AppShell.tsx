@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, MouseEvent as ReactMouseEvent } from 'react'
 import { api, Channel, Member, Message, Server } from '../api'
 import { useAuth } from '../auth'
 import { useGateway } from '../gateway'
@@ -18,6 +18,7 @@ import VoiceStage from './VoiceStage'
 import DiscoverModal from './DiscoverModal'
 import SettingsModal from './SettingsModal'
 import ProfileModal from './ProfileModal'
+import MiniProfilePopup, { ProfilePopupTarget, ProfilePopupUser } from './MiniProfilePopup'
 
 export interface VoiceState {
   channel: Channel
@@ -40,6 +41,7 @@ export default function AppShell() {
   const [showDiscover, setShowDiscover] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
   const [showProfile, setShowProfile] = useState(false)
+  const [profilePopup, setProfilePopup] = useState<ProfilePopupTarget | null>(null)
   const [replyTarget, setReplyTarget] = useState<Message | null>(null)
   const [editTarget, setEditTarget] = useState<Message | null>(null)
   // userId, чью демонстрацию нужно автоматически начать смотреть в
@@ -144,6 +146,8 @@ export default function AppShell() {
             username: d.username,
             avatar_color: d.avatar_color,
             avatar_image: d.avatar_image ?? '',
+            banner_gradient: '',
+            banner_image: '',
             online: true,
             status: 'online' as const,
             voice_channel: vc,
@@ -223,6 +227,11 @@ export default function AppShell() {
       offCallState()
     }
   }, [gateway, channelId, serverId])
+
+  const openProfilePopup = useCallback((popupUser: ProfilePopupUser, e: ReactMouseEvent) => {
+    e.stopPropagation()
+    setProfilePopup({ user: popupUser, x: e.clientX, y: e.clientY })
+  }, [])
 
   const handleCreateServer = async () => {
     const name = window.prompt('Название сервера:')?.trim()
@@ -467,6 +476,7 @@ export default function AppShell() {
             }
             onConsumedPendingWatch={() => setPendingWatch(null)}
             onRequestWatch={(userId) => handleWatchScreen(userId, currentChannel.id)}
+            onOpenProfile={openProfilePopup}
           />
         ) : currentChannel && currentChannel.kind === 'text' ? (
           <>
@@ -482,6 +492,7 @@ export default function AppShell() {
               onDelete={handleDeleteMessage}
               onEditRequest={handleEditRequest}
               onReply={handleReplyRequest}
+              onOpenProfile={openProfilePopup}
             />
             <MessageInput
               channelName={currentChannel.name}
@@ -502,7 +513,7 @@ export default function AppShell() {
         )}
       </main>
 
-      <MembersList members={members} channels={channels} />
+      <MembersList members={members} channels={channels} onOpenProfile={openProfilePopup} />
 
       {showDiscover && (
         <DiscoverModal
@@ -514,6 +525,13 @@ export default function AppShell() {
         <SettingsModal onClose={() => setShowSettings(false)} onLogout={logout} />
       )}
       {showProfile && <ProfileModal onClose={() => setShowProfile(false)} />}
+      {profilePopup && (
+        <MiniProfilePopup
+          target={profilePopup}
+          currentUserId={user!.id}
+          onClose={() => setProfilePopup(null)}
+        />
+      )}
     </div>
     </VoiceProvider>
   )
