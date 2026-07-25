@@ -1,10 +1,23 @@
 import { useEffect, useRef, useState, MouseEvent as ReactMouseEvent } from 'react'
 import { Maximize2, Minimize2, Monitor, MicOff, HeadphoneOff, X, Eye } from 'lucide-react'
-import { Channel, Member } from '../api'
 import Avatar from './Avatar'
 import { ProfilePopupUser } from './MiniProfilePopup'
 import { useSettings } from '../settings'
 import { useVoice } from '../voice'
+
+/** Один участник комнаты (голосовой канал сервера ИЛИ звонок в личке/группе)
+ * — VoiceStage сам не знает, откуда взялся ростер (см. AppShell: для сервера
+ * это members.filter(...), для диалога/группы — dmCallParticipants), только
+ * рисует его. */
+export interface VoiceRosterMember {
+  id: number
+  username: string
+  avatar_color: string
+  avatar_image: string
+  muted: boolean
+  deafened: boolean
+  sharing_screen: boolean
+}
 
 /** Живой `<video>`, привязанный к MediaStream по ref — не пересоздаётся при
  * смене раскладки (grid ⇄ развёрнуто), поток не прерывается. */
@@ -28,7 +41,7 @@ function ParticipantTile({
   onOpenProfile,
   onExpand,
 }: {
-  member: Member
+  member: VoiceRosterMember
   speaking: boolean
   muted: boolean
   deafened: boolean
@@ -152,16 +165,23 @@ function ScreenPreviewTile({
  * и для клика по превью здесь.
  */
 export default function VoiceStage({
-  channel,
-  members,
+  roomId,
+  roomName,
+  roster,
   selfUserId,
   pendingWatchUserId,
   onConsumedPendingWatch,
   onRequestWatch,
   onOpenProfile,
 }: {
-  channel: Channel
-  members: Member[]
+  /** Опаque id комнаты — Channel.id для сервера, Conversation.id для
+   * личного/группового звонка (см. AppShell.VoiceRoom). Используется только
+   * как ключ эффектов ниже, ни на что другое не влияет. */
+  roomId: number | string
+  roomName: string
+  /** Участники комнаты — сервер сам фильтрует members по voice_channel,
+   * диалог/группа собирает roster из dmCallParticipants (см. AppShell). */
+  roster: VoiceRosterMember[]
   selfUserId: number
   /** userId, которого нужно автоматически начать смотреть и развернуть, как
    * только его демонстрация станет доступна (после клика по бейджу/тайлу). */
@@ -239,20 +259,18 @@ export default function VoiceStage({
           : availableScreenUserIds.has(expanded.userId)
       if (!stillSharing) setExpanded(null)
     } else {
-      const stillInChannel =
-        expanded.userId === selfUserId ||
-        members.some((m) => m.id === expanded.userId && m.voice_channel === String(channel.id))
-      if (!stillInChannel) setExpanded(null)
+      const stillInRoom =
+        expanded.userId === selfUserId || roster.some((m) => m.id === expanded.userId)
+      if (!stillInRoom) setExpanded(null)
     }
-  }, [expanded, isSharingScreen, availableScreenUserIds, members, channel.id, selfUserId])
+  }, [expanded, isSharingScreen, availableScreenUserIds, roster, selfUserId])
 
-  const roster = members.filter((m) => m.voice_channel === String(channel.id))
   // Кто демонстрирует: свой стрим — сразу по факту isSharingScreen (без
   // ожидания round-trip через presence), остальные — по presence-флагу
   // (виден даже если мы ещё не забрали их producer через SFU).
   const sharingOthers = roster.filter((m) => m.id !== selfUserId && m.sharing_screen)
 
-  const nameOf = (uid: number) => members.find((m) => m.id === uid)?.username ?? `Участник ${uid}`
+  const nameOf = (uid: number) => roster.find((m) => m.id === uid)?.username ?? `Участник ${uid}`
 
   // Сколько всего тайлов в сетке (участники + свой показ + чужие демки) —
   // от этого зависит число колонок: мало тайлов -> они большие и заполняют
@@ -267,13 +285,13 @@ export default function VoiceStage({
         ? ownScreenStream
         : screenShares.get(expanded.userId) ?? null
 
-  const expandedMember = expanded ? members.find((m) => m.id === expanded.userId) ?? null : null
+  const expandedMember = expanded ? roster.find((m) => m.id === expanded.userId) ?? null : null
 
   return (
     <div ref={containerRef} className={`voice-stage ${isFullscreen ? 'is-fullscreen' : ''}`}>
       <header className="voice-stage-header">
         <span className="voice-stage-title">
-          <Monitor size={16} /> {channel.name}
+          <Monitor size={16} /> {roomName}
         </span>
         <button
           className="icon-btn"
