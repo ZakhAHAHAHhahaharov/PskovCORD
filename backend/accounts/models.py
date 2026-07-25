@@ -36,5 +36,19 @@ class User(AbstractUser):
     # вычисляется отдельно с учётом реального подключения — см. chat.presence_status.
     status = models.CharField(max_length=10, choices=STATUS_CHOICES, default=ONLINE)
 
+    # Свой набор иконок вкладки (favicon.ico/16x16/32x32/apple-touch и т.д.,
+    # см. core.models.Favicon) — пусто означает "стандартная" (см.
+    # core.views._resolve_favicon_id / Favicon.get_default_id). SET_NULL —
+    # при удалении выбранной иконки пользователь просто откатывается на
+    # стандартную, а не теряет аккаунт.
+    favicon = models.ForeignKey(
+        "core.Favicon",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="selected_by",
+        verbose_name="Иконка вкладки",
+    )
+
     def __str__(self) -> str:
         return self.username

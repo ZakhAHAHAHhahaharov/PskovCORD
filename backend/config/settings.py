@@ -54,6 +54,7 @@ INSTALLED_APPS = [
     "corsheaders",
     "accounts",
     "chat",
+    "core",
 ]
 
 MIDDLEWARE = [
@@ -161,6 +162,17 @@ STATIC_URL = "static/"
 # nginx на хосте отдаёт /static/ напрямую из смонтированного volume'а
 # (см. deploy/docker-compose.prod.yml, deploy/nginx.conf.example).
 STATIC_ROOT = BASE_DIR / "staticfiles"
+
+# Пользовательские загрузки (пока только favicon-наборы, см. core.models.Favicon).
+# Ведущий слэш — иначе относительный редирект в core.views.favicon_file
+# резолвился бы от текущего пути запроса, а не от корня (как /static/,
+# у которого те же грабли есть, но там это не наш код и его не трогаем).
+MEDIA_URL = "/media/"
+# В деве отдаёт сам runserver (см. config/urls.py, static() добавляется при
+# DEBUG=1). В проде — nginx напрямую из смонтированного volume'а, тем же
+# приёмом, что и STATIC_ROOT (см. deploy/nginx.conf.example, docker-compose.prod.yml).
+MEDIA_ROOT = BASE_DIR / "media"
+
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 USE_TZ = True
 

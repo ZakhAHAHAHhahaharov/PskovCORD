@@ -94,6 +94,10 @@ services:
       # deploy/nginx.conf.example. Путь на хосте: ./staticfiles рядом с этим
       # compose-файлом, т.е. /opt/pskovcord/deploy/staticfiles.
       - ./staticfiles:/app/backend/staticfiles
+      # Загруженные favicon-наборы (core.models.Favicon.MEDIA_ROOT) — тем же
+      # приёмом, что staticfiles выше: хостовый nginx отдаёт /media/ отсюда
+      # же напрямую (см. deploy/nginx.conf.example), без похода в Django.
+      - ./media:/app/backend/media
     restart: unless-stopped
 
 volumes:

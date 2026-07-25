@@ -25,6 +25,11 @@ redis_data/
 backend/staticfiles/
 deploy/staticfiles/
 
+# Пользовательские загрузки (favicon-наборы, см. core.models.Favicon) —
+# прод раздаёт nginx на хосте из deploy/media/, см. DEPLOY.md
+backend/media/
+deploy/media/
+
 # IDE / OS
 .idea/
 .vscode/

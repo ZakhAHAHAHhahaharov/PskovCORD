@@ -9,3 +9,4 @@ python-dotenv==1.0.1
 redis==5.0.4
 PyJWT==2.8.0
 django-cors-headers==4.4.0
+Pillow==12.3.0

@@ -20,6 +20,13 @@ server {
         alias /opt/pskovcord/deploy/staticfiles/;
     }
 
+    # Пользовательские загрузки (favicon-наборы, см. core.models.Favicon) —
+    # тем же приёмом, что и /static/: bind-mount ./media из
+    # docker-compose.prod.yml, отдаём напрямую, минуя Django.
+    location /media/ {
+        alias /opt/pskovcord/deploy/media/;
+    }
+
     location / {
         proxy_pass http://127.0.0.1:8000;
         proxy_set_header Host $host;
