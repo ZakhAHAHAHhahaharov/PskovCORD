@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, MouseEvent as ReactMouseEvent } from 'react'
 import { Maximize2, Minimize2, Monitor, MicOff, HeadphoneOff, X, Eye } from 'lucide-react'
 import { Channel, Member } from '../api'
 import Avatar from './Avatar'
+import { ProfilePopupUser } from './MiniProfilePopup'
 import { useSettings } from '../settings'
 import { useVoice } from '../voice'
 
@@ -24,22 +25,35 @@ function ParticipantTile({
   speaking,
   muted,
   deafened,
+  onOpenProfile,
 }: {
   member: Member
   speaking: boolean
   muted: boolean
   deafened: boolean
+  onOpenProfile: (user: ProfilePopupUser, e: ReactMouseEvent) => void
 }) {
   return (
     <div className="participant-tile">
-      <Avatar
-        name={member.username}
-        color={member.avatar_color}
-        image={member.avatar_image}
-        size={64}
-        speaking={speaking}
-      />
-      <span className="participant-tile-name">{member.username}</span>
+      <button
+        type="button"
+        className="avatar-trigger"
+        onClick={(e) => onOpenProfile(member, e)}
+      >
+        <Avatar
+          name={member.username}
+          color={member.avatar_color}
+          image={member.avatar_image}
+          size={64}
+          speaking={speaking}
+        />
+      </button>
+      <span
+        className="participant-tile-name profile-trigger-name"
+        onClick={(e) => onOpenProfile(member, e)}
+      >
+        {member.username}
+      </span>
       <span className="participant-tile-icons">
         {muted && (
           <span title="Микрофон выключен">
@@ -133,6 +147,7 @@ export default function VoiceStage({
   pendingWatchUserId,
   onConsumedPendingWatch,
   onRequestWatch,
+  onOpenProfile,
 }: {
   channel: Channel
   members: Member[]
@@ -142,6 +157,7 @@ export default function VoiceStage({
   pendingWatchUserId: number | null
   onConsumedPendingWatch: () => void
   onRequestWatch: (userId: number) => void
+  onOpenProfile: (user: ProfilePopupUser, e: ReactMouseEvent) => void
 }) {
   const {
     speakingUserIds,
@@ -285,6 +301,7 @@ export default function VoiceStage({
               speaking={speakingUserIds.has(m.id)}
               muted={m.id === selfUserId ? selfMuted : m.muted}
               deafened={m.id === selfUserId ? deafened : m.deafened}
+              onOpenProfile={onOpenProfile}
             />
           ))}
           {isSharingScreen && (

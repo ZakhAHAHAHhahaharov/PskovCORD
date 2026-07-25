@@ -1,13 +1,17 @@
+import { MouseEvent as ReactMouseEvent } from 'react'
 import { Volume2 } from 'lucide-react'
 import { Channel, Member } from '../api'
 import Avatar from './Avatar'
+import { ProfilePopupUser } from './MiniProfilePopup'
 
 export default function MembersList({
   members,
   channels,
+  onOpenProfile,
 }: {
   members: Member[]
   channels: Channel[]
+  onOpenProfile: (user: ProfilePopupUser, e: ReactMouseEvent) => void
 }) {
   const online = members.filter((m) => m.online)
   const offline = members.filter((m) => !m.online)
@@ -22,16 +26,27 @@ export default function MembersList({
     const voice = channelName(m.voice_channel)
     return (
       <div key={m.id} className="member-row">
-        <Avatar
-          name={m.username}
-          color={m.avatar_color}
-          image={m.avatar_image}
-          size={32}
-          status={m.status}
-          showStatus
-        />
+        <button
+          type="button"
+          className="avatar-trigger"
+          onClick={(e) => onOpenProfile(m, e)}
+        >
+          <Avatar
+            name={m.username}
+            color={m.avatar_color}
+            image={m.avatar_image}
+            size={32}
+            status={m.status}
+            showStatus
+          />
+        </button>
         <div className="member-info">
-          <span className={`member-name ${m.online ? '' : 'dim'}`}>{m.username}</span>
+          <span
+            className={`member-name profile-trigger-name ${m.online ? '' : 'dim'}`}
+            onClick={(e) => onOpenProfile(m, e)}
+          >
+            {m.username}
+          </span>
           {voice && (
             <span className="member-voice">
               <Volume2 size={12} /> {voice}
