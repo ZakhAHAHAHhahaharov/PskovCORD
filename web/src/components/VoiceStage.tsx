@@ -26,19 +26,27 @@ function ParticipantTile({
   muted,
   deafened,
   onOpenProfile,
+  onExpand,
 }: {
   member: Member
   speaking: boolean
   muted: boolean
   deafened: boolean
   onOpenProfile: (user: ProfilePopupUser, e: ReactMouseEvent) => void
+  /** Клик по карточке (не по аватару/нику — у тех своё действие, открыть
+   * мини-профиль) разворачивает участника на весь блок, как демонстрацию
+   * экрана — см. VoiceStage.expanded. */
+  onExpand: () => void
 }) {
   return (
-    <div className="participant-tile">
+    <div className="participant-tile" onClick={onExpand}>
       <button
         type="button"
         className="avatar-trigger"
-        onClick={(e) => onOpenProfile(member, e)}
+        onClick={(e) => {
+          e.stopPropagation()
+          onOpenProfile(member, e)
+        }}
       >
         <Avatar
           name={member.username}
@@ -50,7 +58,10 @@ function ParticipantTile({
       </button>
       <span
         className="participant-tile-name profile-trigger-name"
-        onClick={(e) => onOpenProfile(member, e)}
+        onClick={(e) => {
+          e.stopPropagation()
+          onOpenProfile(member, e)
+        }}
       >
         {member.username}
       </span>
@@ -171,7 +182,14 @@ export default function VoiceStage({
     unwatchScreen,
   } = useVoice()
 
-  const [expandedUserId, setExpandedUserId] = useState<number | null>(null)
+  // mode:'screen' — развёрнута демонстрация экрана (видео/ожидание потока);
+  // mode:'participant' — просто развёрнутая карточка участника без демки
+  // (большой аватар вместо видео). Разные режимы по-разному авто-сворачиваются
+  // (см. эффект ниже) — демку сворачиваем сами, когда стрим пропал, а
+  // развёрнутую карточку участника — только когда тот вышел из канала.
+  const [expanded, setExpanded] = useState<{ userId: number; mode: 'screen' | 'participant' } | null>(
+    null,
+  )
   const containerRef = useRef<HTMLDivElement>(null)
   const [isFullscreen, setIsFullscreen] = useState(false)
 
@@ -194,17 +212,39 @@ export default function VoiceStage({
   useEffect(() => {
     if (pendingWatchUserId == null) return
     if (pendingWatchUserId === selfUserId) {
-      setExpandedUserId(selfUserId)
+      setExpanded({ userId: selfUserId, mode: 'screen' })
       onConsumedPendingWatch()
       return
     }
     if (availableScreenUserIds.has(pendingWatchUserId)) {
       watchScreen(pendingWatchUserId)
-      setExpandedUserId(pendingWatchUserId)
+      setExpanded({ userId: pendingWatchUserId, mode: 'screen' })
       onConsumedPendingWatch()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingWatchUserId, availableScreenUserIds, selfUserId])
+
+  // Раньше `expandedUserId` просто оставался на месте, когда демонстрация,
+  // которую смотрели, обрывалась (стример выключил показ) — стрим пропадал
+  // из screenShares/availableScreenUserIds, а разворот оставался открытым и
+  // навечно показывал плашку "Подключение…", выглядевшую как зависший
+  // реконнект. Авто-сворачиваем в этом случае; развёрнутую же карточку
+  // участника (без демки) сворачиваем только когда тот вышел из канала.
+  useEffect(() => {
+    if (!expanded) return
+    if (expanded.mode === 'screen') {
+      const stillSharing =
+        expanded.userId === selfUserId
+          ? isSharingScreen
+          : availableScreenUserIds.has(expanded.userId)
+      if (!stillSharing) setExpanded(null)
+    } else {
+      const stillInChannel =
+        expanded.userId === selfUserId ||
+        members.some((m) => m.id === expanded.userId && m.voice_channel === String(channel.id))
+      if (!stillInChannel) setExpanded(null)
+    }
+  }, [expanded, isSharingScreen, availableScreenUserIds, members, channel.id, selfUserId])
 
   const roster = members.filter((m) => m.voice_channel === String(channel.id))
   // Кто демонстрирует: свой стрим — сразу по факту isSharingScreen (без
@@ -221,11 +261,13 @@ export default function VoiceStage({
   const gridCols = Math.max(1, Math.ceil(Math.sqrt(tileCount || 1)))
 
   const expandedStream =
-    expandedUserId == null
+    expanded?.mode !== 'screen'
       ? null
-      : expandedUserId === selfUserId
+      : expanded.userId === selfUserId
         ? ownScreenStream
-        : screenShares.get(expandedUserId) ?? null
+        : screenShares.get(expanded.userId) ?? null
+
+  const expandedMember = expanded ? members.find((m) => m.id === expanded.userId) ?? null : null
 
   return (
     <div ref={containerRef} className={`voice-stage ${isFullscreen ? 'is-fullscreen' : ''}`}>
@@ -242,31 +284,33 @@ export default function VoiceStage({
         </button>
       </header>
 
-      {expandedUserId != null ? (
+      {expanded != null ? (
         <div className="voice-stage-expanded">
           <div className="voice-stage-expanded-bar">
             <span className="screen-tile-label">
-              <Monitor size={13} />{' '}
-              {expandedUserId === selfUserId ? 'Ваша демонстрация' : `Демонстрация — ${nameOf(expandedUserId)}`}
+              {expanded.mode === 'screen' ? (
+                <>
+                  <Monitor size={13} />{' '}
+                  {expanded.userId === selfUserId ? 'Ваша демонстрация' : `Демонстрация — ${nameOf(expanded.userId)}`}
+                </>
+              ) : (
+                nameOf(expanded.userId)
+              )}
             </span>
             <div className="voice-stage-expanded-actions">
-              {expandedUserId !== selfUserId && (
+              {expanded.mode === 'screen' && expanded.userId !== selfUserId && (
                 <button
                   className="icon-btn"
                   title="Перестать смотреть"
                   onClick={() => {
-                    unwatchScreen(expandedUserId)
-                    setExpandedUserId(null)
+                    unwatchScreen(expanded.userId)
+                    setExpanded(null)
                   }}
                 >
                   <X size={16} />
                 </button>
               )}
-              <button
-                className="icon-btn"
-                title="Свернуть"
-                onClick={() => setExpandedUserId(null)}
-              >
+              <button className="icon-btn" title="Свернуть" onClick={() => setExpanded(null)}>
                 <Minimize2 size={16} />
               </button>
             </div>
@@ -274,17 +318,27 @@ export default function VoiceStage({
           <div
             className="voice-stage-expanded-video"
             title="Свернуть"
-            onClick={() => setExpandedUserId(null)}
+            onClick={() => setExpanded(null)}
           >
-            {expandedStream ? (
-              <StreamVideo
-                stream={expandedStream}
-                muted={expandedUserId === selfUserId || deafened}
-              />
+            {expanded.mode === 'screen' ? (
+              expandedStream ? (
+                <StreamVideo stream={expandedStream} muted={expanded.userId === selfUserId || deafened} />
+              ) : (
+                <div className="screen-preview-placeholder">
+                  <Monitor size={40} />
+                  <span>Подключение…</span>
+                </div>
+              )
             ) : (
-              <div className="screen-preview-placeholder">
-                <Monitor size={40} />
-                <span>Подключение…</span>
+              <div className="participant-expanded">
+                <Avatar
+                  name={expandedMember?.username ?? nameOf(expanded.userId)}
+                  color={expandedMember?.avatar_color ?? '#5865f2'}
+                  image={expandedMember?.avatar_image ?? ''}
+                  size={200}
+                  speaking={speakingUserIds.has(expanded.userId)}
+                />
+                <span className="participant-expanded-name">{nameOf(expanded.userId)}</span>
               </div>
             )}
           </div>
@@ -302,6 +356,7 @@ export default function VoiceStage({
               muted={m.id === selfUserId ? selfMuted : m.muted}
               deafened={m.id === selfUserId ? deafened : m.deafened}
               onOpenProfile={onOpenProfile}
+              onExpand={() => setExpanded({ userId: m.id, mode: 'participant' })}
             />
           ))}
           {isSharingScreen && (
@@ -311,7 +366,7 @@ export default function VoiceStage({
               own
               deafened={deafened}
               onWatch={() => {}}
-              onExpand={() => setExpandedUserId(selfUserId)}
+              onExpand={() => setExpanded({ userId: selfUserId, mode: 'screen' })}
               onStopWatching={() => {}}
             />
           )}
@@ -326,7 +381,7 @@ export default function VoiceStage({
                 deafened={deafened}
                 onWatch={() => onRequestWatch(m.id)}
                 onExpand={() => {
-                  if (stream) setExpandedUserId(m.id)
+                  if (stream) setExpanded({ userId: m.id, mode: 'screen' })
                 }}
                 onStopWatching={() => unwatchScreen(m.id)}
               />
