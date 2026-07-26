@@ -18,6 +18,12 @@ export class Peer {
   recvTransport?: types.WebRtcTransport
   readonly producers = new Map<string, types.Producer>()
   readonly consumers = new Map<string, types.Consumer>()
+  /** userId'ы, которым ЭТОТ пир запретил смотреть СВОЮ демонстрацию экрана
+   * (см. signaling.ts action 'blockScreenViewer') — проверяется при
+   * getProducers/newProducer/consume для producer'ов этого пира с
+   * source==='screen'. Не переживает переподключение (новый Peer — пустой
+   * набор) — осознанно, это предпочтение на текущий звонок, см. план. */
+  readonly blockedScreenViewers = new Set<number>()
 
   constructor(userId: number, socket: WebSocket) {
     this.id = `p${++peerSeq}`
@@ -86,13 +92,25 @@ export class Room {
     return this.peers.size === 0
   }
 
-  /** Все продюсеры комнаты, кроме принадлежащих указанному пиру. */
+  /** Все продюсеры комнаты, кроме принадлежащих указанному пиру — screen-
+   * продюсеры владельцев, заблокировавших except.userId, не отдаём вовсе
+   * (у заблокированного зрителя кнопка «Смотреть» просто не должна
+   * появиться, а не тихо зависать). */
   otherProducers(
     except: Peer,
   ): { producerId: string; userId: number; source: string }[] {
     const out: { producerId: string; userId: number; source: string }[] = []
     for (const peer of this.peers.values()) {
       if (peer.id === except.id) continue
+      if (peer.blockedScreenViewers.has(except.userId)) {
+        for (const producer of peer.producers.values()) {
+          const source = (producer.appData as { source?: string }).source ?? 'mic'
+          if (source !== 'screen') {
+            out.push({ producerId: producer.id, userId: peer.userId, source })
+          }
+        }
+        continue
+      }
       for (const producer of peer.producers.values()) {
         out.push({
           producerId: producer.id,
@@ -104,13 +122,14 @@ export class Room {
     return out
   }
 
-  /** Найти продюсера по id и его владельца (для consume/закрытия). */
+  /** Найти продюсера по id вместе с пиром-владельцем (для consume/закрытия/
+   * проверки блок-листа). */
   findProducer(
     producerId: string,
-  ): { producer: types.Producer; userId: number } | null {
+  ): { producer: types.Producer; peer: Peer } | null {
     for (const peer of this.peers.values()) {
       const producer = peer.producers.get(producerId)
-      if (producer) return { producer, userId: peer.userId }
+      if (producer) return { producer, peer }
     }
     return null
   }
@@ -120,6 +139,39 @@ export class Room {
     for (const peer of this.peers.values()) {
       if (peer.id === except.id) continue
       peer.notify(notification, data)
+    }
+  }
+
+  /** Как broadcast, но для уведомлений о НОВОМ screen-продюсере владельца
+   * except: пиров, которых except заблокировал, пропускаем — иначе у них
+   * появилась бы кнопка «Смотреть» на демонстрацию, которую consume() всё
+   * равно потом отклонит. */
+  broadcastScreenAware(except: Peer, notification: string, data: unknown): void {
+    for (const peer of this.peers.values()) {
+      if (peer.id === except.id) continue
+      if (except.blockedScreenViewers.has(peer.userId)) continue
+      peer.notify(notification, data)
+    }
+  }
+
+  /** Принудительно закрыть уже идущие screen-консюмеры зрителя viewerUserId
+   * на продюсеры owner — вызывается сразу при блокировке "на лету" (сама
+   * демонстрация для остальных зрителей продолжается как ни в чём не бывало). */
+  closeScreenConsumersFor(owner: Peer, viewerUserId: number): void {
+    const ownerScreenProducerIds = new Set(
+      Array.from(owner.producers.values())
+        .filter((p) => ((p.appData as { source?: string }).source ?? 'mic') === 'screen')
+        .map((p) => p.id),
+    )
+    if (ownerScreenProducerIds.size === 0) return
+    for (const peer of this.peers.values()) {
+      if (peer.userId !== viewerUserId) continue
+      for (const [cid, consumer] of Array.from(peer.consumers)) {
+        if (!ownerScreenProducerIds.has(consumer.producerId)) continue
+        consumer.close()
+        peer.consumers.delete(cid)
+        peer.notify('consumerClosed', { consumerId: cid })
+      }
     }
   }
 }

@@ -9,6 +9,7 @@ import { useGateway } from '../gateway'
 import {
   playJoinSound,
   playLeaveSound,
+  playScreenShareRequestSound,
   playScreenShareStartSound,
   playScreenShareStopSound,
 } from '../sounds'
@@ -18,7 +19,7 @@ import HomeSidebar from './HomeSidebar'
 import NewConversationModal from './NewConversationModal'
 import IncomingCallBanner from './IncomingCallBanner'
 import MessageList from './MessageList'
-import MessageInput from './MessageInput'
+import MessageInput, { MessageInputPrefill } from './MessageInput'
 import MembersList from './MembersList'
 import VoiceProvider, { VoiceStatus } from './VoiceProvider'
 import VoiceStage, { VoiceRosterMember } from './VoiceStage'
@@ -27,6 +28,11 @@ import ServerSettingsModal from './ServerSettingsModal'
 import SettingsModal from './SettingsModal'
 import ProfileModal from './ProfileModal'
 import MiniProfilePopup, { ProfilePopupTarget, ProfilePopupUser } from './MiniProfilePopup'
+import ParticipantContextMenu, {
+  ParticipantContextMenuMember,
+  ParticipantContextMenuTarget,
+} from './ParticipantContextMenu'
+import MuteVoteModal from './MuteVoteModal'
 
 const APP_NAME: string = import.meta.env.VITE_APP_NAME || 'PskovCord'
 
@@ -87,6 +93,21 @@ export default function AppShell() {
   const [profilePopup, setProfilePopup] = useState<ProfilePopupTarget | null>(null)
   const [replyTarget, setReplyTarget] = useState<ChatMessageBase | null>(null)
   const [editTarget, setEditTarget] = useState<ChatMessageBase | null>(null)
+  // --- контекстное меню участника голосового канала (правый клик) --------
+  const [contextMenuTarget, setContextMenuTarget] = useState<ParticipantContextMenuTarget | null>(
+    null,
+  )
+  const [mentionPrefill, setMentionPrefill] = useState<MessageInputPrefill | null>(null)
+  // channel_id канала, где ПРЯМО СЕЙЧАС идёт голосование за мут (по кому бы
+  // то ни было) — используется, только чтобы задизейблить «начать ещё одно»
+  // в ParticipantContextMenu; сам факт голосования и его результат живут в
+  // muteVote/voice_mute_vote_result отдельно.
+  const [activeMuteVoteChannelId, setActiveMuteVoteChannelId] = useState<number | null>(null)
+  const [muteVote, setMuteVote] = useState<{
+    channelId: number
+    targetUserId: number
+    endsAt: number
+  } | null>(null)
 
   // --- домашний экран: диалоги/группы, друзья, звонки в них -------------
   const [conversations, setConversations] = useState<Conversation[]>([])
@@ -317,6 +338,45 @@ export default function AppShell() {
           : prev,
       )
     })
+    // Нас принудительно отключили от голосового канала (см.
+    // handleDisconnectUser/chat.consumers._handle_voice_disconnect_user).
+    const offVoiceKicked = gateway.on('voice_kicked', (d) => {
+      setVoice((v) => {
+        if (v && v.room.kind === 'channel' && v.room.id === d.channel_id) {
+          gateway.voiceLeave()
+          alert('Вас отключили от голосового канала.')
+          return null
+        }
+        return v
+      })
+    })
+    // Новое голосование за мут в каком-то голосовом канале сервера — модалку
+    // показываем, только если это канал, в котором мы сейчас сами сидим, и
+    // цель — не мы (у цели голосования такого меню/модалки просто нет).
+    const offMuteVoteStart = gateway.on('voice_mute_vote_start', (d) => {
+      setActiveMuteVoteChannelId(d.channel_id)
+      setMuteVote((prev) => {
+        if (
+          voice?.room.kind === 'channel' &&
+          voice.room.id === d.channel_id &&
+          d.target_user_id !== user?.id
+        ) {
+          return { channelId: d.channel_id, targetUserId: d.target_user_id, endsAt: d.ends_at }
+        }
+        return prev
+      })
+    })
+    const offMuteVoteResult = gateway.on('voice_mute_vote_result', (d) => {
+      setActiveMuteVoteChannelId((prev) => (prev === d.channel_id ? null : prev))
+      setMuteVote((prev) => (prev && prev.channelId === d.channel_id ? null : prev))
+    })
+    // Кто-то из того же голосового канала попросил нас включить демонстрацию —
+    // только звук (см. задачу), никакой модалки.
+    const offScreenShareRequested = gateway.on('voice_screen_share_requested', (d) => {
+      if (voice?.room.kind === 'channel' && voice.room.id === d.channel_id) {
+        playScreenShareRequestSound()
+      }
+    })
     // Смена ника/аватара — свою уже применили локально сразу после ответа
     // PATCH /api/auth/me (см. handleProfileUpdated), но остальным участникам
     // и старым сообщениям в списке нужно обновиться этим же событием.
@@ -484,6 +544,10 @@ export default function AppShell() {
       offVoice()
       offMicStatus()
       offScreenShare()
+      offVoiceKicked()
+      offMuteVoteStart()
+      offMuteVoteResult()
+      offScreenShareRequested()
       offProfileUpdate()
       offChannelCreate()
       offServerUpdate()
@@ -499,12 +563,71 @@ export default function AppShell() {
       offFriendRequestCreate()
       offFriendRequestAccept()
     }
-  }, [gateway, channelId, serverId, activeConversationId, conversations, voice])
+  }, [gateway, channelId, serverId, activeConversationId, conversations, voice, user])
 
   const openProfilePopup = useCallback((popupUser: ProfilePopupUser, e: ReactMouseEvent) => {
     e.stopPropagation()
     setProfilePopup({ user: popupUser, x: e.clientX, y: e.clientY })
   }, [])
+
+  // --- контекстное меню участника голосового канала -----------------------
+  const openParticipantContextMenu = useCallback(
+    (member: ParticipantContextMenuMember, e: ReactMouseEvent) => {
+      e.preventDefault()
+      e.stopPropagation()
+      setContextMenuTarget({ member, x: e.clientX, y: e.clientY })
+    },
+    [],
+  )
+
+  // «Упомянуть» — переключаемся на текущий выбранный текстовый канал сервера
+  // (если main сейчас показывает какой-то другой текстовый канал) или на
+  // первый текстовый канал сервера, и подставляем "@Имя " в поле ввода.
+  const handleMention = useCallback(
+    (member: ParticipantContextMenuMember) => {
+      setContextMenuTarget(null)
+      const target =
+        currentChannel && currentChannel.kind === 'text'
+          ? currentChannel
+          : channels.find((c) => c.kind === 'text')
+      if (!target) return
+      setChannelId(target.id)
+      setMentionPrefill({ token: Date.now(), text: `@${member.username} ` })
+    },
+    [channels, currentChannel],
+  )
+
+  const handleDisconnectUser = useCallback(
+    (userId: number) => {
+      setContextMenuTarget(null)
+      gateway.voiceDisconnectUser(userId)
+    },
+    [gateway],
+  )
+
+  const handleStartMuteVote = useCallback(
+    (userId: number) => {
+      setContextMenuTarget(null)
+      gateway.voiceMuteVoteStart(userId)
+    },
+    [gateway],
+  )
+
+  const handleCastMuteVote = useCallback(
+    (forMute: boolean) => {
+      gateway.voiceMuteVoteCast(forMute)
+      setMuteVote(null)
+    },
+    [gateway],
+  )
+
+  const handleRequestScreenShare = useCallback(
+    (userId: number) => {
+      setContextMenuTarget(null)
+      gateway.voiceRequestScreenShare(userId)
+    },
+    [gateway],
+  )
 
   const handleCreateServer = async () => {
     const name = window.prompt('Название сервера:')?.trim()
@@ -975,6 +1098,7 @@ export default function AppShell() {
           onOpenProfile={() => setShowProfile(true)}
           onWatchScreen={handleWatchBadge}
           onOpenServerSettings={() => setShowServerSettings(true)}
+          onParticipantContextMenu={openParticipantContextMenu}
         />
       )}
 
@@ -1056,6 +1180,7 @@ export default function AppShell() {
             onConsumedPendingWatch={() => setPendingWatch(null)}
             onRequestWatch={(userId) => handleWatchScreen(userId, currentChannel.id)}
             onOpenProfile={openProfilePopup}
+            onParticipantContextMenu={openParticipantContextMenu}
           />
         ) : currentChannel && currentChannel.kind === 'text' ? (
           <>
@@ -1081,6 +1206,7 @@ export default function AppShell() {
               editTarget={editTarget}
               onSaveEdit={handleSaveEdit}
               onCancelEdit={() => setEditTarget(null)}
+              prefill={mentionPrefill}
             />
           </>
         ) : (
@@ -1149,6 +1275,35 @@ export default function AppShell() {
           onClose={() => setProfilePopup(null)}
           onAddFriend={handleMiniProfileAddFriend}
           onSendMessage={handleMiniProfileSendMessage}
+        />
+      )}
+      {contextMenuTarget && (
+        <ParticipantContextMenu
+          target={contextMenuTarget}
+          canManageMembers={!!currentServer?.my_permissions?.manage_members}
+          voteDisabled={
+            activeMuteVoteChannelId != null &&
+            voice?.room.kind === 'channel' &&
+            voice.room.id === activeMuteVoteChannelId
+          }
+          onClose={() => setContextMenuTarget(null)}
+          onMention={handleMention}
+          onDisconnect={handleDisconnectUser}
+          onStartMuteVote={handleStartMuteVote}
+          onRequestScreenShare={handleRequestScreenShare}
+        />
+      )}
+      {muteVote && voice?.room.kind === 'channel' && voice.room.id === muteVote.channelId && (
+        <MuteVoteModal
+          vote={{
+            channelId: muteVote.channelId,
+            targetUserId: muteVote.targetUserId,
+            targetUsername:
+              members.find((m) => m.id === muteVote.targetUserId)?.username ??
+              `Участник ${muteVote.targetUserId}`,
+            endsAt: muteVote.endsAt,
+          }}
+          onCastVote={handleCastMuteVote}
         />
       )}
     </div>

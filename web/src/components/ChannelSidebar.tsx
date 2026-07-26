@@ -1,3 +1,4 @@
+import { MouseEvent as ReactMouseEvent } from 'react'
 import { Volume2, MicOff, HeadphoneOff, Monitor, Settings } from 'lucide-react'
 import { Channel, Member, Server, User } from '../api'
 import Avatar from './Avatar'
@@ -24,6 +25,7 @@ export default function ChannelSidebar({
   onOpenProfile,
   onWatchScreen,
   onOpenServerSettings,
+  onParticipantContextMenu,
 }: {
   server: Server | null
   channels: Channel[]
@@ -43,6 +45,10 @@ export default function ChannelSidebar({
   onWatchScreen: (member: Member) => void
   /** Шестерёнка у названия сервера — редактор сервера поверх всей страницы. */
   onOpenServerSettings: () => void
+  /** Правый клик на участнике голосового канала, В КОТОРОМ МЫ САМИ сейчас
+   * находимся (см. AppShell.contextMenuTarget) — на остальных каналах меню
+   * не открывается, там местная громкость/действия всё равно не применимы. */
+  onParticipantContextMenu?: (member: Member, e: ReactMouseEvent) => void
 }) {
   const { speakingUserIds, muted, deafened } = useVoice()
   // Для себя — локальное состояние mesh'а (мгновенный отклик на клик);
@@ -130,6 +136,7 @@ export default function ChannelSidebar({
             </div>
             {voiceChannels.map((c) => {
               const inChannel = voiceMembersOf(c.id)
+              const isMyVoiceChannel = voice?.room.kind === 'channel' && voice.room.id === c.id
               return (
                 <div key={c.id} className="voice-channel-block">
                   <button
@@ -154,8 +161,20 @@ export default function ChannelSidebar({
                   {inChannel.map((m) => {
                     const speaking = speakingUserIds.has(m.id)
                     const mic = micStateOf(m)
+                    const canOpenMenu = isMyVoiceChannel && m.id !== user.id && onParticipantContextMenu
                     return (
-                      <div key={m.id} className="voice-user">
+                      <div
+                        key={m.id}
+                        className="voice-user"
+                        onContextMenu={
+                          canOpenMenu
+                            ? (e) => {
+                                e.preventDefault()
+                                onParticipantContextMenu!(m, e)
+                              }
+                            : undefined
+                        }
+                      >
                         <Avatar
                           name={m.username}
                           color={m.avatar_color}

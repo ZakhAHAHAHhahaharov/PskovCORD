@@ -2538,3 +2538,95 @@ input {
   color: var(--text-muted);
   cursor: default;
 }
+
+/* ---- контекстное меню участника голосового канала (ParticipantContextMenu) ---- */
+.participant-context-menu {
+  position: fixed;
+  z-index: 90;
+  width: 260px;
+  padding: 8px;
+}
+
+.participant-context-menu .profile-popup-label {
+  padding: 4px 6px 6px;
+}
+
+.participant-menu-volume {
+  margin: 0 4px 6px;
+}
+
+.participant-context-menu .profile-popup-item {
+  width: 100%;
+}
+
+.participant-context-menu .profile-popup-item:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.participant-context-menu .profile-popup-item:disabled:hover {
+  background: none;
+}
+
+/* ---- голосование за мут (MuteVoteModal) ---- */
+.mute-vote-modal {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  z-index: 100;
+  width: 260px;
+  padding: 14px 16px;
+  background: var(--modal-bg);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+
+.mute-vote-modal-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 700;
+  font-size: 14px;
+  color: #fff;
+}
+
+.mute-vote-modal-timer {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.mute-vote-modal-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.mute-vote-btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px;
+  border-radius: 4px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #fff;
+}
+
+.mute-vote-btn.for {
+  background: var(--green);
+}
+
+.mute-vote-btn.for:hover {
+  background: #1a8a48;
+}
+
+.mute-vote-btn.against {
+  background: var(--red);
+}
+
+.mute-vote-btn.against:hover {
+  background: #c8393c;
+}

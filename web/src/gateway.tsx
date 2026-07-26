@@ -20,6 +20,17 @@ interface GatewayCtx {
   voiceMuteUpdate: (muted: boolean, deafened: boolean) => void
   voiceScreenShareUpdate: (sharing: boolean) => void
   voiceTopicUpdate: (topic: string) => void
+  /** Отключить участника от ЕГО текущего голосового канала — нужно право
+   * "manage_members", проверяется на сервере (см. chat.consumers). */
+  voiceDisconnectUser: (userId: number) => void
+  /** Начать голосование за мут участника, который сейчас в том же голосовом
+   * канале (право не нужно — может любой участник канала). */
+  voiceMuteVoteStart: (targetUserId: number) => void
+  /** Проголосовать в активном голосовании канала, в котором мы сейчас. */
+  voiceMuteVoteCast: (forMute: boolean) => void
+  /** Попросить участника того же голосового канала включить демонстрацию —
+   * персональный тихий пинг, слышен только адресату (voice_screen_share_requested). */
+  voiceRequestScreenShare: (targetUserId: number) => void
   setStatus: (status: UserStatus) => void
   dmSendMessage: (conversationId: number, content: string, replyTo?: number | null) => void
   dmDeleteMessage: (messageId: number) => void
@@ -125,6 +136,12 @@ export function GatewayProvider({ children }: { children: ReactNode }) {
     voiceScreenShareUpdate: (sharing) =>
       raw({ op: 'voice_screen_share_update', sharing }),
     voiceTopicUpdate: (topic) => raw({ op: 'voice_topic_update', topic }),
+    voiceDisconnectUser: (userId) => raw({ op: 'voice_disconnect_user', user_id: userId }),
+    voiceMuteVoteStart: (targetUserId) =>
+      raw({ op: 'voice_mute_vote_start', target_user_id: targetUserId }),
+    voiceMuteVoteCast: (forMute) => raw({ op: 'voice_mute_vote_cast', for: forMute }),
+    voiceRequestScreenShare: (targetUserId) =>
+      raw({ op: 'voice_request_screen_share', target_user_id: targetUserId }),
     setStatus: (status) => raw({ op: 'set_status', status }),
     dmSendMessage: (conversationId, content, replyTo) =>
       raw({

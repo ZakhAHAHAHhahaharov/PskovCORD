@@ -107,3 +107,11 @@ export function stopIncomingCallRing() {
     ringInterval = null
   }
 }
+
+/** Кто-то в этом же голосовом канале попросил нас включить демонстрацию
+ * экрана — короткая одноразовая трель (в отличие от playIncomingCallRing не
+ * зацикливается — это не входящий звонок, а разовая просьба). */
+export function playScreenShareRequestSound() {
+  beep(740, 140, 0, 0.18)
+  beep(920, 160, 150, 0.18)
+}

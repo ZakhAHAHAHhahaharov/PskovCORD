@@ -1,6 +1,14 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Pencil, X } from 'lucide-react'
 import { ChatMessageBase } from '../api'
+
+export interface MessageInputPrefill {
+  /** Меняется при каждом запросе на подстановку, даже если text тот же самый
+   * (например, «Упомянуть» дважды подряд одного и того же человека) — без
+   * этого второй одинаковый prefill не запустил бы эффект повторно. */
+  token: number
+  text: string
+}
 
 export default function MessageInput({
   channelName,
@@ -11,6 +19,7 @@ export default function MessageInput({
   onSaveEdit,
   onCancelEdit,
   hash = true,
+  prefill,
 }: {
   /** Название текстового канала/собеседника/группы для плейсхолдера. */
   channelName: string
@@ -22,13 +31,24 @@ export default function MessageInput({
   editTarget: ChatMessageBase | null
   onSaveEdit: (messageId: number, content: string) => void
   onCancelEdit: () => void
+  /** Внешняя подстановка текста в поле ввода — например, «Упомянуть» из
+   * контекстного меню участника голосового канала (см. AppShell.handleMention). */
+  prefill?: MessageInputPrefill | null
 }) {
   const [value, setValue] = useState('')
+  const inputRef = useRef<HTMLInputElement>(null)
 
   // При входе в режим редактирования подставляем текущий текст сообщения.
   useEffect(() => {
     if (editTarget) setValue(editTarget.content)
   }, [editTarget])
+
+  useEffect(() => {
+    if (!prefill) return
+    setValue(prefill.text)
+    inputRef.current?.focus()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prefill?.token])
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault()
@@ -74,6 +94,7 @@ export default function MessageInput({
       )}
       <form className="message-input" onSubmit={submit}>
         <input
+          ref={inputRef}
           value={value}
           onChange={(e) => setValue(e.target.value)}
           onKeyDown={handleKeyDown}

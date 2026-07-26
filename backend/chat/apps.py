@@ -20,6 +20,7 @@ class ChatConfig(AppConfig):
             return
         if os.environ.get("RUN_MAIN") != "true":
             return
-        from . import heartbeat_sweep
+        from . import heartbeat_sweep, vote_sweep
 
         heartbeat_sweep.start()
+        vote_sweep.start()
