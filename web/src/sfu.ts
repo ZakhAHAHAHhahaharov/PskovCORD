@@ -342,6 +342,14 @@ export class SfuClient {
     return this.watchedScreenUsers.has(userId)
   }
 
+  /** Запретить/разрешить userId смотреть НАШУ демонстрацию экрана — действует
+   * на текущее подключение к SFU (см. Peer.blockedScreenViewers на сервере),
+   * применяется сразу же к уже идущему показу (сервер сам обрывает его
+   * consumer'ы у заблокированного зрителя). */
+  blockScreenViewer(userId: number, blocked: boolean): void {
+    void this.request('blockScreenViewer', { targetUserId: userId, blocked }).catch(() => {})
+  }
+
   private recomputeMicStream(userId: number) {
     const tracks: MediaStreamTrack[] = []
     for (const [cid, consumer] of this.consumers) {

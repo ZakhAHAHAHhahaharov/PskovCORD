@@ -17,7 +17,7 @@ from django.test import TestCase, TransactionTestCase
 from rest_framework.test import APIClient, APITestCase
 from rest_framework_simplejwt.tokens import AccessToken
 
-from . import presence, roles, sfu, turn
+from . import mute_vote, presence, roles, sfu, turn
 from .consumers import GatewayConsumer
 from .middleware import JWTAuthMiddleware
 from .models import (
@@ -154,6 +154,96 @@ class CallStateTests(TestCase):
         presence.set_call_topic(100, "тема")
         presence.set_call_topic(100, "")
         self.assertIsNone(presence.call_topic(100))
+
+
+class _FakeChannelLayer:
+    """Минимальная замена реальному channel_layer для mute_vote.resolve() —
+    тому нужен только awaitable group_send (см. asgiref.sync.async_to_sync
+    внутри chat.mute_vote), сама рассылка проверяется по .sent."""
+
+    def __init__(self):
+        self.sent = []
+
+    async def group_send(self, group, message):
+        self.sent.append((group, message["payload"]))
+
+
+class MuteVoteTests(TestCase):
+    """Redis-хелперы голосования (presence.py) и его резолюция (mute_vote.py) —
+    см. chat.consumers._handle_voice_mute_vote_start/_cast и vote_sweep.py,
+    которые эту же логику зовут по WS/из фонового потока."""
+
+    def setUp(self):
+        presence._r.flushdb()
+        self.owner = User.objects.create_user(username="mv_owner", password="pw12345")
+        self.server = Server.objects.create(name="s", owner=self.owner)
+        self.channel = Channel.objects.create(
+            server=self.server, name="v", kind=Channel.VOICE, position=0)
+
+    def tearDown(self):
+        presence._r.flushdb()
+
+    def test_second_start_rejected_while_active(self):
+        self.assertTrue(presence.start_mute_vote(self.channel.id, 2, 1, 20))
+        self.assertFalse(presence.start_mute_vote(self.channel.id, 3, 1, 20))
+
+    def test_cast_rejects_double_vote(self):
+        presence.start_mute_vote(self.channel.id, 2, 1, 20)
+        self.assertTrue(presence.cast_mute_vote(self.channel.id, 1, True))
+        self.assertFalse(presence.cast_mute_vote(self.channel.id, 1, False))
+
+    def test_eligible_excludes_target(self):
+        presence.join_voice(1, self.channel.id)
+        presence.join_voice(2, self.channel.id)
+        presence.join_voice(3, self.channel.id)
+        self.assertEqual(
+            presence.mute_vote_eligible_ids(self.channel.id, 2), {"1", "3"})
+
+    def test_resolve_majority_for_forces_mute_and_broadcasts(self):
+        presence.join_voice(1, self.channel.id)
+        presence.join_voice(2, self.channel.id)
+        presence.join_voice(3, self.channel.id)
+        presence.start_mute_vote(self.channel.id, 2, 1, 20)
+        presence.cast_mute_vote(self.channel.id, 1, True)
+        presence.cast_mute_vote(self.channel.id, 3, True)
+
+        layer = _FakeChannelLayer()
+        mute_vote.resolve(self.channel.id, layer)
+
+        self.assertIsNotNone(presence.forced_mute_until(2))
+        self.assertTrue(presence.voice_flags(2)["muted"])
+        self.assertIsNone(presence.active_mute_vote(self.channel.id))
+        self.assertNotIn(str(self.channel.id), presence.active_vote_channel_ids())
+
+        ops = [payload["op"] for _group, payload in layer.sent]
+        self.assertIn("voice_mute_vote_result", ops)
+        self.assertIn("voice_mute_update", ops)
+        self.assertIn("voice_forced_mute", ops)
+        result = next(p for _g, p in layer.sent if p["op"] == "voice_mute_vote_result")
+        self.assertTrue(result["muted"])
+        forced = next(p for _g, p in layer.sent if p["op"] == "voice_forced_mute")
+        self.assertGreater(forced["until"], time.time())
+
+    def test_resolve_tie_does_not_mute(self):
+        presence.join_voice(1, self.channel.id)
+        presence.join_voice(2, self.channel.id)
+        presence.join_voice(3, self.channel.id)
+        presence.start_mute_vote(self.channel.id, 2, 1, 20)
+        presence.cast_mute_vote(self.channel.id, 1, True)
+        presence.cast_mute_vote(self.channel.id, 3, False)
+
+        layer = _FakeChannelLayer()
+        mute_vote.resolve(self.channel.id, layer)
+
+        self.assertIsNone(presence.forced_mute_until(2))
+        result = next(p for _g, p in layer.sent if p["op"] == "voice_mute_vote_result")
+        self.assertFalse(result["muted"])
+        self.assertEqual([p["op"] for _g, p in layer.sent], ["voice_mute_vote_result"])
+
+    def test_resolve_without_active_vote_is_noop(self):
+        layer = _FakeChannelLayer()
+        mute_vote.resolve(self.channel.id, layer)
+        self.assertEqual(layer.sent, [])
 
 
 class EffectiveStatusTests(TestCase):

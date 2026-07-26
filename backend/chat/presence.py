@@ -271,3 +271,115 @@ def call_state(channel_id) -> dict:
         "call_started_at": call_started_at(channel_id),
         "topic": call_topic(channel_id),
     }
+
+
+# --- голосование за мут -------------------------------------------------
+# Один активный голос на канал одновременно (см. start_mute_vote). Ключ
+# голосования сам себе TTL (несколько секунд запаса сверх длительности) —
+# страховка на случай, если ни cast (резолвит сразу, когда все проголосовали),
+# ни периодический vote_sweep (резолвит по истечении ends_at) почему-то не
+# отработают; без этого зависший голос держал бы канал в ACTIVE_VOTES_SET
+# бессрочно.
+ACTIVE_VOTES_SET = "presence:active_votes"
+
+
+def _vote_key(channel_id) -> str:
+    return f"presence:vote:{channel_id}"
+
+
+def _vote_for_key(channel_id) -> str:
+    return f"presence:vote:{channel_id}:for"
+
+
+def _vote_against_key(channel_id) -> str:
+    return f"presence:vote:{channel_id}:against"
+
+
+def _forced_mute_key(uid) -> str:
+    return f"presence:forced_mute:{uid}"
+
+
+def start_mute_vote(channel_id, target_uid, initiator_uid, duration_s: float) -> bool:
+    """Заводит голосование за мут в канале. False, если там уже идёт другое."""
+    channel_id = str(channel_id)
+    key = _vote_key(channel_id)
+    if _r.exists(key):
+        return False
+    now = time.time()
+    ends_at = now + duration_s
+    _r.hset(key, mapping={
+        "target_uid": str(target_uid),
+        "initiator_uid": str(initiator_uid),
+        "started_at": now,
+        "ends_at": ends_at,
+    })
+    _r.expire(key, int(duration_s) + 30)
+    _r.sadd(ACTIVE_VOTES_SET, channel_id)
+    return True
+
+
+def active_mute_vote(channel_id) -> dict | None:
+    raw = _r.hgetall(_vote_key(str(channel_id)))
+    if not raw:
+        return None
+    return {
+        "target_uid": raw["target_uid"],
+        "initiator_uid": raw["initiator_uid"],
+        "started_at": float(raw["started_at"]),
+        "ends_at": float(raw["ends_at"]),
+    }
+
+
+def cast_mute_vote(channel_id, uid, for_: bool) -> bool:
+    """Засчитывает голос. False — если голосования нет или uid уже голосовал."""
+    channel_id = str(channel_id)
+    uid = str(uid)
+    if not _r.exists(_vote_key(channel_id)):
+        return False
+    if _r.sismember(_vote_for_key(channel_id), uid) or _r.sismember(
+        _vote_against_key(channel_id), uid
+    ):
+        return False
+    _r.sadd(_vote_for_key(channel_id) if for_ else _vote_against_key(channel_id), uid)
+    return True
+
+
+def mute_vote_tally(channel_id) -> tuple[set, set]:
+    channel_id = str(channel_id)
+    return (
+        _r.smembers(_vote_for_key(channel_id)),
+        _r.smembers(_vote_against_key(channel_id)),
+    )
+
+
+def mute_vote_eligible_ids(channel_id, target_uid) -> set:
+    """Кто может голосовать — все, кто сейчас в канале, кроме самой цели."""
+    ids = voice_member_ids(channel_id)
+    ids.discard(str(target_uid))
+    return ids
+
+
+def clear_mute_vote(channel_id):
+    channel_id = str(channel_id)
+    _r.delete(
+        _vote_key(channel_id), _vote_for_key(channel_id), _vote_against_key(channel_id))
+    _r.srem(ACTIVE_VOTES_SET, channel_id)
+
+
+def active_vote_channel_ids() -> set:
+    return set(_r.smembers(ACTIVE_VOTES_SET))
+
+
+# --- принудительный мут (итог голосования) -------------------------------
+def set_forced_mute(uid, until_ts: float):
+    ttl = max(1, int(until_ts - time.time()))
+    _r.set(_forced_mute_key(str(uid)), until_ts, ex=ttl)
+
+
+def forced_mute_until(uid):
+    val = _r.get(_forced_mute_key(str(uid)))
+    return float(val) if val is not None else None
+
+
+def clear_forced_mute(uid):
+    _r.delete(_forced_mute_key(str(uid)))

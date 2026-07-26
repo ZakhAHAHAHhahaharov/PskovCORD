@@ -14,6 +14,18 @@ GatewayConsumer — единственный WebSocket на клиента (по
     {"op": "voice_mute_update", "muted": bool, "deafened": bool}
     {"op": "voice_screen_share_update", "sharing": bool}
     {"op": "voice_topic_update", "topic": "..."}
+    {"op": "voice_disconnect_user", "user_id": <id>} — отключить участника от
+     ЕГО текущего голосового канала (нужно право "manage_members", владельца
+     сервера отключить нельзя).
+    {"op": "voice_mute_vote_start", "target_user_id": <id>} — начать
+     голосование за мут участника, который сейчас в ТОМ ЖЕ голосовом канале,
+     что и отправитель (право не нужно — может любой участник канала).
+    {"op": "voice_mute_vote_cast", "for": bool} — проголосовать в активном
+     голосовании канала, в котором отправитель сейчас находится (сама цель
+     голосования голосовать не может).
+    {"op": "voice_request_screen_share", "target_user_id": <id>} — попросить
+     участника того же голосового канала включить демонстрацию экрана
+     (персональный тихий пинг, см. voice_screen_share_requested ниже).
     {"op": "set_status", "status": "online" | "dnd" | "invisible"}
     {"op": "ping"}  — хартбит, см. presence.heartbeat/chat.heartbeat_sweep
 
@@ -37,6 +49,21 @@ GatewayConsumer — единственный WebSocket на клиента (по
      "peer_flags": {<id>: {"muted": bool, "deafened": bool, "sharing_screen": bool}, ...}}
     {"op": "voice_mute_update", "user_id": <id>, "muted": bool, "deafened": bool}
     {"op": "voice_screen_share_update", "user_id": <id>, "sharing": bool}
+    {"op": "voice_kicked", "channel_id": <id>} — персонально тому, кого только
+     что принудительно отключили от голосового канала (voice_disconnect_user).
+    {"op": "voice_mute_vote_start", "channel_id": <id>, "target_user_id": <id>,
+     "initiator_user_id": <id>, "ends_at": <float>} — новое голосование в
+     канале, всем на сервере (клиент сам решает, показывать ли модалку, по
+     тому, находится ли он сейчас в этом канале).
+    {"op": "voice_mute_vote_result", "channel_id": <id>, "target_user_id": <id>,
+     "muted": bool, "votes_for": <int>, "votes_against": <int>} — итог
+     голосования (см. chat.mute_vote.resolve).
+    {"op": "voice_forced_mute", "until": <float>} — персонально тому, кого
+     только что замьютило голосование; клиент обязан заглушить свой микрофон
+     и не давать размьютиться раньше "until" (unix-секунды).
+    {"op": "voice_screen_share_requested", "channel_id": <id>,
+     "from_user_id": <id>, "from_username": "..."} — персонально: кто-то из
+     того же голосового канала просит включить демонстрацию экрана.
     {"op": "voice_call_state", "channel_id": <id>,
      "call_started_at": <float|null>, "topic": "..."|null}
     {"op": "profile_update", "user_id": <id>, "username": "...",
@@ -108,7 +135,7 @@ from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
 from django.utils import timezone
 
-from . import presence, roles
+from . import mute_vote, presence, roles
 from .models import (
     Channel, ConversationMessage, ConversationParticipant,
     Membership, Message, dm_conversation_id, dm_room, is_dm_room,
@@ -205,6 +232,14 @@ class GatewayConsumer(AsyncWebsocketConsumer):
             await self._handle_voice_screen_share_update(data)
         elif op == "voice_topic_update":
             await self._handle_voice_topic_update(data)
+        elif op == "voice_disconnect_user":
+            await self._handle_voice_disconnect_user(data)
+        elif op == "voice_mute_vote_start":
+            await self._handle_voice_mute_vote_start(data)
+        elif op == "voice_mute_vote_cast":
+            await self._handle_voice_mute_vote_cast(data)
+        elif op == "voice_request_screen_share":
+            await self._handle_voice_request_screen_share(data)
         elif op == "set_status":
             await self._handle_set_status(data)
         elif op == "dm_send_message":
@@ -436,6 +471,133 @@ class GatewayConsumer(AsyncWebsocketConsumer):
         await asyncio.to_thread(presence.set_call_topic, channel_id, topic)
         server_id = await self._channel_server(channel_id)
         await self._broadcast_call_state(channel_id, server_id)
+
+    async def _handle_voice_disconnect_user(self, data):
+        target_user_id = data.get("user_id")
+        if not target_user_id or int(target_user_id) == self.user.id:
+            return
+        target_room = await asyncio.to_thread(presence.voice_channel, str(target_user_id))
+        if not target_room or is_dm_room(target_room):
+            return
+        server_id = await self._channel_server(target_room)
+        if not server_id:
+            return
+        allowed = await self._can_manage_members(server_id, target_user_id)
+        if not allowed:
+            return
+        prev = await asyncio.to_thread(presence.clear_voice, str(target_user_id))
+        if not prev:
+            return
+        # Не переиспользуем _broadcast_voice — та берёт username/avatar_color
+        # из self.user (годится только когда рассылка о САМОМ СЕБЕ); здесь
+        # self.user — тот, кто кикает, а не тот, кого кикнули. Ростер и так
+        # уже знает имя/аватар цели (она загружена через api.members()),
+        # событие только должно сообщить, что voice_channel стал null.
+        await self.channel_layer.group_send(
+            f"server_{server_id}", {"type": "broadcast", "payload": {
+                "op": "voice_state_update",
+                "user_id": int(target_user_id),
+                "channel_id": None,
+                "server_id": server_id,
+            }})
+        await self._broadcast_call_state(prev, server_id)
+        await self.channel_layer.group_send(
+            f"user_{target_user_id}", {"type": "broadcast", "payload": {
+                "op": "voice_kicked",
+                "channel_id": int(prev),
+            }})
+
+    async def _handle_voice_mute_vote_start(self, data):
+        target_user_id = data.get("target_user_id")
+        if not target_user_id or int(target_user_id) == self.user.id:
+            return
+        channel_id, server_id = await self._own_voice_channel_server()
+        if not channel_id:
+            return
+        member_ids = await asyncio.to_thread(presence.voice_member_ids, channel_id)
+        if str(target_user_id) not in member_ids:
+            return
+        if not await self._target_not_owner(server_id, target_user_id):
+            return
+        started = await asyncio.to_thread(
+            presence.start_mute_vote, channel_id, target_user_id, self.user.id,
+            mute_vote.MUTE_VOTE_DURATION_S)
+        if not started:
+            return
+        vote = await asyncio.to_thread(presence.active_mute_vote, channel_id)
+        await self.channel_layer.group_send(
+            f"server_{server_id}", {"type": "broadcast", "payload": {
+                "op": "voice_mute_vote_start",
+                "channel_id": int(channel_id),
+                "target_user_id": int(target_user_id),
+                "initiator_user_id": self.user.id,
+                "ends_at": vote["ends_at"],
+            }})
+
+    async def _handle_voice_mute_vote_cast(self, data):
+        for_ = bool(data.get("for"))
+        channel_id, _server_id = await self._own_voice_channel_server()
+        if not channel_id:
+            return
+        vote = await asyncio.to_thread(presence.active_mute_vote, channel_id)
+        if not vote or str(self.user.id) == vote["target_uid"]:
+            return
+        ok = await asyncio.to_thread(
+            presence.cast_mute_vote, channel_id, self.user.id, for_)
+        if not ok:
+            return
+        eligible = await asyncio.to_thread(
+            presence.mute_vote_eligible_ids, channel_id, vote["target_uid"])
+        votes_for, votes_against = await asyncio.to_thread(
+            presence.mute_vote_tally, channel_id)
+        if (votes_for | votes_against) >= eligible:
+            await database_sync_to_async(mute_vote.resolve)(
+                channel_id, self.channel_layer)
+
+    async def _handle_voice_request_screen_share(self, data):
+        target_user_id = data.get("target_user_id")
+        if not target_user_id or int(target_user_id) == self.user.id:
+            return
+        own_room = await asyncio.to_thread(presence.voice_channel, self.uid)
+        if not own_room or is_dm_room(own_room):
+            return
+        target_room = await asyncio.to_thread(presence.voice_channel, str(target_user_id))
+        if target_room != own_room:
+            return
+        await self.channel_layer.group_send(
+            f"user_{target_user_id}", {"type": "broadcast", "payload": {
+                "op": "voice_screen_share_requested",
+                "channel_id": int(own_room),
+                "from_user_id": self.user.id,
+                "from_username": self.user.username,
+            }})
+
+    async def _own_voice_channel_server(self):
+        """(channel_id, server_id) ТЕКУЩЕГО голосового канала СЕРВЕРА
+        отправителя — (None, None), если он не в голосе или это диалог/группа
+        (голосование за мут и его подсчёт — только для серверных каналов, там
+        есть ростер с ролями/правами; звонок в личке/группе этого не имеет)."""
+        room = await asyncio.to_thread(presence.voice_channel, self.uid)
+        if not room or is_dm_room(room):
+            return None, None
+        server_id = await self._channel_server(room)
+        if not server_id:
+            return None, None
+        return room, server_id
+
+    @database_sync_to_async
+    def _can_manage_members(self, server_id, target_user_id):
+        from .models import Server
+        server = Server.objects.filter(id=server_id).first()
+        if not server or server.owner_id == int(target_user_id):
+            return False
+        return roles.has_permission(self.user, server, "manage_members")
+
+    @database_sync_to_async
+    def _target_not_owner(self, server_id, target_user_id):
+        from .models import Server
+        server = Server.objects.filter(id=server_id).first()
+        return bool(server) and server.owner_id != int(target_user_id)
 
     async def _handle_voice_mute_update(self, data):
         muted = bool(data.get("muted"))

@@ -50,6 +50,16 @@ export interface VoiceMesh {
   toggleMute: () => void
   deafened: boolean
   toggleDeafen: () => void
+  /** unix-секунды окончания принудительного мута (итог голосования, см.
+   * chat.mute_vote.resolve) — пока не истёк, toggleMute() не даёт размьютиться. */
+  forcedMuteUntil: number | null
+  /** Применить итог голосования за мут к себе (см. gateway-событие
+   * voice_forced_mute) — глушит трек немедленно и планирует авто-снятие. */
+  applyForcedMute: (until: number) => void
+  /** Запретить/разрешить userId смотреть НАШУ демонстрацию экрана (см. SfuClient.blockScreenViewer). */
+  blockScreenViewer: (userId: number, blocked: boolean) => void
+  /** Кого мы сейчас заблокировали (для отображения переключателя в меню участника). */
+  blockedScreenViewerIds: Set<number>
   status: VoiceStatus
   /** Средний RTT (мс) до SFU, null пока нет данных. */
   pingMs: number | null
@@ -74,6 +84,10 @@ const EMPTY_MESH: VoiceMesh = {
   toggleMute: () => {},
   deafened: false,
   toggleDeafen: () => {},
+  forcedMuteUntil: null,
+  applyForcedMute: () => {},
+  blockScreenViewer: () => {},
+  blockedScreenViewerIds: new Set(),
   status: 'connecting',
   pingMs: null,
   speakingUserIds: new Set(),
@@ -113,6 +127,9 @@ export function useVoiceMesh(
   const [isSharingScreen, setIsSharingScreen] = useState(false)
   const [muted, setMuted] = useState(true)
   const [deafened, setDeafened] = useState(false)
+  const [forcedMuteUntil, setForcedMuteUntil] = useState<number | null>(null)
+  const forcedMuteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const [blockedScreenViewerIds, setBlockedScreenViewerIds] = useState<Set<number>>(new Set())
   // Честный статус — по факту установленного WebRTC-транспорта к SFU.
   const [status, setStatus] = useState<VoiceStatus>('connecting')
   const [pingMs, setPingMs] = useState<number | null>(null)
@@ -390,6 +407,10 @@ export function useVoiceMesh(
       micProcessingCtxRef.current = null
       watchedScreenUserIdsRef.current.clear()
       mutedBeforeDeafen.current = false
+      if (forcedMuteTimerRef.current) clearTimeout(forcedMuteTimerRef.current)
+      forcedMuteTimerRef.current = null
+      setForcedMuteUntil(null)
+      setBlockedScreenViewerIds(new Set())
       setMuted(true)
       setDeafened(false)
       setIsSharingScreen(false)
@@ -508,6 +529,10 @@ export function useVoiceMesh(
 
   const toggleMute = () => {
     if (!localStream.current) return
+    // Принудительный мут по итогам голосования (см. applyForcedMute) нельзя
+    // снять раньше срока вручную — сервер всё равно продолжит считать нас
+    // замьюченными, а рассинхрон только запутает.
+    if (forcedMuteUntil != null && Date.now() < forcedMuteUntil * 1000) return
     const enabled = localStream.current.getAudioTracks().some((t) => t.enabled)
     localStream.current.getAudioTracks().forEach((t) => (t.enabled = !enabled))
     // enabled=true => сейчас размьючены, значит мьютим => пауза продюсера.
@@ -534,6 +559,38 @@ export function useVoiceMesh(
         client.current?.setMicPaused(restoreMuted)
         setMuted(restoreMuted)
       }
+      return next
+    })
+  }
+
+  // Итог голосования за мут (см. chat.mute_vote.resolve) — сервер прислал
+  // персональное voice_forced_mute{until}. В отличие от обычного мьюта,
+  // реально глушим трек НЕМЕДЛЕННО (а не полагаемся на toggleMute — цель
+  // голосования его и не звала) и запрещаем размьютиться раньше until (см.
+  // гейт в toggleMute), затем сами снимаем мут по истечении срока — как и
+  // решено в плане, без восстановления состояния "до".
+  const applyForcedMute = (until: number) => {
+    if (forcedMuteTimerRef.current) clearTimeout(forcedMuteTimerRef.current)
+    setForcedMuteUntil(until)
+    localStream.current?.getAudioTracks().forEach((t) => (t.enabled = false))
+    client.current?.setMicPaused(true)
+    setMuted(true)
+    const delay = Math.max(0, until * 1000 - Date.now())
+    forcedMuteTimerRef.current = setTimeout(() => {
+      forcedMuteTimerRef.current = null
+      setForcedMuteUntil(null)
+      localStream.current?.getAudioTracks().forEach((t) => (t.enabled = true))
+      client.current?.setMicPaused(false)
+      setMuted(false)
+    }, delay)
+  }
+
+  const blockScreenViewer = (userId: number, blocked: boolean) => {
+    client.current?.blockScreenViewer(userId, blocked)
+    setBlockedScreenViewerIds((prev) => {
+      const next = new Set(prev)
+      if (blocked) next.add(userId)
+      else next.delete(userId)
       return next
     })
   }
@@ -594,6 +651,10 @@ export function useVoiceMesh(
     toggleMute,
     deafened,
     toggleDeafen,
+    forcedMuteUntil,
+    applyForcedMute,
+    blockScreenViewer,
+    blockedScreenViewerIds,
     status,
     pingMs,
     speakingUserIds,

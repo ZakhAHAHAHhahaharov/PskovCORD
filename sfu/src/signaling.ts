@@ -11,6 +11,9 @@ import { Room, Peer } from './room'
  *   produce (микрофон, на send-транспорте)
  *   getProducers + consume (чужие треки, на recv-транспорте) → resumeConsumer
  * Плюс серверные уведомления: newProducer / producerClosed / peerClosed.
+ *
+ * blockScreenViewer {targetUserId, blocked} — запретить/разрешить конкретному
+ * userId смотреть демонстрацию экрана ЭТОГО пира (см. Room.blockedScreenViewers).
  */
 export async function handleRequest(
   room: Room,
@@ -53,11 +56,11 @@ export async function handleRequest(
       })
       peer.producers.set(producer.id, producer)
       // Оповещаем остальных — пусть создадут consumer на этот producer.
-      room.broadcast(peer, 'newProducer', {
-        producerId: producer.id,
-        userId: peer.userId,
-        source,
-      })
+      // Для демонстрации экрана — с учётом блок-листа (см. Room.broadcastScreenAware):
+      // заблокированный зритель не должен даже увидеть, что демонстрация появилась.
+      const notifyData = { producerId: producer.id, userId: peer.userId, source }
+      if (source === 'screen') room.broadcastScreenAware(peer, 'newProducer', notifyData)
+      else room.broadcast(peer, 'newProducer', notifyData)
       producer.on('transportclose', () => {
         peer.producers.delete(producer.id)
       })
@@ -93,9 +96,16 @@ export async function handleRequest(
         throw new Error('cannot consume')
       }
       const found = room.findProducer(data.producerId)
-      const owner = found ? found.userId : null
+      const owner = found ? found.peer.userId : null
       const source =
         (found?.producer.appData as { source?: string } | undefined)?.source ?? 'mic'
+      // Демонстрация экрана, а её владелец заблокировал именно этого зрителя —
+      // отклоняем, даже если сам producerId откуда-то узнали (он и не должен
+      // был попасть клиенту: getProducers/newProducer уже отфильтрованы, см.
+      // Room.otherProducers/broadcastScreenAware).
+      if (found && source === 'screen' && found.peer.blockedScreenViewers.has(peer.userId)) {
+        throw new Error('blocked by screen share owner')
+      }
       const consumer = await transport.consume({
         producerId: data.producerId,
         rtpCapabilities: data.rtpCapabilities,
@@ -124,6 +134,22 @@ export async function handleRequest(
       const consumer = peer.consumers.get(data.consumerId)
       if (!consumer) throw new Error('consumer not found')
       await consumer.resume()
+      return {}
+    }
+
+    case 'blockScreenViewer': {
+      // Запрет/разрешение конкретному userId смотреть демонстрацию ЭТОГО
+      // пира. Действует на всё время текущего подключения к SFU (не
+      // персистится) — см. Room.otherProducers/broadcastScreenAware (не
+      // узнает о новых демках) и consume (не сможет запросить существующую).
+      const targetUserId = Number(data.targetUserId)
+      const blocked = !!data.blocked
+      if (blocked) {
+        peer.blockedScreenViewers.add(targetUserId)
+        room.closeScreenConsumersFor(peer, targetUserId)
+      } else {
+        peer.blockedScreenViewers.delete(targetUserId)
+      }
       return {}
     }
 

@@ -40,6 +40,7 @@ function ParticipantTile({
   deafened,
   onOpenProfile,
   onExpand,
+  onContextMenu,
 }: {
   member: VoiceRosterMember
   speaking: boolean
@@ -50,9 +51,22 @@ function ParticipantTile({
    * мини-профиль) разворачивает участника на весь блок, как демонстрацию
    * экрана — см. VoiceStage.expanded. */
   onExpand: () => void
+  /** Правый клик — контекстное меню участника (см. AppShell), нет у себя самого. */
+  onContextMenu?: (e: ReactMouseEvent) => void
 }) {
   return (
-    <div className="participant-tile" onClick={onExpand}>
+    <div
+      className="participant-tile"
+      onClick={onExpand}
+      onContextMenu={
+        onContextMenu
+          ? (e) => {
+              e.preventDefault()
+              onContextMenu(e)
+            }
+          : undefined
+      }
+    >
       <button
         type="button"
         className="avatar-trigger"
@@ -173,6 +187,7 @@ export default function VoiceStage({
   onConsumedPendingWatch,
   onRequestWatch,
   onOpenProfile,
+  onParticipantContextMenu,
 }: {
   /** Опаque id комнаты — Channel.id для сервера, Conversation.id для
    * личного/группового звонка (см. AppShell.VoiceRoom). Используется только
@@ -189,6 +204,10 @@ export default function VoiceStage({
   onConsumedPendingWatch: () => void
   onRequestWatch: (userId: number) => void
   onOpenProfile: (user: ProfilePopupUser, e: ReactMouseEvent) => void
+  /** Правый клик на участнике — контекстное меню (см. AppShell). Только для
+   * голосовых каналов сервера — для звонка в личке/группе AppShell этот
+   * проп просто не передаёт. */
+  onParticipantContextMenu?: (member: VoiceRosterMember, e: ReactMouseEvent) => void
 }) {
   const {
     speakingUserIds,
@@ -375,6 +394,11 @@ export default function VoiceStage({
               deafened={m.id === selfUserId ? deafened : m.deafened}
               onOpenProfile={onOpenProfile}
               onExpand={() => setExpanded({ userId: m.id, mode: 'participant' })}
+              onContextMenu={
+                m.id !== selfUserId && onParticipantContextMenu
+                  ? (e) => onParticipantContextMenu(m, e)
+                  : undefined
+              }
             />
           ))}
           {isSharingScreen && (
