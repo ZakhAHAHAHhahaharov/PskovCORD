@@ -36,6 +36,18 @@ export interface ProfileCard {
   banner_image: string
 }
 
+/** Один активный сеанс (устройство/браузер) — «Активные сеансы» в
+ * настройках, см. backend accounts.models.LoginSession. */
+export interface Session {
+  id: number
+  ip_address: string | null
+  user_agent: string
+  created_at: string
+  last_seen_at: string
+  /** Тот самый сеанс, чьим токеном сейчас авторизован этот клиент. */
+  is_current: boolean
+}
+
 export interface Channel {
   id: number
   server: number
@@ -375,6 +387,7 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ current_password, new_password }),
     }),
+  getSessions: (): Promise<Session[]> => req('/api/auth/sessions'),
   config: () => req('/api/config'),
 
   servers: (): Promise<Server[]> => req('/api/servers'),

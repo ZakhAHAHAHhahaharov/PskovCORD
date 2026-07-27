@@ -51,6 +51,11 @@ GatewayConsumer — единственный WebSocket на клиента (по
     {"op": "voice_screen_share_update", "user_id": <id>, "sharing": bool}
     {"op": "voice_kicked", "channel_id": <id>} — персонально тому, кого только
      что принудительно отключили от голосового канала (voice_disconnect_user).
+    {"op": "voice_kicked_other_device"} — персонально ОСТАЛЬНЫМ подключениям
+     того же аккаунта (см. _kick_other_devices): голос только что начался на
+     другом устройстве/вкладке, у себя (канал или диалог/группа — не важно,
+     какой именно) нужно немедленно разорвать голос локально. Один аккаунт
+     не может быть в голосе на двух устройствах разом ни при каких условиях.
     {"op": "voice_mute_vote_start", "channel_id": <id>, "target_user_id": <id>,
      "initiator_user_id": <id>, "ends_at": <float>} — новое голосование в
      канале, всем на сервере (клиент сам решает, показывать ли модалку, по
@@ -139,6 +144,8 @@ SFU-сервис (mediasoup) — клиент открывает к нему с�
 """
 import asyncio
 import json
+import uuid
+from urllib.parse import parse_qs
 
 from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
@@ -163,6 +170,24 @@ class GatewayConsumer(AsyncWebsocketConsumer):
         self.server_groups = []
         self.conversation_groups = []
         self.personal_group = f"user_{self.user.id}"
+        # Отличает ЭТО устройство/вкладку от других подключений того же
+        # аккаунта в personal_group — см. _kick_other_devices: рассылка
+        # "разорви голос" идёт всем подключениям аккаунта разом, это
+        # соединение должно уметь узнать в ней самого себя и не кикнуть
+        # само же себя, когда оно и есть инициатор.
+        #
+        # Берём device_id из query (см. gateway.tsx — стабильный per-вкладку
+        # id в sessionStorage, переживает reconnect и StrictMode-ремаунт), а
+        # не генерируем свежий uuid на каждое СОЕДИНЕНИЕ: иначе один и тот же
+        # физический браузер/вкладка, на миг оставшийся подключённым ДВУМЯ
+        # WS-сокетами разом (обрыв+реконнект, двойной mount в дев-режиме),
+        # выглядел бы для этой проверки как два разных устройства и кикал бы
+        # сам себя. Если клиент почему-то его не прислал — откатываемся на
+        # случайный uuid: ключ уникален как раньше, просто без устойчивости
+        # к такой гонке.
+        query = parse_qs(self.scope.get("query_string", b"").decode())
+        device_id = (query.get("device_id") or [None])[0]
+        self.connection_id = device_id or uuid.uuid4().hex
 
         await self.accept()
 
@@ -362,6 +387,21 @@ class GatewayConsumer(AsyncWebsocketConsumer):
                 "op": "dm_message_update", "message": result["data"]}},
         )
 
+    async def _kick_other_devices(self):
+        """Один аккаунт — один голосовой звонок одновременно, будь то канал
+        сервера или диалог/группа. presence.join_voice (см. presence.py) уже
+        атомарно переносит единственный "где я в голосе" слот на новую
+        комнату, но ОСТАЛЬНЫЕ подключения этого аккаунта (другой браузер,
+        телефон — те же WS-соединения в personal_group) об этом не знают:
+        их локальный WebRTC/SFU как ни в чём не бывало продолжал бы слать и
+        принимать медиа. Рассылаем им команду разорвать голос локально;
+        себя самого (инициатора) исключает connection_id — см. broadcast()."""
+        await self.channel_layer.group_send(
+            self.personal_group, {"type": "broadcast", "payload": {
+                "op": "voice_kicked_other_device",
+                "connection_id": self.connection_id,
+            }})
+
     async def _handle_voice_join(self, data):
         channel_id = data.get("channel_id")
         if not channel_id:
@@ -369,6 +409,7 @@ class GatewayConsumer(AsyncWebsocketConsumer):
         server_id = await self._voice_channel_server(channel_id)
         if not server_id:
             return
+        await self._kick_other_devices()
         peer_ids, emptied_room = await asyncio.to_thread(
             presence.join_voice, self.uid, channel_id)
         # Демонстрация экрана не переживает смену канала (WebRTC-сессия рвётся
@@ -415,6 +456,7 @@ class GatewayConsumer(AsyncWebsocketConsumer):
         ok = await self._is_conversation_participant(conversation_id)
         if not ok:
             return
+        await self._kick_other_devices()
         room = dm_room(conversation_id)
         peer_ids, emptied_room = await asyncio.to_thread(
             presence.join_voice, self.uid, room)
@@ -741,6 +783,10 @@ class GatewayConsumer(AsyncWebsocketConsumer):
         """Обработчик group_send(type="broadcast")."""
         payload = event["payload"]
         op = payload.get("op")
+        if op == "voice_kicked_other_device" and payload.get("connection_id") == self.connection_id:
+            # Разослали САМИ (см. _kick_other_devices) — это соединение и
+            # есть то самое "новое устройство", отключать нечего.
+            return
         if op == "server_membership_granted":
             # Вступили в сервер (или одобрили заявку) с уже открытым сокетом.
             # Список server_-групп собирается один раз в connect(), поэтому

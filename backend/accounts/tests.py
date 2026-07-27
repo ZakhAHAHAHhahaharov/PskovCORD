@@ -261,3 +261,73 @@ class AuthThrottleTests(APITestCase):
             for i in range(5)
         ]
         self.assertIn(429, statuses, f"ожидали 429 среди {statuses}")
+
+
+class LoginSessionTests(APITestCase):
+    """«Активные сеансы» в настройках — см. accounts.models.LoginSession.
+
+    Аутентификация настоящим access-токеном (не force_authenticate): именно
+    он несёт claim session_id, по которому SessionListView определяет
+    is_current, — force_authenticate его бы не подставил."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username="sessioner", password="sufficientlyLong1")
+
+    def _login(self):
+        resp = self.client.post("/api/auth/token", {
+            "username": "sessioner", "password": "sufficientlyLong1",
+        })
+        return resp.data["access"], resp.data["refresh"]
+
+    def _auth(self, access):
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {access}")
+
+    def test_login_creates_session_visible_in_list(self):
+        access, _ = self._login()
+        self._auth(access)
+        resp = self.client.get("/api/auth/sessions")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(len(resp.data), 1)
+        self.assertTrue(resp.data[0]["is_current"])
+
+    def test_two_logins_show_as_two_sessions(self):
+        access1, _ = self._login()
+        access2, _ = self._login()
+        self._auth(access2)
+        resp = self.client.get("/api/auth/sessions")
+        self.assertEqual(len(resp.data), 2)
+        # ровно одна отмечена текущей — та, чьим токеном сейчас авторизованы.
+        self.assertEqual(sum(1 for s in resp.data if s["is_current"]), 1)
+
+    def test_refresh_keeps_single_session_row(self):
+        access, refresh = self._login()
+        refreshed = self.client.post("/api/auth/token/refresh", {"refresh": refresh})
+        self.assertEqual(refreshed.status_code, 200)
+        self._auth(refreshed.data["access"])
+        resp = self.client.get("/api/auth/sessions")
+        self.assertEqual(
+            len(resp.data), 1,
+            "ротация refresh-токена не должна плодить новую строку сеанса")
+        self.assertTrue(resp.data[0]["is_current"])
+
+    def test_logout_removes_session(self):
+        access, refresh = self._login()
+        self._auth(access)
+        self.assertEqual(
+            self.client.post("/api/auth/logout", {"refresh": refresh}).status_code, 204)
+        access2, _ = self._login()
+        self._auth(access2)
+        resp = self.client.get("/api/auth/sessions")
+        self.assertEqual(len(resp.data), 1, "должна остаться только вторая сессия")
+
+    def test_password_change_clears_all_sessions(self):
+        access, _ = self._login()
+        self._login()  # второе устройство
+        self._auth(access)
+        resp = self.client.post("/api/auth/change-password", {
+            "current_password": "sufficientlyLong1",
+            "new_password": "brandNewSecret7",
+        })
+        self.assertEqual(resp.status_code, 204)
+        self.assertEqual(self.user.login_sessions.count(), 0)

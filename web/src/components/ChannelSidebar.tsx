@@ -149,7 +149,7 @@ export default function ChannelSidebar({
                     }`}
                     onClick={() => onJoinVoice(c)}
                   >
-                    <span className="channel-icon">
+                    <span className={`channel-icon${isMyVoiceChannel ? ' in-voice' : ''}`}>
                       <Volume2 size={15} />
                     </span>
                     <span className="channel-name">{c.name}</span>
