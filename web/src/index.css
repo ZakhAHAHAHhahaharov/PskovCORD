@@ -13,6 +13,21 @@
   --text-muted: #949ba4;
   --text-faint: #80848e;
   --header-shadow: #26282c;
+  /* Яркий текст на затемнённом фоне приложения (заголовки, ники, автор
+     сообщения) — раньше был просто хардкоженный #fff, но в светлой теме
+     такой же фон становится светлым, и белый текст на нём нечитаем. */
+  --heading-text: #ffffff;
+
+  /* "Утопленные" поверхности: поля ввода/треки ползунков, нижние панели
+     (юзер-панель, полоса статуса войса), пилюля поля сообщения. В тёмной
+     теме темнее чем --sidebar-bg, в светлой — светлее чем --chat-bg. */
+  --input-bg: #1e1f22;
+  --input-border: #111214;
+  --surface-2: #232428;
+  --surface-2-border: #1f2023;
+  --input-secondary-bg: #383a40;
+  --scrollbar-thumb: #1a1b1e;
+  --border-color: rgba(255, 255, 255, 0.08);
 
   --blurple: #5865f2;
   --blurple-hover: #4752c4;
@@ -22,6 +37,96 @@
 
   --font: 'gg sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
     Helvetica, Arial, sans-serif;
+}
+
+/* Темы переключаются атрибутом data-theme на <html>, см. applyTheme() в
+   web/src/settings.tsx. 'dark' — это и есть значения :root по умолчанию
+   (атрибут для неё просто снимается), остальные три — блоки ниже. Ставится
+   либо явным выбором пользователя, либо (при "Системная") разрешением
+   prefers-color-scheme в dark/light. Бренд- и семантические цвета
+   (blurple/green/yellow/red) не переопределяются нигде — они одинаково
+   читаемы на любом фоне, как и в самом Discord. */
+:root[data-theme='light'] {
+  --rail-bg: #e3e5e8;
+  --sidebar-bg: #f2f3f5;
+  --chat-bg: #ffffff;
+  --members-bg: #f2f3f5;
+  --modal-bg: #ffffff;
+
+  --channel-hover: #e0e2e6;
+  --channel-active: #e3e5e8;
+  --channel-active-text: #060607;
+
+  --text-normal: #060607;
+  --text-muted: #5c5e66;
+  --text-faint: #6d6f78;
+
+  --heading-text: #060607;
+
+  --input-bg: #e3e5e8;
+  --input-border: #c4c9ce;
+  --surface-2: #ebedef;
+  --surface-2-border: #d4d7dc;
+  --input-secondary-bg: #e3e5e8;
+  --scrollbar-thumb: #c4c9ce;
+  --border-color: rgba(6, 6, 7, 0.08);
+}
+
+/* Оникс — вариант тёмной под OLED: фоны утоплены в чистый чёрный (экономит
+   заряд на OLED-матрицах, там чёрный пиксель буквально выключен), текст и
+   акценты — как в обычной тёмной. */
+:root[data-theme='oled'] {
+  --rail-bg: #000000;
+  --sidebar-bg: #0a0a0a;
+  --chat-bg: #000000;
+  --members-bg: #0a0a0a;
+  --modal-bg: #0a0a0a;
+
+  --channel-hover: #1a1a1a;
+  --channel-active: #242424;
+  --channel-active-text: #ffffff;
+
+  --text-normal: #dbdee1;
+  --text-muted: #949ba4;
+  --text-faint: #80848e;
+
+  --heading-text: #ffffff;
+
+  --input-bg: #0a0a0a;
+  --input-border: #000000;
+  --surface-2: #000000;
+  --surface-2-border: #000000;
+  --input-secondary-bg: #141414;
+  --scrollbar-thumb: #000000;
+  --border-color: rgba(255, 255, 255, 0.08);
+}
+
+/* Пепел — приглушённая серая тема: без чёрного и без синеватого подтона
+   обычной тёмной, просто нейтральный серый разной светлоты. */
+:root[data-theme='ash'] {
+  --rail-bg: #3f4147;
+  --sidebar-bg: #4b4d54;
+  --chat-bg: #54565d;
+  --members-bg: #4b4d54;
+  --modal-bg: #54565d;
+
+  --channel-hover: #5d5f66;
+  --channel-active: #67696f;
+  --channel-active-text: #ffffff;
+
+  --text-normal: #f2f3f5;
+  --text-muted: #c7c9ce;
+  --text-faint: #a8aab0;
+
+  --heading-text: #ffffff;
+
+  --input-bg: #3a3c42;
+  --input-border: #2c2e33;
+  --surface-2: #3a3c42;
+  --surface-2-border: #2c2e33;
+  --input-secondary-bg: #5d5f66;
+  --scrollbar-thumb: #2c2e33;
+  --border-color: rgba(255, 255, 255, 0.1);
 }
 
 * {
@@ -107,8 +212,8 @@ input {
 }
 
 .field-input {
-  background: #1e1f22;
-  border: 1px solid #111214;
+  background: var(--input-bg);
+  border: 1px solid var(--input-border);
   border-radius: 4px;
   padding: 10px;
   color: var(--text-normal);
@@ -236,7 +341,7 @@ input {
 .rail-divider {
   width: 32px;
   height: 2px;
-  background: #35363c;
+  background: var(--channel-hover);
   border-radius: 1px;
 }
 
@@ -276,7 +381,7 @@ input {
 .sidebar-title {
   font-weight: 700;
   font-size: 15px;
-  color: #fff;
+  color: var(--heading-text);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -378,7 +483,7 @@ input {
 }
 
 .voice-user span.speaking {
-  color: #fff;
+  color: var(--heading-text);
   transition: color 100ms ease-out;
 }
 
@@ -427,7 +532,7 @@ input {
 .call-topic-input {
   min-width: 0;
   flex: 1;
-  background: #1e1f22;
+  background: var(--input-bg);
   border: 1px solid var(--blurple);
   border-radius: 3px;
   padding: 1px 5px;
@@ -441,8 +546,8 @@ input {
   align-items: center;
   justify-content: space-between;
   padding: 8px 10px;
-  background: #232428;
-  border-top: 1px solid #1f2023;
+  background: var(--surface-2);
+  border-top: 1px solid var(--surface-2-border);
 }
 
 .voice-connected-info {
@@ -513,7 +618,7 @@ input {
 /* ---- user panel ---- */
 .user-panel {
   height: 52px;
-  background: #232428;
+  background: var(--surface-2);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -537,7 +642,7 @@ input {
 .user-panel-username {
   font-size: 14px;
   font-weight: 600;
-  color: #fff;
+  color: var(--heading-text);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -709,7 +814,7 @@ input {
 
 .profile-popup-divider {
   height: 1px;
-  background: var(--border-color, rgba(255, 255, 255, 0.08));
+  background: var(--border-color);
   margin: 6px 4px;
 }
 
@@ -739,7 +844,7 @@ input {
 
 .status-menu-item.active {
   background: var(--channel-active);
-  color: #fff;
+  color: var(--channel-active-text);
   font-weight: 600;
 }
 
@@ -853,7 +958,7 @@ input {
   align-items: center;
   gap: 6px;
   font-weight: 700;
-  color: #fff;
+  color: var(--heading-text);
 }
 
 .voice-stage-grid {
@@ -966,7 +1071,7 @@ input {
 }
 
 .participant-expanded-name {
-  color: #fff;
+  color: var(--heading-text);
   font-size: 20px;
   font-weight: 600;
 }
@@ -1108,7 +1213,7 @@ input {
 
 .chat-header-name {
   font-weight: 700;
-  color: #fff;
+  color: var(--heading-text);
 }
 
 .chat-empty {
@@ -1156,7 +1261,7 @@ input {
 
 .message-author {
   font-weight: 600;
-  color: #fff;
+  color: var(--heading-text);
   font-size: 15px;
 }
 
@@ -1250,7 +1355,7 @@ input {
 
 .message-input input {
   width: 100%;
-  background: #383a40;
+  background: var(--input-secondary-bg);
   border: none;
   border-radius: 8px;
   padding: 12px 16px;
@@ -1270,7 +1375,7 @@ input {
   gap: 8px;
   padding: 6px 16px;
   margin-bottom: 4px;
-  background: #383a40;
+  background: var(--input-secondary-bg);
   border-radius: 8px 8px 0 0;
   font-size: 13px;
   color: var(--text-muted);
@@ -1435,7 +1540,7 @@ input {
 
 .modal-title {
   margin: 0 0 16px;
-  color: #fff;
+  color: var(--heading-text);
   font-size: 20px;
 }
 
@@ -1456,7 +1561,7 @@ input {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  background: #2b2d31;
+  background: var(--sidebar-bg);
   padding: 12px;
   border-radius: 6px;
 }
@@ -1468,7 +1573,7 @@ input {
 
 .discover-name {
   font-weight: 600;
-  color: #fff;
+  color: var(--heading-text);
 }
 
 .discover-count {
@@ -1553,13 +1658,13 @@ input {
 
 .profile-divider {
   height: 1px;
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--border-color);
   margin: 20px 0 16px;
 }
 
 .profile-subtitle {
   margin: 0 0 12px;
-  color: #fff;
+  color: var(--heading-text);
   font-size: 15px;
 }
 
@@ -1781,7 +1886,7 @@ input {
   appearance: none;
   height: 4px;
   border-radius: 2px;
-  background: #1e1f22;
+  background: var(--input-bg);
   outline: none;
 }
 
@@ -1834,7 +1939,7 @@ input {
   height: 8px;
   transform: translateY(-50%);
   border-radius: 4px;
-  background: #1e1f22;
+  background: var(--input-bg);
 }
 
 .mic-sensitivity-fill {
@@ -1855,16 +1960,19 @@ input {
 .mic-sensitivity-thumb {
   position: absolute;
   top: 50%;
-  width: 2px;
-  height: 14px;
-  background: #fff;
-  border-radius: 1px;
-  transform: translate(-1px, -50%);
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--blurple);
+  /* Кольцо цветом модалки — отделяет кружок от зелёной полосы уровня под ним,
+     как у обычных ползунков (там для этого хватает фона трека). */
+  box-shadow: 0 0 0 2px var(--modal-bg);
+  transform: translate(-50%, -50%);
   pointer-events: none;
 }
 
 .mic-sensitivity:focus-within .mic-sensitivity-thumb {
-  box-shadow: 0 0 0 3px rgba(88, 101, 242, 0.5);
+  box-shadow: 0 0 0 2px var(--modal-bg), 0 0 0 5px rgba(88, 101, 242, 0.5);
 }
 
 /* Невидимый range поверх полосы — реальный драг/клавиатура/клик достаются
@@ -1932,12 +2040,59 @@ input {
   color: #fff;
 }
 
+/* ---- выбор темы (категория "Внешний вид") ---- */
+.theme-picker {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin-bottom: 20px;
+}
+
+.theme-option {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 8px;
+  border-radius: 8px;
+  background: var(--input-bg);
+  border: 2px solid transparent;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 600;
+  text-align: center;
+}
+
+.theme-option:hover {
+  color: var(--text-normal);
+}
+
+.theme-option.active {
+  border-color: var(--blurple);
+  color: var(--text-normal);
+}
+
+.theme-swatch {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px var(--border-color);
+}
+
+.theme-swatch.system {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--surface-2);
+  color: var(--text-muted);
+}
+
 /* scrollbars */
 ::-webkit-scrollbar {
   width: 8px;
 }
 ::-webkit-scrollbar-thumb {
-  background: #1a1b1e;
+  background: var(--scrollbar-thumb);
   border-radius: 4px;
 }
 ::-webkit-scrollbar-track {
@@ -1972,7 +2127,7 @@ input {
 
 .home-tab.active {
   background: var(--channel-active);
-  color: #fff;
+  color: var(--channel-active-text);
 }
 
 .home-tab-badge {
@@ -2032,8 +2187,8 @@ input {
 
 .home-add-friend input {
   flex: 1;
-  background: #1e1f22;
-  border: 1px solid #111214;
+  background: var(--input-bg);
+  border: 1px solid var(--input-border);
   border-radius: 4px;
   padding: 8px 10px;
   color: var(--text-normal);
@@ -2144,7 +2299,7 @@ input {
 
 .incoming-call-title {
   font-weight: 700;
-  color: #fff;
+  color: var(--heading-text);
   font-size: 14px;
 }
 
@@ -2330,7 +2485,7 @@ input {
   gap: 10px;
   font-size: 17px;
   font-weight: 700;
-  color: #fff;
+  color: var(--heading-text);
   min-width: 0;
 }
 
@@ -2533,7 +2688,7 @@ input {
 
 .srv-role-item.active {
   background: var(--channel-active);
-  color: #fff;
+  color: var(--channel-active-text);
 }
 
 .srv-role-dot {
@@ -2625,7 +2780,7 @@ input {
   gap: 10px;
   padding: 10px 12px;
   border-radius: 6px;
-  background: #2b2d31;
+  background: var(--sidebar-bg);
   margin-bottom: 6px;
 }
 
@@ -2710,7 +2865,7 @@ input {
   gap: 8px;
   font-weight: 700;
   font-size: 14px;
-  color: #fff;
+  color: var(--heading-text);
 }
 
 .mute-vote-modal-timer {
