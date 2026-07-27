@@ -365,9 +365,16 @@ input {
   display: flex;
   align-items: center;
   gap: 8px;
+  width: 100%;
   padding: 3px 8px 3px 28px;
+  border-radius: 4px;
+  text-align: left;
   color: var(--text-muted);
   font-size: 14px;
+}
+
+.voice-user:hover {
+  background: var(--channel-hover);
 }
 
 .voice-user span.speaking {

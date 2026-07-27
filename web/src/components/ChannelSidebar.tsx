@@ -26,6 +26,7 @@ export default function ChannelSidebar({
   onWatchScreen,
   onOpenServerSettings,
   onParticipantContextMenu,
+  onOpenParticipantProfile,
 }: {
   server: Server | null
   channels: Channel[]
@@ -49,6 +50,9 @@ export default function ChannelSidebar({
    * находимся (см. AppShell.contextMenuTarget) — на остальных каналах меню
    * не открывается, там местная громкость/действия всё равно не применимы. */
   onParticipantContextMenu?: (member: Member, e: ReactMouseEvent) => void
+  /** Левый клик на участнике голосового канала — открыть его мини-профиль
+   * (см. MembersList.onOpenProfile — тот же попап, тот же коллбэк из AppShell). */
+  onOpenParticipantProfile?: (member: Member, e: ReactMouseEvent) => void
 }) {
   const { speakingUserIds, muted, deafened } = useVoice()
   // Для себя — локальное состояние mesh'а (мгновенный отклик на клик);
@@ -163,9 +167,11 @@ export default function ChannelSidebar({
                     const mic = micStateOf(m)
                     const canOpenMenu = isMyVoiceChannel && m.id !== user.id && onParticipantContextMenu
                     return (
-                      <div
+                      <button
                         key={m.id}
+                        type="button"
                         className="voice-user"
+                        onClick={(e) => onOpenParticipantProfile?.(m, e)}
                         onContextMenu={
                           canOpenMenu
                             ? (e) => {
@@ -184,13 +190,16 @@ export default function ChannelSidebar({
                         />
                         <span className={speaking ? 'speaking' : ''}>{m.username}</span>
                         {m.sharing_screen && (
-                          <button
+                          <span
                             className="demo-badge"
                             title={`Смотреть демонстрацию экрана — ${m.username}`}
-                            onClick={() => onWatchScreen(m)}
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              onWatchScreen(m)
+                            }}
                           >
                             <Monitor size={11} /> демка
-                          </button>
+                          </span>
                         )}
                         <span className="voice-user-icons">
                           {mic.muted && (
@@ -204,7 +213,7 @@ export default function ChannelSidebar({
                             </span>
                           )}
                         </span>
-                      </div>
+                      </button>
                     )
                   })}
                 </div>
