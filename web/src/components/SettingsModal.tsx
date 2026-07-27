@@ -1,37 +1,145 @@
-import { useEffect, useRef } from 'react'
-import { LogOut, Volume2, Mic, AudioWaveform, X, Image as ImageIcon } from 'lucide-react'
+import { ReactNode, useEffect, useRef, useState } from 'react'
+import {
+  LogOut,
+  Volume2,
+  Mic,
+  AudioWaveform,
+  X,
+  User as UserIcon,
+  Image as ImageIcon,
+} from 'lucide-react'
 import { useSettings, DEFAULT_SETTINGS } from '../settings'
-import { useVoice } from '../voice'
 
-// min(0.005) + max(0.15) шкалы чувствительности — см. onChange/value ниже.
-const THRESHOLD_RANGE_SUM = 0.155
-// RMS, соответствующий 100% ширины метра — обычная громкая речь в микрофон
-// редко превышает это значение, порог/gain живут в куда меньшем диапазоне.
+// RMS, соответствующий 100% ширины шкалы чувствительности — обычная громкая
+// речь в микрофон редко превышает это значение. Порог живёт в её левой
+// половине (см. THRESHOLD_MIN/MAX) — заведомо громче этого настраивать
+// бессмысленно.
 const METER_SCALE = 0.3
+const THRESHOLD_MIN = 0.005
+const THRESHOLD_MAX = 0.15
+const THRESHOLD_STEP = 0.005
 
-/** Живой уровень своего микрофона — полоса + метка порога. Обновляется через
- * requestAnimationFrame напрямую в DOM (минуя React state), чтобы 60 кадров/с
- * не гоняли ре-рендер всего модала. Вне голосового канала микрофон не
- * захвачен — getMicLevel() тогда всегда 0, полоса просто остаётся пустой. */
-function MicLevelMeter({ thresholdPct }: { thresholdPct: number }) {
-  const { getMicLevel } = useVoice()
-  const fillRef = useRef<HTMLDivElement>(null)
+type SettingsCategory = 'account' | 'voice'
 
+const CATEGORIES: { id: SettingsCategory; label: string; icon: ReactNode }[] = [
+  { id: 'account', label: 'Аккаунт', icon: <UserIcon size={16} /> },
+  { id: 'voice', label: 'Голос и видео', icon: <AudioWaveform size={16} /> },
+]
+
+/** Живой уровень СВОЕГО микрофона — отдельный от голосового канала захват:
+ * раньше метр показывал что-то только во время звонка (getMicLevel() из
+ * useVoice брал уровень с потока активного звонка), теперь чувствительность
+ * можно подобрать заранее, без захода в канал. Обновляется через
+ * requestAnimationFrame напрямую в DOM, минуя React state, чтобы 60 кадров/с
+ * не гоняли ре-рендер всего модала. */
+function useMicLevelMeter(fillRef: React.RefObject<HTMLDivElement | null>) {
   useEffect(() => {
-    let rafId: number
-    const tick = () => {
-      const pct = Math.min(100, (getMicLevel() / METER_SCALE) * 100)
-      if (fillRef.current) fillRef.current.style.width = `${pct}%`
-      rafId = requestAnimationFrame(tick)
+    let cancelled = false
+    let stream: MediaStream | null = null
+    let audioCtx: AudioContext | null = null
+    let rafId = 0
+
+    void (async () => {
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+        if (cancelled) {
+          stream.getTracks().forEach((t) => t.stop())
+          return
+        }
+        const AudioCtx = window.AudioContext ?? (window as any).webkitAudioContext
+        if (!AudioCtx) return
+        audioCtx = new AudioCtx()
+        const source = audioCtx.createMediaStreamSource(stream)
+        const analyser = audioCtx.createAnalyser()
+        analyser.fftSize = 512
+        source.connect(analyser)
+        const data = new Uint8Array(analyser.fftSize)
+
+        const tick = () => {
+          analyser.getByteTimeDomainData(data)
+          let sumSquares = 0
+          for (let i = 0; i < data.length; i++) {
+            const v = (data[i] - 128) / 128
+            sumSquares += v * v
+          }
+          const rms = Math.sqrt(sumSquares / data.length)
+          const pct = Math.min(100, (rms / METER_SCALE) * 100)
+          if (fillRef.current) fillRef.current.style.width = `${pct}%`
+          rafId = requestAnimationFrame(tick)
+        }
+        rafId = requestAnimationFrame(tick)
+      } catch {
+        // Микрофон недоступен/запрещён — полоса просто остаётся пустой.
+      }
+    })()
+
+    return () => {
+      cancelled = true
+      cancelAnimationFrame(rafId)
+      stream?.getTracks().forEach((t) => t.stop())
+      audioCtx?.close().catch(() => {})
     }
-    rafId = requestAnimationFrame(tick)
-    return () => cancelAnimationFrame(rafId)
-  }, [getMicLevel])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+}
+
+/** Чувствительность микрофона — один элемент вместо ползунка и отдельного
+ * метра под ним: живой уровень и порог срабатывания рисуются на общей шкале
+ * (0..METER_SCALE), а сама метка порога — это же самое место, где стоит
+ * невидимый native <input type="range">, растянутый ровно на диапазон
+ * THRESHOLD_MIN..MAX той же шкалы. Поэтому перетаскивание метки и клик по
+ * полосе двигают один и тот же порог, без рассинхрона между "слайдером" и
+ * "метром", которые раньше были разными элементами с разными масштабами. */
+function MicSensitivityField({
+  value,
+  onChange,
+  onReset,
+}: {
+  value: number
+  onChange: (v: number) => void
+  onReset: () => void
+}) {
+  const fillRef = useRef<HTMLDivElement>(null)
+  useMicLevelMeter(fillRef)
+
+  const displayValue =
+    value <= 0.01 ? 'Максимальная' : value >= 0.14 ? 'Минимальная' : 'Средняя'
+  const thumbPct = (value / METER_SCALE) * 100
+  const inputLeftPct = (THRESHOLD_MIN / METER_SCALE) * 100
+  const inputWidthPct = ((THRESHOLD_MAX - THRESHOLD_MIN) / METER_SCALE) * 100
 
   return (
-    <div className="mic-level-meter">
-      <div className="mic-level-meter-fill" ref={fillRef} />
-      <div className="mic-level-meter-threshold" style={{ left: `${thresholdPct}%` }} />
+    <div className="settings-field">
+      <div className="settings-field-header">
+        <span className="settings-field-label">
+          <AudioWaveform size={15} /> Чувствительность микрофона
+        </span>
+        <span className="settings-field-value">{displayValue}</span>
+      </div>
+      <div className="settings-field-row">
+        <div className="mic-sensitivity">
+          <div className="mic-sensitivity-fill" ref={fillRef} />
+          <div className="mic-sensitivity-thumb" style={{ left: `${thumbPct}%` }} />
+          <input
+            type="range"
+            className="mic-sensitivity-input"
+            style={{ left: `${inputLeftPct}%`, width: `${inputWidthPct}%` }}
+            min={THRESHOLD_MIN}
+            max={THRESHOLD_MAX}
+            step={THRESHOLD_STEP}
+            value={value}
+            onChange={(e) => onChange(Number(e.target.value))}
+          />
+        </div>
+        <button className="settings-field-reset" title="Сбросить по умолчанию" onClick={onReset}>
+          <X size={13} />
+        </button>
+      </div>
+      <p className="settings-hint">
+        Зелёная полоса — живой уровень вашего микрофона, работает и вне голосового канала.
+        Белая метка — порог: перетащите её туда, с какой громкости у вас должно загораться
+        кольцо «говорит».
+      </p>
     </div>
   )
 }
@@ -47,7 +155,7 @@ function SliderField({
   onChange,
   onReset,
 }: {
-  icon: React.ReactNode
+  icon: ReactNode
   label: string
   value: number
   displayValue: string
@@ -97,74 +205,81 @@ export default function SettingsModal({
     micThreshold,
     setMicThreshold,
   } = useSettings()
+  const [category, setCategory] = useState<SettingsCategory>('account')
 
   return (
     <div className="modal-overlay" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
+      <div className="modal settings-modal" onClick={(e) => e.stopPropagation()}>
         <h2 className="modal-title">Настройки</h2>
 
-        <SliderField
-          icon={<Volume2 size={15} />}
-          label="Громкость собеседников"
-          value={outputVolume}
-          displayValue={`${Math.round(outputVolume * 100)}%`}
-          min={0}
-          max={1}
-          step={0.01}
-          onChange={setOutputVolume}
-          onReset={() => setOutputVolume(DEFAULT_SETTINGS.outputVolume)}
-        />
+        <div className="settings-body">
+          <nav className="settings-sidebar">
+            {CATEGORIES.map((c) => (
+              <button
+                key={c.id}
+                className={`settings-sidebar-item${category === c.id ? ' active' : ''}`}
+                onClick={() => setCategory(c.id)}
+              >
+                {c.icon} {c.label}
+              </button>
+            ))}
+          </nav>
 
-        <SliderField
-          icon={<Mic size={15} />}
-          label="Громкость своего микрофона"
-          value={micGain}
-          displayValue={`${Math.round(micGain * 100)}%`}
-          min={0}
-          max={2}
-          step={0.01}
-          onChange={setMicGain}
-          onReset={() => setMicGain(DEFAULT_SETTINGS.micGain)}
-        />
+          <div className="settings-content">
+            {category === 'account' && (
+              <>
+                <button
+                  className="settings-logout"
+                  onClick={() =>
+                    window.alert(
+                      'Выбор своей иконки вкладки скоро появится здесь. Пока стандартную иконку задаёт администратор через панель Django.',
+                    )
+                  }
+                >
+                  <ImageIcon size={15} /> Иконка сайта (скоро)
+                </button>
 
-        <SliderField
-          icon={<AudioWaveform size={15} />}
-          label="Чувствительность микрофона"
-          // Ползунок показывает "чувствительность" (правее — чувствительнее),
-          // а порог RMS устроен наоборот (меньше порог — чувствительнее) —
-          // разворачиваем шкалу в обе стороны (чтение и запись), чтобы
-          // контрол вёл себя интуитивно: THRESHOLD_RANGE_SUM - x самообратна.
-          value={THRESHOLD_RANGE_SUM - micThreshold}
-          displayValue={
-            micThreshold <= 0.01 ? 'Максимальная' : micThreshold >= 0.14 ? 'Минимальная' : 'Средняя'
-          }
-          min={0.005}
-          max={0.15}
-          step={0.005}
-          onChange={(v) => setMicThreshold(THRESHOLD_RANGE_SUM - v)}
-          onReset={() => setMicThreshold(DEFAULT_SETTINGS.micThreshold)}
-        />
-        <MicLevelMeter thresholdPct={Math.min(100, (micThreshold / METER_SCALE) * 100)} />
-        <p className="settings-hint">
-          Полоса — живой уровень вашего микрофона (только в голосовом канале), метка — порог
-          срабатывания. Насколько громко нужно говорить, чтобы у остальных загорелось кольцо
-          "говорит".
-        </p>
+                <button className="settings-logout" onClick={onLogout}>
+                  <LogOut size={15} /> Выйти из аккаунта
+                </button>
+              </>
+            )}
 
-        <button
-          className="settings-logout"
-          onClick={() =>
-            window.alert(
-              'Выбор своей иконки вкладки скоро появится здесь. Пока стандартную иконку задаёт администратор через панель Django.',
-            )
-          }
-        >
-          <ImageIcon size={15} /> Иконка сайта (скоро)
-        </button>
+            {category === 'voice' && (
+              <>
+                <SliderField
+                  icon={<Volume2 size={15} />}
+                  label="Громкость собеседников"
+                  value={outputVolume}
+                  displayValue={`${Math.round(outputVolume * 100)}%`}
+                  min={0}
+                  max={1}
+                  step={0.01}
+                  onChange={setOutputVolume}
+                  onReset={() => setOutputVolume(DEFAULT_SETTINGS.outputVolume)}
+                />
 
-        <button className="settings-logout" onClick={onLogout}>
-          <LogOut size={15} /> Выйти из аккаунта
-        </button>
+                <SliderField
+                  icon={<Mic size={15} />}
+                  label="Громкость своего микрофона"
+                  value={micGain}
+                  displayValue={`${Math.round(micGain * 100)}%`}
+                  min={0}
+                  max={2}
+                  step={0.01}
+                  onChange={setMicGain}
+                  onReset={() => setMicGain(DEFAULT_SETTINGS.micGain)}
+                />
+
+                <MicSensitivityField
+                  value={micThreshold}
+                  onChange={setMicThreshold}
+                  onReset={() => setMicThreshold(DEFAULT_SETTINGS.micThreshold)}
+                />
+              </>
+            )}
+          </div>
+        </div>
 
         <button className="modal-close" onClick={onClose}>
           Закрыть
