@@ -2552,6 +2552,9 @@ input {
   z-index: 90;
   width: 260px;
   padding: 8px;
+  background: var(--modal-bg);
+  border-radius: 10px;
+  box-shadow: 0 8px 16px rgba(0, 0, 0, 0.32);
 }
 
 .participant-context-menu .profile-popup-label {
