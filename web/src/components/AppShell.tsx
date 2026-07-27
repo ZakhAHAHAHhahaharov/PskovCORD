@@ -370,6 +370,16 @@ export default function AppShell() {
       setVoice(null)
       alert('Вас отключили от голосового канала.')
     })
+    // Голос начался на другом устройстве/вкладке того же аккаунта (см.
+    // chat.consumers._kick_other_devices) — один аккаунт не может быть в
+    // голосе на двух устройствах разом. voice_leave здесь НЕ шлём: presence
+    // на сервере уже атомарно указывает на НОВОЕ устройство (см.
+    // presence.join_voice), обычный voice_leave стёр бы именно её.
+    const offVoiceKickedOtherDevice = gateway.on('voice_kicked_other_device', () => {
+      if (!voiceRef.current) return
+      setVoice(null)
+      alert('Вы подключились к голосу с другого устройства — здесь звонок завершён.')
+    })
     // Новое голосование за мут в каком-то голосовом канале сервера — модалку
     // показываем, только если это канал, в котором мы сейчас сами сидим, и
     // цель — не мы (у цели голосования такого меню/модалки просто нет).
@@ -657,6 +667,7 @@ export default function AppShell() {
       offMicStatus()
       offScreenShare()
       offVoiceKicked()
+      offVoiceKickedOtherDevice()
       offMuteVoteStart()
       offMuteVoteResult()
       offScreenShareRequested()

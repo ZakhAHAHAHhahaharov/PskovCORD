@@ -68,6 +68,35 @@ class User(AbstractUser):
         return self.username
 
 
+class LoginSession(models.Model):
+    """Одна строка на "сеанс" (устройство/браузер) — для «Активные сеансы» в
+    настройках. Не привязана к конкретному refresh-токену напрямую: он
+    ротируется на каждый /token/refresh (см. SIMPLE_JWT.ROTATE_REFRESH_TOKENS),
+    а session_id — кастомный claim, который прописывается один раз при
+    логине/регистрации (accounts.views.record_login_session) и переживает
+    ротацию как есть (SimpleJWT при роутации переиспользует тот же объект
+    токена, просто сбрасывая jti/iat/exp, — остальные claims остаются).
+    jti обновляется на каждый refresh, чтобы можно было проверить, что
+    сеанс всё ещё жив (см. SessionListView — сверяется с OutstandingToken)."""
+
+    user = models.ForeignKey(
+        "accounts.User", related_name="login_sessions", on_delete=models.CASCADE)
+    session_id = models.UUIDField(db_index=True)
+    # jti текущего (последнего выданного/обновлённого) refresh-токена этого
+    # сеанса — см. rest_framework_simplejwt.token_blacklist.OutstandingToken.
+    jti = models.CharField(max_length=255, db_index=True)
+    ip_address = models.GenericIPAddressField(null=True, blank=True)
+    user_agent = models.CharField(max_length=300, blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    last_seen_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        indexes = [models.Index(fields=["user", "session_id"])]
+
+    def __str__(self) -> str:
+        return f"{self.user_id} @ {self.ip_address} ({self.session_id})"
+
+
 class Friendship(models.Model):
     """Заявка в друзья/дружба. Одна строка на пару, направленная
     (from_user отправил to_user), но симметричная по смыслу — is_friend

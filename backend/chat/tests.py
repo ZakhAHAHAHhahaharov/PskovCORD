@@ -3,13 +3,16 @@
 Медиа-транспорт голоса вынесен в отдельный SFU-сервис (mediasoup), поэтому
 mesh-сигналинга offer/answer/ice в gateway больше нет.
 """
+import asyncio
 import base64
 import hashlib
 import hmac
+import json
 import time
 
 import jwt
 from asgiref.sync import sync_to_async
+from channels.db import database_sync_to_async
 from channels.testing import WebsocketCommunicator
 from django.conf import settings
 from django.contrib.auth import get_user_model
@@ -917,6 +920,162 @@ class GatewayVoiceSignalingTests(TransactionTestCase):
 
         await alice_ws.disconnect()
         await bob_ws.disconnect()
+
+
+class SingleDeviceVoiceTests(TransactionTestCase):
+    """Один аккаунт — один голосовой звонок одновременно, будь то канал
+    сервера или диалог/группа (см. chat.consumers._kick_other_devices)."""
+
+    def setUp(self):
+        presence._r.flushdb()
+        self.alice = User.objects.create_user(username="alice3", password="pw12345")
+        self.server = Server.objects.create(name="s", owner=self.alice)
+        Membership.objects.create(user=self.alice, server=self.server)
+        self.voice_channel = Channel.objects.create(
+            server=self.server, name="v", kind=Channel.VOICE, position=0)
+        self.voice_channel2 = Channel.objects.create(
+            server=self.server, name="v2", kind=Channel.VOICE, position=1)
+
+    def tearDown(self):
+        presence._r.flushdb()
+
+    async def _connect(self, user, device_id=None):
+        token = str(AccessToken.for_user(user))
+        qs = f"token={token}"
+        if device_id:
+            qs += f"&device_id={device_id}"
+        comm = WebsocketCommunicator(
+            JWTAuthMiddleware(GatewayConsumer.as_asgi()),
+            f"/ws/gateway?{qs}")
+        connected, _ = await comm.connect()
+        self.assertTrue(connected)
+        return comm
+
+    @staticmethod
+    async def _receive_until(comm, op, timeout=2, max_messages=15):
+        for _ in range(max_messages):
+            msg = await comm.receive_json_from(timeout=timeout)
+            if msg.get("op") == op:
+                return msg
+        raise AssertionError(f"op={op!r} не пришёл за {max_messages} сообщений")
+
+    @staticmethod
+    async def _assert_op_not_received(comm, op, timeout=0.3):
+        """Не должно прилететь СЕБЕ — самоподавление по connection_id
+        (см. GatewayConsumer.broadcast).
+
+        Опрашивает comm.output_queue НАПРЯМУЮ, а не через
+        comm.receive_json_from: та на таймауте (штатный для неё способ
+        сказать "больше ничего нет") ОТМЕНЯЕТ asgi-таск приложения — на
+        одиночный "подожди и убедись, что ничего не пришло" внутри ещё
+        живого теста это ломает дальнейшую работу с тем же соединением
+        (следующий receive/disconnect падает CancelledError, см.
+        asgiref.testing.ApplicationCommunicator.receive_output)."""
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if comm.output_queue.empty():
+                await asyncio.sleep(0.02)
+                continue
+            message = comm.output_queue.get_nowait()
+            text = message.get("text")
+            if text and json.loads(text).get("op") == op:
+                raise AssertionError(f"неожиданно получили свой же {op!r}")
+
+    async def test_second_device_same_channel_kicks_first(self):
+        # Оба подключения — ОДИН и тот же аккаунт (два устройства/вкладки).
+        device1 = await self._connect(self.alice)
+        device2 = await self._connect(self.alice)
+
+        await device1.send_json_to({"op": "voice_join", "channel_id": self.voice_channel.id})
+        await self._receive_until(device1, "voice_peers")
+
+        await device2.send_json_to({"op": "voice_join", "channel_id": self.voice_channel.id})
+        await self._receive_until(device2, "voice_peers")
+
+        # device1 обязан получить команду разорвать голос локально...
+        await self._receive_until(device1, "voice_kicked_other_device")
+        # ...а device2 (инициатор) — точно не должен получить его сам себе.
+        await self._assert_op_not_received(device2, "voice_kicked_other_device")
+
+        await device1.disconnect()
+        await device2.disconnect()
+
+    async def test_same_device_id_does_not_self_kick(self):
+        """Реальный баг, отловленный вручную: React StrictMode в деве на миг
+        держит ДВА живых WS для одной вкладки (mount -> cleanup -> remount),
+        и с чисто случайным per-соединение id это выглядело как "другое
+        устройство" — voice_join с новой попытки кикал уже идущий звонок той
+        же вкладки. device_id в query стабилен для вкладки (см. gateway.tsx,
+        sessionStorage) — два соединения с ОДНИМ И ТЕМ ЖЕ device_id обязаны
+        считаться собой, а не отдельными устройствами."""
+        same_id = "tab-abc123"
+        conn1 = await self._connect(self.alice, device_id=same_id)
+        conn2 = await self._connect(self.alice, device_id=same_id)
+
+        await conn1.send_json_to({"op": "voice_join", "channel_id": self.voice_channel.id})
+        await self._receive_until(conn1, "voice_peers")
+
+        await conn2.send_json_to({"op": "voice_join", "channel_id": self.voice_channel2.id})
+        await self._receive_until(conn2, "voice_peers")
+
+        # Тот же device_id — conn1 НЕ должен получить "тебя кикнули".
+        await self._assert_op_not_received(conn1, "voice_kicked_other_device")
+
+        await conn1.disconnect()
+        await conn2.disconnect()
+
+    async def test_second_device_dm_call_kicks_first_channel_call(self):
+        """Ровно требование из ревью: нельзя "с телефона в канал" и "с
+        компа в личку" одновременно — проверяем именно разные типы комнат."""
+        other = await database_sync_to_async(User.objects.create_user)(
+            username="bob3", password="pw12345")
+        conversation = await database_sync_to_async(Conversation.objects.create)(
+            kind=Conversation.DM)
+        await database_sync_to_async(ConversationParticipant.objects.create)(
+            conversation=conversation, user=self.alice)
+        await database_sync_to_async(ConversationParticipant.objects.create)(
+            conversation=conversation, user=other)
+
+        phone = await self._connect(self.alice)
+        pc = await self._connect(self.alice)
+
+        await phone.send_json_to({"op": "voice_join", "channel_id": self.voice_channel.id})
+        await self._receive_until(phone, "voice_peers")
+
+        await pc.send_json_to({
+            "op": "dm_voice_join", "conversation_id": conversation.id})
+        await self._receive_until(pc, "dm_voice_peers")
+
+        await self._receive_until(phone, "voice_kicked_other_device")
+
+        # presence обязана указывать ровно на комнату диалога — "кик" не
+        # должен был откатить/стереть только что установленный join.
+        room = await database_sync_to_async(presence.voice_channel)(str(self.alice.id))
+        self.assertEqual(room, dm_room(conversation.id))
+
+        await phone.disconnect()
+        await pc.disconnect()
+
+    async def test_kicked_device_leave_does_not_clear_new_device_presence(self):
+        """Старое устройство после кика не шлёт voice_leave (иначе стёрло бы
+        presence нового) — фронт это соблюдает (AppShell.tsx), здесь же просто
+        убеждаемся, что presence остаётся консистентной без него: раз
+        voice_leave не пришёл, join второго устройства должен быть последним
+        словом."""
+        device1 = await self._connect(self.alice)
+        device2 = await self._connect(self.alice)
+
+        await device1.send_json_to({"op": "voice_join", "channel_id": self.voice_channel.id})
+        await self._receive_until(device1, "voice_peers")
+        await device2.send_json_to({"op": "voice_join", "channel_id": self.voice_channel2.id})
+        await self._receive_until(device2, "voice_peers")
+        await self._receive_until(device1, "voice_kicked_other_device")
+
+        room = await database_sync_to_async(presence.voice_channel)(str(self.alice.id))
+        self.assertEqual(room, str(self.voice_channel2.id))
+
+        await device1.disconnect()
+        await device2.disconnect()
 
 
 class ChannelCreateBroadcastTests(TransactionTestCase):

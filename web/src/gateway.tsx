@@ -74,6 +74,31 @@ const WS: string =
     ? ENV_WS
     : `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}`
 
+// Стабильный id этой вкладки — сервер сверяет его в chat.consumers
+// (_kick_other_devices/GatewayConsumer.connection_id), чтобы отличить
+// "реально другое устройство зашло в голос" от "эта же вкладка на миг
+// подключилась ДВУМЯ WS-сокетами разом" (обрыв+реконнект, двойной mount
+// React StrictMode в деве) — без стабильного id второй случай выглядел бы
+// для этой проверки как другое устройство и кикал бы сам себя. sessionStorage,
+// не module-переменная: переживает и обычный reconnect, и полный reload
+// страницы в той же вкладке (значение живёт, пока вкладка не закрыта).
+function getDeviceId(): string {
+  const KEY = 'pskovcord:device_id'
+  try {
+    let id = sessionStorage.getItem(KEY)
+    if (!id) {
+      id = crypto.randomUUID()
+      sessionStorage.setItem(KEY, id)
+    }
+    return id
+  } catch {
+    // sessionStorage недоступен (приватный режим и т.п.) — не критично,
+    // просто теряем устойчивость к гонке реконнекта для этой вкладки.
+    return crypto.randomUUID()
+  }
+}
+const DEVICE_ID = getDeviceId()
+
 export function GatewayProvider({ children }: { children: ReactNode }) {
   const wsRef = useRef<WebSocket | null>(null)
   const handlers = useRef<Map<string, Set<Handler>>>(new Map())
@@ -86,7 +111,7 @@ export function GatewayProvider({ children }: { children: ReactNode }) {
     const token = getToken()
     if (!token || closed.current) return
 
-    const ws = new WebSocket(`${WS}/ws/gateway?token=${token}`)
+    const ws = new WebSocket(`${WS}/ws/gateway?token=${token}&device_id=${DEVICE_ID}`)
     wsRef.current = ws
 
     ws.onopen = () => {
