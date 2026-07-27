@@ -14,6 +14,13 @@
       "runtimeArgs": ["manage.py", "runserver", "8000"],
       "port": 8000,
       "cwd": "backend"
+    },
+    {
+      "name": "sfu",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev"],
+      "port": 4443,
+      "cwd": "sfu"
     }
   ]
 }

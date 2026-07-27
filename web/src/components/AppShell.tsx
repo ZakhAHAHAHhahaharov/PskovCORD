@@ -1099,6 +1099,7 @@ export default function AppShell() {
           onWatchScreen={handleWatchBadge}
           onOpenServerSettings={() => setShowServerSettings(true)}
           onParticipantContextMenu={openParticipantContextMenu}
+          onOpenParticipantProfile={openProfilePopup}
         />
       )}
 
