@@ -1690,6 +1690,57 @@ input {
 }
 
 /* ---- settings modal ---- */
+.settings-modal {
+  width: 640px;
+  max-width: 92vw;
+  display: flex;
+  flex-direction: column;
+}
+
+.settings-body {
+  display: flex;
+  gap: 20px;
+  min-height: 320px;
+  margin-bottom: 16px;
+}
+
+.settings-sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 176px;
+  flex-shrink: 0;
+  padding-right: 16px;
+  border-right: 1px solid var(--channel-hover);
+}
+
+.settings-sidebar-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 4px;
+  color: var(--text-muted);
+  font-size: 14px;
+  font-weight: 500;
+  text-align: left;
+}
+
+.settings-sidebar-item:hover {
+  background: var(--channel-hover);
+  color: var(--text-normal);
+}
+
+.settings-sidebar-item.active {
+  background: var(--channel-active);
+  color: var(--channel-active-text);
+}
+
+.settings-content {
+  flex: 1;
+  min-width: 0;
+}
+
 .settings-field {
   margin-bottom: 18px;
 }
@@ -1722,7 +1773,10 @@ input {
   gap: 8px;
 }
 
-.settings-field-row input[type='range'] {
+/* :not(.mic-sensitivity-input) — у чувствительности микрофона свой набор
+   стилей ниже (прозрачный трек поверх живого метра), этот блок иначе бы
+   перебивал их по специфичности селектора. */
+.settings-field-row input[type='range']:not(.mic-sensitivity-input) {
   flex: 1;
   appearance: none;
   height: 4px;
@@ -1731,7 +1785,7 @@ input {
   outline: none;
 }
 
-.settings-field-row input[type='range']::-webkit-slider-thumb {
+.settings-field-row input[type='range']:not(.mic-sensitivity-input)::-webkit-slider-thumb {
   appearance: none;
   width: 16px;
   height: 16px;
@@ -1740,7 +1794,7 @@ input {
   cursor: pointer;
 }
 
-.settings-field-row input[type='range']::-moz-range-thumb {
+.settings-field-row input[type='range']:not(.mic-sensitivity-input)::-moz-range-thumb {
   width: 16px;
   height: 16px;
   border: none;
@@ -1765,33 +1819,88 @@ input {
   background: var(--channel-hover);
 }
 
-.mic-level-meter {
+.mic-sensitivity {
   position: relative;
-  height: 8px;
-  border-radius: 4px;
-  background: #1e1f22;
-  margin: -8px 0 8px;
-  overflow: visible;
+  flex: 1;
+  height: 20px;
 }
 
-.mic-level-meter-fill {
-  height: 100%;
+.mic-sensitivity::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 8px;
+  transform: translateY(-50%);
+  border-radius: 4px;
+  background: #1e1f22;
+}
+
+.mic-sensitivity-fill {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  height: 8px;
   width: 0%;
+  transform: translateY(-50%);
   border-radius: 4px;
   background: var(--green);
   /* Метр обновляется через requestAnimationFrame напрямую в style.width —
      transition сглаживает дискретные кадры визуально, без него дёргается. */
   transition: width 60ms linear;
+  pointer-events: none;
 }
 
-.mic-level-meter-threshold {
+.mic-sensitivity-thumb {
   position: absolute;
-  top: -3px;
+  top: 50%;
   width: 2px;
   height: 14px;
   background: #fff;
   border-radius: 1px;
-  transform: translateX(-1px);
+  transform: translate(-1px, -50%);
+  pointer-events: none;
+}
+
+.mic-sensitivity:focus-within .mic-sensitivity-thumb {
+  box-shadow: 0 0 0 3px rgba(88, 101, 242, 0.5);
+}
+
+/* Невидимый range поверх полосы — реальный драг/клавиатура/клик достаются
+   от нативного input, а рисует всё .mic-sensitivity-thumb/-fill сверху.
+   left/width задаются инлайново под THRESHOLD_MIN/MAX, чтобы курсор при
+   клике попадал ровно туда же, где потом окажется видимая метка. */
+.mic-sensitivity-input {
+  position: absolute;
+  top: 0;
+  height: 100%;
+  margin: 0;
+  appearance: none;
+  background: transparent;
+  cursor: pointer;
+}
+
+.mic-sensitivity-input::-webkit-slider-runnable-track {
+  background: transparent;
+}
+
+.mic-sensitivity-input::-webkit-slider-thumb {
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  opacity: 0;
+}
+
+.mic-sensitivity-input::-moz-range-track {
+  background: transparent;
+}
+
+.mic-sensitivity-input::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border: none;
+  opacity: 0;
 }
 
 .settings-hint {
@@ -1812,6 +1921,10 @@ input {
   padding: 10px;
   border-radius: 4px;
   font-size: 14px;
+}
+
+.settings-logout + .settings-logout {
+  margin-top: 8px;
 }
 
 .settings-logout:hover {
