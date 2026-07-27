@@ -14,6 +14,12 @@ export class Peer {
   readonly id: string
   readonly userId: number
   readonly socket: WebSocket
+  /** Права из access-токена (см. chat/sfu.py): «Говорить» и «Показывать
+   * видео». SFU не ходит в Django и о ролях сам не знает, поэтому produce
+   * здесь — единственное место, где эти права вообще проверяются на
+   * медиа-леге (см. signaling.ts). */
+  readonly canSpeak: boolean
+  readonly canVideo: boolean
   sendTransport?: types.WebRtcTransport
   recvTransport?: types.WebRtcTransport
   readonly producers = new Map<string, types.Producer>()
@@ -25,10 +31,18 @@ export class Peer {
    * набор) — осознанно, это предпочтение на текущий звонок, см. план. */
   readonly blockedScreenViewers = new Set<number>()
 
-  constructor(userId: number, socket: WebSocket) {
+  constructor(
+    userId: number,
+    socket: WebSocket,
+    permissions: { canSpeak?: boolean; canVideo?: boolean } = {},
+  ) {
     this.id = `p${++peerSeq}`
     this.userId = userId
     this.socket = socket
+    // Токены, выпущенные до появления этих claim'ов, не должны терять голос —
+    // отсутствующее значение считаем разрешением.
+    this.canSpeak = permissions.canSpeak !== false
+    this.canVideo = permissions.canVideo !== false
   }
 
   /** Ответ на запрос клиента (по его id) либо серверное уведомление. */
@@ -190,11 +204,20 @@ export class Rooms {
     // Гонка одновременных входов в новую комнату: создаём Router один раз.
     let creating = Rooms.pending.get(id)
     if (!creating) {
-      creating = Room.create(id).then((room) => {
-        Rooms.rooms.set(id, room)
-        Rooms.pending.delete(id)
-        return room
-      })
+      creating = Room.create(id).then(
+        (room) => {
+          Rooms.rooms.set(id, room)
+          Rooms.pending.delete(id)
+          return room
+        },
+        (err) => {
+          // Без снятия pending упавший промис оставался бы в реестре навсегда,
+          // и КАЖДЫЙ следующий вход в этот канал получал бы ту же ошибку —
+          // канал становился непригодным до перезапуска всего процесса.
+          Rooms.pending.delete(id)
+          throw err
+        },
+      )
       Rooms.pending.set(id, creating)
     }
     return creating

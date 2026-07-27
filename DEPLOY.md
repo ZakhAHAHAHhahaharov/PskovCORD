@@ -57,13 +57,40 @@ UDP/TCP 40000-40100 на публичном IP, мимо nginx и docker NAT.
 - **GitHub Actions secrets** (репозиторий → Settings → Secrets): `SSH_HOST`, `SSH_USER`,
   `SSH_PORT`, `SSH_KEY` (приватный ключ деплоя, публичный — в
   `/home/deploy/.ssh/authorized_keys` на сервере).
-- **`/opt/pskovcord/.env`** и **`/opt/pskovcord/backend/.env`** на сервере (права 600,
-  не в git) — Postgres-пароль, `DJANGO_SECRET_KEY`, `DJANGO_DEBUG=0`,
-  `DJANGO_ALLOWED_HOSTS=pskord.zlgvpn.org`, `TURN_SECRET` (легаси coturn).
-- **`SFU_SECRET`** — добавить в **корневой `/opt/pskovcord/.env`** (одной строкой,
-  `openssl rand -hex 32`). Оттуда compose раздаёт его и Django, и SFU, так что
-  дублировать в `backend/.env` не нужно. Если не задать — обе стороны возьмут
-  небезопасный dev-дефолт (голос заработает, но токен можно подделать).
+- **`/opt/pskovcord/backend/.env`** (права 600, не в git) — Postgres-пароль,
+  `DJANGO_SECRET_KEY`, `DJANGO_DEBUG=0`, `DJANGO_ALLOWED_HOSTS=pskord.zlgvpn.org`.
+- **`/opt/pskovcord/.env`** (корневой, права 600, не в git) — `POSTGRES_*` для
+  compose плюс **оба общих секрета: `SFU_SECRET` и `TURN_SECRET`**.
+
+> **Обязательно, иначе деплой не поднимется.** Раньше отсутствующие секреты
+> молча подменялись дефолтами из `.env.example` — то есть прод мог работать на
+> общеизвестном `dev-insecure-sfu-secret`, и кто угодно мог подписать себе
+> токен в любую голосовую комнату. Теперь и `docker compose`
+> (`${SFU_SECRET:?...}`), и сам Django (`config/settings.py`, `env_secret`), и
+> SFU (`sfu/src/config.ts`) при `DEBUG=0` отказываются стартовать без
+> настоящих значений. Это осознанно: сломанный деплой виден сразу, тихо
+> дырявый — нет.
+
+Проверить перед первым деплоем новой версии:
+
+```bash
+cd /opt/pskovcord
+grep -E '^(SFU_SECRET|TURN_SECRET|POSTGRES_PASSWORD)=' .env
+grep -E '^(DJANGO_SECRET_KEY|DJANGO_DEBUG|POSTGRES_PASSWORD)=' backend/.env
+```
+
+Если чего-то нет — добавить (`openssl rand -hex 32` на каждый секрет):
+
+```bash
+echo "SFU_SECRET=$(openssl rand -hex 32)" >> /opt/pskovcord/.env
+```
+
+**`TURN_SECRET` переехал в корневой `.env`.** До этого coturn читал его оттуда,
+а Django — из `backend/.env`: стоило файлам разойтись, и Django подписывал
+TURN-credentials одним ключом, а coturn проверял другим — relay тихо переставал
+работать без внятной причины. Теперь источник один. Если на сервере значение
+лежит только в `backend/.env`, **перенесите его в корневой `.env` тем же
+значением** (менять его не нужно — иначе оборвутся текущие TURN-сессии).
 - `SFU_PUBLIC_URL` и `SFU_ANNOUNCED_IP` **задавать не нужно** — прод-значения
   (`wss://pskord.zlgvpn.org/sfu` и `<SERVER_IP>`) зашиты в
   `deploy/docker-compose.prod.yml` и перекрывают `backend/.env`.

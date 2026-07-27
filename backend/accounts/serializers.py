@@ -3,9 +3,25 @@ import binascii
 import re
 
 from django.contrib.auth import get_user_model
+from django.contrib.auth.password_validation import validate_password
+from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import serializers
 
 User = get_user_model()
+
+
+def check_password_strength(password, user=None):
+    """Прогнать пароль через settings.AUTH_PASSWORD_VALIDATORS.
+
+    Раньше единственным требованием было min_length=4 прямо в поле
+    сериализатора, то есть «1234» проходил. Валидаторы Django заодно ловят
+    пароли из списка самых распространённых и совпадающие с именем
+    пользователя.
+    """
+    try:
+        validate_password(password, user=user)
+    except DjangoValidationError as exc:
+        raise serializers.ValidationError(list(exc.messages))
 
 # Ограничение на декодированный размер аватара — клиент сам сжимает до
 # 256x256 JPEG перед отправкой (десятки КБ), это лишь защита от прямых
@@ -27,7 +43,54 @@ GRADIENT_RE = re.compile(
 )
 
 
+def validate_data_url(value, allowed_mime, max_bytes, what):
+    """Разбор и проверка картинки-data-URL: формат → mime → base64 → размер.
+
+    Единственная реализация на проект. Раньше та же логика жила и здесь
+    (аватар/баннер профиля), и в chat/serializers.py (значок/баннер сервера) —
+    два независимых куска кода, которые нужно было править синхронно руками.
+    """
+    if not value:
+        return value
+    if not value.startswith("data:"):
+        raise serializers.ValidationError("Ожидался data-URL картинки.")
+    header, _, b64data = value.partition(",")
+    mime = header[len("data:"):].split(";")[0]
+    if mime not in allowed_mime:
+        raise serializers.ValidationError("Неподдерживаемый формат картинки.")
+    try:
+        decoded = base64.b64decode(b64data, validate=True)
+    except (binascii.Error, ValueError):
+        raise serializers.ValidationError(f"Битые данные ({what}).")
+    if len(decoded) > max_bytes:
+        raise serializers.ValidationError(f"Слишком большой файл ({what}).")
+    return value
+
+
 class UserSerializer(serializers.ModelSerializer):
+    """Публичный профиль — то, что видят ДРУГИЕ.
+
+    Отсюда убраны banner_image и dm_privacy. banner_image — гифка-баннер
+    data-URL'ом до 4 МБ, а этот сериализатор подставляется в КАЖДОЕ сообщение
+    (author и reply_to.author) и в каждую строку ростера: баннер уезжал
+    десятки раз за один ответ. Сама модель (accounts.models.User) прямо
+    говорит, что транслировать его другим не нужно, — REST-путь это правило
+    нарушал. Для чужой карточки профиля баннер теперь отдаётся отдельной
+    ручкой, ровно когда карточку открыли (chat.views.UserProfileCard).
+    dm_privacy — личная настройка приватности, другим её знать незачем.
+    """
+
+    class Meta:
+        model = User
+        fields = [
+            "id", "username", "avatar_color", "avatar_image", "status",
+            "banner_gradient",
+        ]
+
+
+class MeSerializer(serializers.ModelSerializer):
+    """Свой профиль — всё, включая личные настройки и тяжёлый баннер."""
+
     class Meta:
         model = User
         fields = [
@@ -37,7 +100,7 @@ class UserSerializer(serializers.ModelSerializer):
 
 
 class RegisterSerializer(serializers.ModelSerializer):
-    password = serializers.CharField(write_only=True, min_length=4)
+    password = serializers.CharField(write_only=True)
 
     class Meta:
         model = User
@@ -47,6 +110,13 @@ class RegisterSerializer(serializers.ModelSerializer):
         if User.objects.filter(username__iexact=value).exists():
             raise serializers.ValidationError("Имя пользователя уже занято.")
         return value
+
+    def validate(self, attrs):
+        # Проверяем в validate(), а не в validate_password(): валидатору
+        # похожести нужен username, а он доступен только тут.
+        check_password_strength(
+            attrs["password"], user=User(username=attrs.get("username", "")))
+        return attrs
 
     def create(self, validated_data):
         user = User(
@@ -85,21 +155,8 @@ class ProfileUpdateSerializer(serializers.ModelSerializer):
         return value
 
     def validate_avatar_image(self, value):
-        if not value:
-            return value
-        if not value.startswith("data:"):
-            raise serializers.ValidationError("Ожидался data-URL картинки.")
-        header, _, b64data = value.partition(",")
-        mime = header[len("data:"):].split(";")[0]
-        if mime not in ALLOWED_AVATAR_MIME:
-            raise serializers.ValidationError("Неподдерживаемый формат картинки.")
-        try:
-            decoded = base64.b64decode(b64data, validate=True)
-        except (binascii.Error, ValueError):
-            raise serializers.ValidationError("Битые данные аватара.")
-        if len(decoded) > MAX_AVATAR_BYTES:
-            raise serializers.ValidationError("Аватар слишком большой.")
-        return value
+        return validate_data_url(
+            value, ALLOWED_AVATAR_MIME, MAX_AVATAR_BYTES, "аватар")
 
     def validate_banner_gradient(self, value):
         if not value:
@@ -109,29 +166,20 @@ class ProfileUpdateSerializer(serializers.ModelSerializer):
         return value
 
     def validate_banner_image(self, value):
-        if not value:
-            return value
-        if not value.startswith("data:"):
-            raise serializers.ValidationError("Ожидался data-URL картинки.")
-        header, _, b64data = value.partition(",")
-        mime = header[len("data:"):].split(";")[0]
-        if mime not in ALLOWED_BANNER_MIME:
-            raise serializers.ValidationError("Неподдерживаемый формат баннера.")
-        try:
-            decoded = base64.b64decode(b64data, validate=True)
-        except (binascii.Error, ValueError):
-            raise serializers.ValidationError("Битые данные баннера.")
-        if len(decoded) > MAX_BANNER_BYTES:
-            raise serializers.ValidationError("Баннер слишком большой.")
-        return value
+        return validate_data_url(
+            value, ALLOWED_BANNER_MIME, MAX_BANNER_BYTES, "баннер")
 
 
 class ChangePasswordSerializer(serializers.Serializer):
     current_password = serializers.CharField(write_only=True)
-    new_password = serializers.CharField(write_only=True, min_length=4)
+    new_password = serializers.CharField(write_only=True)
 
     def validate_current_password(self, value):
         user = self.context["request"].user
         if not user.check_password(value):
             raise serializers.ValidationError("Неверный текущий пароль.")
+        return value
+
+    def validate_new_password(self, value):
+        check_password_strength(value, user=self.context["request"].user)
         return value

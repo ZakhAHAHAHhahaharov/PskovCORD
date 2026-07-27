@@ -1,6 +1,8 @@
 """Тесты профиля: смена ника/аватара (PATCH /api/auth/me) и пароля."""
 from django.contrib.auth import get_user_model
+from django.core.cache import cache
 from rest_framework.test import APITestCase
+from rest_framework.throttling import SimpleRateThrottle
 
 User = get_user_model()
 
@@ -112,3 +114,150 @@ class ChangePasswordTests(APITestCase):
             "current_password": "oldpass1", "new_password": "newpass2",
         })
         self.assertEqual(resp.status_code, 401)
+
+
+class RegistrationAndLoginTests(APITestCase):
+    """Auth-флоу целиком раньше не был покрыт ни одним тестом — при том что
+    именно здесь нашлись слабая политика паролей и отсутствие отзыва токенов."""
+
+    def test_register_returns_tokens_and_profile(self):
+        resp = self.client.post("/api/auth/register", {
+            "username": "newcomer", "password": "sufficientlyLong1",
+        })
+        self.assertEqual(resp.status_code, 201)
+        self.assertIn("access", resp.data)
+        self.assertIn("refresh", resp.data)
+        self.assertEqual(resp.data["user"]["username"], "newcomer")
+
+    def test_register_rejects_duplicate_username_case_insensitively(self):
+        User.objects.create_user(username="taken", password="sufficientlyLong1")
+        resp = self.client.post("/api/auth/register", {
+            "username": "TAKEN", "password": "sufficientlyLong1",
+        })
+        self.assertEqual(resp.status_code, 400)
+
+    def test_login_returns_tokens(self):
+        User.objects.create_user(username="loginner", password="sufficientlyLong1")
+        resp = self.client.post("/api/auth/token", {
+            "username": "loginner", "password": "sufficientlyLong1",
+        })
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn("access", resp.data)
+        self.assertIn("refresh", resp.data)
+
+    def test_login_with_wrong_password_rejected(self):
+        User.objects.create_user(username="loginner2", password="sufficientlyLong1")
+        resp = self.client.post("/api/auth/token", {
+            "username": "loginner2", "password": "totallyWrong9",
+        })
+        self.assertEqual(resp.status_code, 401)
+
+    def test_refresh_rotates_and_blacklists_old_token(self):
+        User.objects.create_user(username="rotator", password="sufficientlyLong1")
+        login = self.client.post("/api/auth/token", {
+            "username": "rotator", "password": "sufficientlyLong1",
+        })
+        old_refresh = login.data["refresh"]
+
+        first = self.client.post("/api/auth/token/refresh", {"refresh": old_refresh})
+        self.assertEqual(first.status_code, 200)
+        self.assertIn("refresh", first.data, "ROTATE_REFRESH_TOKENS должен отдавать новый refresh")
+
+        # Старый refresh после ротации должен быть отозван.
+        second = self.client.post("/api/auth/token/refresh", {"refresh": old_refresh})
+        self.assertEqual(second.status_code, 401)
+
+
+class PasswordPolicyTests(APITestCase):
+    """До этого единственным требованием было min_length=4 — «1234» проходил."""
+
+    def test_short_password_rejected_on_register(self):
+        resp = self.client.post("/api/auth/register", {
+            "username": "shorty", "password": "1234",
+        })
+        self.assertEqual(resp.status_code, 400)
+
+    def test_all_numeric_password_rejected(self):
+        resp = self.client.post("/api/auth/register", {
+            "username": "numeric", "password": "9182736450",
+        })
+        self.assertEqual(resp.status_code, 400)
+
+    def test_common_password_rejected(self):
+        resp = self.client.post("/api/auth/register", {
+            "username": "common", "password": "password123",
+        })
+        self.assertEqual(resp.status_code, 400)
+
+    def test_password_similar_to_username_rejected(self):
+        resp = self.client.post("/api/auth/register", {
+            "username": "alexanderthegreat", "password": "alexanderthegreat",
+        })
+        self.assertEqual(resp.status_code, 400)
+
+
+class TokenRevocationTests(APITestCase):
+    """Выход и смена пароля должны отзывать выданные refresh-токены."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username="revoker", password="sufficientlyLong1")
+
+    def _login(self):
+        resp = self.client.post("/api/auth/token", {
+            "username": "revoker", "password": "sufficientlyLong1",
+        })
+        return resp.data["refresh"]
+
+    def test_logout_blacklists_refresh_token(self):
+        refresh = self._login()
+        self.client.force_authenticate(self.user)
+        self.assertEqual(
+            self.client.post("/api/auth/logout", {"refresh": refresh}).status_code, 204)
+        self.client.force_authenticate(None)
+        resp = self.client.post("/api/auth/token/refresh", {"refresh": refresh})
+        self.assertEqual(resp.status_code, 401)
+
+    def test_password_change_revokes_other_sessions(self):
+        refresh = self._login()
+        self.client.force_authenticate(self.user)
+        resp = self.client.post("/api/auth/change-password", {
+            "current_password": "sufficientlyLong1",
+            "new_password": "brandNewSecret7",
+        })
+        self.assertEqual(resp.status_code, 204)
+
+        self.client.force_authenticate(None)
+        resp = self.client.post("/api/auth/token/refresh", {"refresh": refresh})
+        self.assertEqual(
+            resp.status_code, 401,
+            "после смены пароля старые refresh-токены обязаны перестать работать")
+
+
+class AuthThrottleTests(APITestCase):
+    """Троттлинга на auth-ручках не было вовсе: подбор пароля ограничивался
+    только шириной канала. В обычном прогоне ставки сняты (см.
+    settings.RUNNING_TESTS), поэтому здесь возвращаем их точечно."""
+
+    def setUp(self):
+        cache.clear()
+        # DRF читает DEFAULT_THROTTLE_RATES в атрибут КЛАССА на импорте
+        # модуля, поэтому override_settings до него не достаёт — патчим сам
+        # атрибут.
+        self._original_rates = SimpleRateThrottle.THROTTLE_RATES
+        SimpleRateThrottle.THROTTLE_RATES = {
+            "anon": None, "user": None, "auth": "3/min",
+        }
+
+    def tearDown(self):
+        SimpleRateThrottle.THROTTLE_RATES = self._original_rates
+        cache.clear()
+
+    def test_login_attempts_are_rate_limited(self):
+        statuses = [
+            self.client.post("/api/auth/token", {
+                "username": "nobody", "password": f"guess{i}Long",
+            }).status_code
+            for i in range(5)
+        ]
+        self.assertIn(429, statuses, f"ожидали 429 среди {statuses}")

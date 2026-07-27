@@ -2,13 +2,19 @@
 Django settings для PskovCord.
 """
 import os
+import sys
 from datetime import timedelta
 from pathlib import Path
 
+from django.core.exceptions import ImproperlyConfigured
 from dotenv import load_dotenv
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(BASE_DIR / ".env")
+
+# Прогон тестов: часть защит (троттлинг) мешает тестам, часть проверок
+# (обязательные секреты) не нужна — см. места использования.
+RUNNING_TESTS = "test" in sys.argv
 
 
 def env_bool(name: str, default: str = "0") -> bool:
@@ -18,8 +24,40 @@ def env_bool(name: str, default: str = "0") -> bool:
 # Единственный источник имени приложения.
 APP_NAME = os.getenv("APP_NAME", "PskovCord")
 
-SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "dev-insecure-change-me")
-DEBUG = env_bool("DJANGO_DEBUG", "1")
+# ВАЖНО: дефолт — прод-режим. Раньше здесь было "1", и забытая на сервере
+# переменная тихо включала debug-страницы со стектрейсами, CORS с
+# credentials для любого origin и cookie без Secure. Локальная разработка
+# выставляет DJANGO_DEBUG=1 явно (см. .env.example).
+DEBUG = env_bool("DJANGO_DEBUG", "0")
+
+# Значения, которые лежат в .env.example и в compose-файлах — то есть
+# публично известны. Годятся только для локальной машины.
+_INSECURE_DEFAULTS = {
+    "dev-insecure-change-me",
+    "dev-insecure-turn-secret",
+    "dev-insecure-sfu-secret",
+    "changeme",
+}
+
+
+def env_secret(name: str, dev_default: str) -> str:
+    """Секрет, который обязан быть настоящим в проде.
+
+    Раньше все секреты имели фолбэк на общеизвестное значение, и приложение
+    с пустым окружением молча поднималось полностью небезопасным. Теперь при
+    DEBUG=0 отсутствующий или примерный секрет — это отказ старта: сломанный
+    деплой заметен сразу, а тихо дырявый — нет.
+    """
+    value = os.getenv(name, "")
+    if not DEBUG and not RUNNING_TESTS and (not value or value in _INSECURE_DEFAULTS):
+        raise ImproperlyConfigured(
+            f"{name} не задан или равен небезопасному значению по умолчанию. "
+            f"Сгенерируйте настоящий: openssl rand -hex 32"
+        )
+    return value or dev_default
+
+
+SECRET_KEY = env_secret("DJANGO_SECRET_KEY", "dev-insecure-change-me")
 ALLOWED_HOSTS = [
     h.strip()
     for h in os.getenv("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1").split(",")
@@ -51,6 +89,9 @@ INSTALLED_APPS = [
     "django.contrib.staticfiles",
     "channels",
     "rest_framework",
+    # Отзыв refresh-токенов: без него «выйти» и «сменить пароль» не отзывали
+    # ничего — украденный токен продолжал работать весь свой срок.
+    "rest_framework_simplejwt.token_blacklist",
     "corsheaders",
     "accounts",
     "chat",
@@ -59,7 +100,13 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     "corsheaders.middleware.CorsMiddleware",
+    # Без SecurityMiddleware настройки SECURE_* ниже не действуют вообще —
+    # `manage.py check --deploy` ругался на это (security.W001).
+    "django.middleware.security.SecurityMiddleware",
     "django.middleware.common.CommonMiddleware",
+    # Ответы уходили без X-Frame-Options, то есть приложение можно было
+    # засунуть в чужой iframe (security.W002).
+    "django.middleware.clickjacking.XFrameOptionsMiddleware",
     # Ниже — только для /admin (сессии/CSRF/auth/messages): сам API работает
     # на JWT и от них не зависит, DRF-вьюхи по умолчанию csrf_exempt.
     "django.contrib.sessions.middleware.SessionMiddleware",
@@ -95,7 +142,7 @@ DATABASES = {
         "ENGINE": "django.db.backends.postgresql",
         "NAME": os.getenv("POSTGRES_DB", "pskovcord"),
         "USER": os.getenv("POSTGRES_USER", "pskovcord"),
-        "PASSWORD": os.getenv("POSTGRES_PASSWORD", "changeme"),
+        "PASSWORD": env_secret("POSTGRES_PASSWORD", "changeme"),
         "HOST": os.getenv("POSTGRES_HOST", "postgres"),
         "PORT": os.getenv("POSTGRES_PORT", "5432"),
     }
@@ -110,6 +157,17 @@ CHANNEL_LAYERS = {
     }
 }
 
+# Кэш на Redis, а не LocMem по умолчанию: на нём держатся счётчики троттлинга
+# (иначе лимит считался бы отдельно в каждом процессе, то есть множился на их
+# число) и кэш стандартного favicon (core.models.Favicon.get_default_id —
+# при LocMem процессы расходились в том, какая иконка «стандартная»).
+CACHES = {
+    "default": {
+        "BACKEND": "django.core.cache.backends.redis.RedisCache",
+        "LOCATION": REDIS_URL,
+    }
+}
+
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [
         "rest_framework_simplejwt.authentication.JWTAuthentication",
@@ -117,23 +175,72 @@ REST_FRAMEWORK = {
     "DEFAULT_PERMISSION_CLASSES": [
         "rest_framework.permissions.IsAuthenticated",
     ],
+    # Раньше троттлинга не было вовсе: подбор пароля к /api/auth/token
+    # ограничивался только шириной канала.
+    "DEFAULT_THROTTLE_CLASSES": [
+        "rest_framework.throttling.AnonRateThrottle",
+        "rest_framework.throttling.UserRateThrottle",
+    ],
+    "DEFAULT_THROTTLE_RATES": {
+        "anon": "60/min",
+        "user": "600/min",
+        # Отдельная, куда более жёсткая шкала для логина/регистрации/смены
+        # пароля — см. throttle_scope в accounts/views.py.
+        "auth": "10/min",
+    },
 }
 
+# APITestCase шлёт десятки запросов подряд от одного клиента и упирался бы в
+# лимиты. Ставка None (а не отсутствие ключа!) — это штатный для DRF способ
+# отключить троттл: сам ключ обязан существовать, иначе throttle падает с
+# ImproperlyConfigured ещё на инициализации. Сам троттлинг проверяется
+# отдельным тестом с явным override_settings (см. accounts/tests.py).
+if RUNNING_TESTS:
+    REST_FRAMEWORK["DEFAULT_THROTTLE_RATES"] = {
+        scope: None for scope in REST_FRAMEWORK["DEFAULT_THROTTLE_RATES"]
+    }
+
 SIMPLE_JWT = {
-    "ACCESS_TOKEN_LIFETIME": timedelta(days=1),
+    # Был 1 день. Access-токен отозвать нельзя в принципе (он проверяется по
+    # подписи, без похода в БД), поэтому его срок — это и есть окно, в течение
+    # которого утёкший токен работает после выхода/бана/смены пароля.
+    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=15),
     "REFRESH_TOKEN_LIFETIME": timedelta(days=7),
+    # Каждое обновление выдаёт новый refresh, а старый уезжает в блэклист:
+    # так украденный refresh перестаёт работать, как только настоящий клиент
+    # обновится — и наоборот, кража становится заметной.
+    "ROTATE_REFRESH_TOKENS": True,
+    "BLACKLIST_AFTER_ROTATION": True,
 }
+
+AUTH_PASSWORD_VALIDATORS = [
+    # Раньше валидаторов не было вообще, а сериализаторы требовали min_length=4:
+    # пароль «1234» был полностью законным.
+    {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
+    {
+        "NAME": "django.contrib.auth.password_validation.MinimumLengthValidator",
+        "OPTIONS": {"min_length": 8},
+    },
+    {"NAME": "django.contrib.auth.password_validation.CommonPasswordValidator"},
+    {"NAME": "django.contrib.auth.password_validation.NumericPasswordValidator"},
+]
+
+# Аватар (до 1.5 МБ) и баннер (до 4 МБ) приходят data-URL'ами в JSON, то есть
+# в base64 — это +33% к размеру. Дефолтные ~2.5 МБ Django резали такой запрос
+# ещё до сериализатора, из-за чего заявленный лимит баннера был недостижим:
+# запрос падал с RequestDataTooBig, а не с внятной ошибкой валидации.
+DATA_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024
 
 # TURN/STUN (coturn, REST shared-secret) — оставлено для совместимости;
 # на медиа-леге SFU coturn не участвует (mediasoup сам себе ICE-эндпоинт).
-TURN_SECRET = os.getenv("TURN_SECRET", "dev-insecure-turn-secret")
+TURN_SECRET = env_secret("TURN_SECRET", "dev-insecure-turn-secret")
 TURN_HOST = os.getenv("TURN_HOST", "localhost")
 TURN_PORT = os.getenv("TURN_PORT", "3478")
 
 # SFU (собственный mediasoup Node-сервис) — медиа-транспорт голоса.
 # SFU_SECRET — общий секрет для подписи access-токена (см. chat/sfu.py).
 # SFU_PUBLIC_URL — WS-URL сигналинга SFU, который отдаём клиенту.
-SFU_SECRET = os.getenv("SFU_SECRET", "dev-insecure-sfu-secret")
+SFU_SECRET = env_secret("SFU_SECRET", "dev-insecure-sfu-secret")
 SFU_PUBLIC_URL = os.getenv("SFU_PUBLIC_URL", "ws://localhost:4443")
 
 # CORS: в dev разрешаем всё (Vite :5173, Electron file://).
@@ -145,6 +252,18 @@ CORS_ALLOW_ALL_ORIGINS = DEBUG
 # nginx) не даём этим cookie ходить голым по HTTP.
 SESSION_COOKIE_SECURE = not DEBUG
 CSRF_COOKIE_SECURE = not DEBUG
+
+# Заголовки безопасности (действуют благодаря SecurityMiddleware выше).
+SECURE_CONTENT_TYPE_NOSNIFF = True
+SECURE_REFERRER_POLICY = "same-origin"
+X_FRAME_OPTIONS = "DENY"
+# HSTS — только в проде и только для самого домена: includeSubDomains/preload
+# намеренно не включаем, это решение с необратимыми последствиями для всех
+# поддоменов, его принимать осознанно и отдельно.
+SECURE_HSTS_SECONDS = 0 if DEBUG else 60 * 60 * 24 * 30
+# Редирект http->https оставлен nginx'у (см. deploy/nginx.conf.example): он
+# стоит перед Django и разрывает TLS, дублировать это здесь незачем.
+SECURE_SSL_REDIRECT = False
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",

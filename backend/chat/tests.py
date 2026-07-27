@@ -13,6 +13,7 @@ from asgiref.sync import sync_to_async
 from channels.testing import WebsocketCommunicator
 from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.db import IntegrityError
 from django.test import TestCase, TransactionTestCase
 from rest_framework.test import APIClient, APITestCase
 from rest_framework_simplejwt.tokens import AccessToken
@@ -21,7 +22,8 @@ from . import mute_vote, presence, roles, sfu, turn
 from .consumers import GatewayConsumer
 from .middleware import JWTAuthMiddleware
 from .models import (
-    Channel, Membership, Message, Role, Server, ServerJoinRequest,
+    Channel, Conversation, ConversationParticipant, Membership, Message, Role,
+    Server, ServerJoinRequest, dm_room,
 )
 
 User = get_user_model()
@@ -1124,3 +1126,466 @@ class MessageOpsTests(TransactionTestCase):
         self.assertIsNone(sent["reply_to"])
 
         await member_ws.disconnect()
+
+
+class RoleHierarchyTests(APITestCase):
+    """Иерархия ролей — защита от эскалации привилегий через manage_roles.
+
+    Без неё участник с одним лишь правом «управлять ролями» мог создать роль
+    с manage_server/manage_members и выдать её себе, то есть стать фактическим
+    владельцем сервера.
+    """
+
+    def setUp(self):
+        self.owner = User.objects.create_user(username="rh_owner", password="pw12345")
+        self.mod = User.objects.create_user(username="rh_mod", password="pw12345")
+        self.plain = User.objects.create_user(username="rh_plain", password="pw12345")
+        self.server = Server.objects.create(name="s", owner=self.owner)
+        Membership.objects.create(user=self.owner, server=self.server)
+        self.mod_membership = Membership.objects.create(user=self.mod, server=self.server)
+        self.plain_membership = Membership.objects.create(
+            user=self.plain, server=self.server)
+        roles.create_default_role(self.server)
+        # Модератор: умеет управлять ролями и участниками, но не сервером.
+        self.mod_role = Role.objects.create(
+            server=self.server, name="модер", position=5,
+            manage_roles=True, manage_members=True)
+        self.mod_membership.roles.add(self.mod_role)
+        self.client.force_authenticate(self.mod)
+
+    def test_cannot_create_role_with_permission_it_lacks(self):
+        resp = self.client.post(
+            f"/api/servers/{self.server.id}/roles",
+            {"name": "суперроль", "position": 1, "manage_server": True},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 403)
+        self.assertFalse(Role.objects.filter(name="суперроль").exists())
+
+    def test_can_create_role_within_own_permissions(self):
+        resp = self.client.post(
+            f"/api/servers/{self.server.id}/roles",
+            {"name": "помощник", "position": 1, "manage_members": True},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 201)
+
+    def test_cannot_create_role_at_or_above_own_position(self):
+        resp = self.client.post(
+            f"/api/servers/{self.server.id}/roles",
+            {"name": "равная", "position": 5},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 403)
+
+    def test_cannot_edit_own_role(self):
+        resp = self.client.patch(
+            f"/api/servers/{self.server.id}/roles/{self.mod_role.id}",
+            {"manage_server": True},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 403)
+        self.mod_role.refresh_from_db()
+        self.assertFalse(self.mod_role.manage_server)
+
+    def test_cannot_grant_role_at_or_above_own_position(self):
+        high = Role.objects.create(server=self.server, name="админ", position=9)
+        resp = self.client.patch(
+            f"/api/servers/{self.server.id}/members/{self.plain.id}",
+            {"role_ids": [high.id]},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 403)
+        self.assertEqual(self.plain_membership.roles.count(), 0)
+
+    def test_cannot_kick_or_ban_peer_of_same_rank(self):
+        peer = User.objects.create_user(username="rh_peer", password="pw12345")
+        peer_membership = Membership.objects.create(user=peer, server=self.server)
+        peer_membership.roles.add(self.mod_role)
+
+        self.assertEqual(
+            self.client.delete(
+                f"/api/servers/{self.server.id}/members/{peer.id}").status_code,
+            403,
+        )
+        self.assertEqual(
+            self.client.post(
+                f"/api/servers/{self.server.id}/bans",
+                {"user_id": peer.id}, format="json",
+            ).status_code,
+            403,
+        )
+        self.assertTrue(
+            Membership.objects.filter(user=peer, server=self.server).exists())
+
+    def test_can_act_on_lower_ranked_member(self):
+        resp = self.client.delete(
+            f"/api/servers/{self.server.id}/members/{self.plain.id}")
+        self.assertEqual(resp.status_code, 204)
+
+    def test_owner_bypasses_hierarchy(self):
+        self.client.force_authenticate(self.owner)
+        resp = self.client.patch(
+            f"/api/servers/{self.server.id}/roles/{self.mod_role.id}",
+            {"manage_server": True},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 200)
+
+
+class VoicePermissionTests(APITestCase):
+    """Права speak/view_channels теперь действительно проверяются: до этого
+    роль могла их снять, а участник всё равно получал голосовой токен."""
+
+    def setUp(self):
+        self.owner = User.objects.create_user(username="vp_owner", password="pw12345")
+        self.member = User.objects.create_user(username="vp_member", password="pw12345")
+        self.server = Server.objects.create(name="s", owner=self.owner)
+        Membership.objects.create(user=self.owner, server=self.server)
+        Membership.objects.create(user=self.member, server=self.server)
+        self.default_role = roles.create_default_role(self.server)
+        self.voice = Channel.objects.create(
+            server=self.server, name="General", kind=Channel.VOICE)
+        self.text = Channel.objects.create(
+            server=self.server, name="general", kind=Channel.TEXT)
+        self.client.force_authenticate(self.member)
+
+    def test_voice_credentials_denied_without_speak(self):
+        self.default_role.speak = False
+        self.default_role.save(update_fields=["speak"])
+        resp = self.client.post(f"/api/channels/{self.voice.id}/voice-credentials")
+        self.assertEqual(resp.status_code, 403)
+
+    def test_voice_credentials_allowed_with_speak(self):
+        resp = self.client.post(f"/api/channels/{self.voice.id}/voice-credentials")
+        self.assertEqual(resp.status_code, 200)
+
+    def test_token_carries_role_permissions(self):
+        self.default_role.video = False
+        self.default_role.save(update_fields=["video"])
+        resp = self.client.post(f"/api/channels/{self.voice.id}/voice-credentials")
+        self.assertEqual(resp.status_code, 200)
+        claims = jwt.decode(
+            resp.data["sfu_token"], settings.SFU_SECRET, algorithms=["HS256"])
+        self.assertTrue(claims["speak"])
+        self.assertFalse(claims["video"])
+
+    def test_messages_denied_without_view_channels(self):
+        self.default_role.view_channels = False
+        self.default_role.save(update_fields=["view_channels"])
+        resp = self.client.get(f"/api/channels/{self.text.id}/messages")
+        self.assertEqual(resp.status_code, 403)
+
+
+class ConversationAccessTests(APITestCase):
+    """Создание бесед. Ветка group раньше не проверяла НИЧЕГО — настройка
+    dm_privacy обходилась подстановкой kind=group вместо kind=dm."""
+
+    def setUp(self):
+        self.me = User.objects.create_user(username="ca_me", password="pw12345")
+        self.closed = User.objects.create_user(
+            username="ca_closed", password="pw12345", dm_privacy=User.DM_NOBODY)
+        self.open_user = User.objects.create_user(
+            username="ca_open", password="pw12345", dm_privacy=User.DM_EVERYONE)
+        self.client.force_authenticate(self.me)
+
+    def test_dm_to_closed_user_rejected(self):
+        resp = self.client.post(
+            "/api/conversations",
+            {"kind": "dm", "user_ids": [self.closed.id]}, format="json")
+        self.assertEqual(resp.status_code, 403)
+
+    def test_group_cannot_bypass_dm_privacy(self):
+        """Тот же человек, тот же запрет — только через kind=group."""
+        resp = self.client.post(
+            "/api/conversations",
+            {"kind": "group", "user_ids": [self.closed.id]}, format="json")
+        self.assertEqual(resp.status_code, 403)
+        self.assertEqual(Conversation.objects.count(), 0)
+
+    def test_group_with_allowed_user_ok(self):
+        resp = self.client.post(
+            "/api/conversations",
+            {"kind": "group", "user_ids": [self.open_user.id], "name": "тусовка"},
+            format="json")
+        self.assertEqual(resp.status_code, 201)
+
+    def test_nonexistent_user_id_gives_400_not_500(self):
+        resp = self.client.post(
+            "/api/conversations",
+            {"kind": "group", "user_ids": [self.open_user.id, 10_000_000]},
+            format="json")
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(Conversation.objects.count(), 0)
+
+    def test_participant_limit_enforced(self):
+        resp = self.client.post(
+            "/api/conversations",
+            {"kind": "group", "user_ids": list(range(1, 200))}, format="json")
+        self.assertEqual(resp.status_code, 400)
+
+    def test_dm_is_deduplicated_by_key(self):
+        first = self.client.post(
+            "/api/conversations",
+            {"kind": "dm", "user_ids": [self.open_user.id]}, format="json")
+        second = self.client.post(
+            "/api/conversations",
+            {"kind": "dm", "user_ids": [self.open_user.id]}, format="json")
+        self.assertEqual(first.data["id"], second.data["id"])
+        self.assertEqual(Conversation.objects.filter(kind="dm").count(), 1)
+
+    def test_dm_key_unique_constraint_blocks_duplicate(self):
+        """Индекс, а не только проверка в коде: гонку двух одновременных
+        запросов на уровне приложения не поймать."""
+        key = Conversation.build_dm_key(self.me.id, self.open_user.id)
+        Conversation.objects.create(kind=Conversation.DM, dm_key=key)
+        with self.assertRaises(IntegrityError):
+            Conversation.objects.create(kind=Conversation.DM, dm_key=key)
+
+    def test_leave_conversation(self):
+        created = self.client.post(
+            "/api/conversations",
+            {"kind": "group", "user_ids": [self.open_user.id]}, format="json")
+        conversation_id = created.data["id"]
+        resp = self.client.delete(f"/api/conversations/{conversation_id}")
+        self.assertEqual(resp.status_code, 204)
+        self.assertFalse(
+            ConversationParticipant.objects.filter(
+                conversation_id=conversation_id, user=self.me).exists())
+
+    def test_leave_requires_participation(self):
+        conversation = Conversation.objects.create(kind=Conversation.GROUP)
+        ConversationParticipant.objects.create(
+            conversation=conversation, user=self.open_user)
+        resp = self.client.delete(f"/api/conversations/{conversation.id}")
+        self.assertEqual(resp.status_code, 403)
+
+
+class MessagePaginationTests(APITestCase):
+    """Курсорная пагинация: раньше ручка жёстко отдавала последние 50
+    сообщений без курсора, и всё, что старше, было недостижимо в принципе."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(username="mp_user", password="pw12345")
+        self.server = Server.objects.create(name="s", owner=self.user)
+        Membership.objects.create(user=self.user, server=self.server)
+        roles.create_default_role(self.server)
+        self.channel = Channel.objects.create(
+            server=self.server, name="general", kind=Channel.TEXT)
+        self.messages = [
+            Message.objects.create(
+                channel=self.channel, author=self.user, content=f"msg {i}")
+            for i in range(120)
+        ]
+        self.client.force_authenticate(self.user)
+
+    def test_default_page_is_latest_50_in_chronological_order(self):
+        resp = self.client.get(f"/api/channels/{self.channel.id}/messages")
+        self.assertEqual(len(resp.data), 50)
+        self.assertEqual(resp.data[-1]["content"], "msg 119")
+        self.assertEqual(resp.data[0]["content"], "msg 70")
+
+    def test_before_cursor_reaches_older_history(self):
+        oldest_on_first_page = self.messages[70].id
+        resp = self.client.get(
+            f"/api/channels/{self.channel.id}/messages?before={oldest_on_first_page}")
+        self.assertEqual(len(resp.data), 50)
+        self.assertEqual(resp.data[-1]["content"], "msg 69")
+
+    def test_after_cursor_backfills_missed_messages(self):
+        resp = self.client.get(
+            f"/api/channels/{self.channel.id}/messages?after={self.messages[117].id}")
+        self.assertEqual([m["content"] for m in resp.data], ["msg 118", "msg 119"])
+
+    def test_limit_is_capped(self):
+        resp = self.client.get(f"/api/channels/{self.channel.id}/messages?limit=9999")
+        self.assertEqual(len(resp.data), 100)
+
+    def test_garbage_cursor_is_ignored_not_fatal(self):
+        resp = self.client.get(
+            f"/api/channels/{self.channel.id}/messages?before=nonsense")
+        self.assertEqual(resp.status_code, 200)
+
+
+class PublicProfileSerializerTests(APITestCase):
+    """Тяжёлый баннер и личная настройка приватности больше не едут в каждом
+    сообщении и в каждой строке ростера."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username="pp_user", password="pw12345",
+            banner_image="data:image/gif;base64,AAAA", dm_privacy=User.DM_NOBODY)
+        self.server = Server.objects.create(name="s", owner=self.user)
+        Membership.objects.create(user=self.user, server=self.server)
+        roles.create_default_role(self.server)
+        self.client.force_authenticate(self.user)
+
+    def test_roster_omits_banner_and_privacy(self):
+        resp = self.client.get(f"/api/servers/{self.server.id}/members")
+        entry = resp.data[0]
+        self.assertNotIn("banner_image", entry)
+        self.assertNotIn("dm_privacy", entry)
+        self.assertIn("avatar_image", entry)
+
+    def test_me_still_returns_full_profile(self):
+        resp = self.client.get("/api/auth/me")
+        self.assertIn("banner_image", resp.data)
+        self.assertIn("dm_privacy", resp.data)
+
+    def test_profile_card_endpoint_serves_banner(self):
+        resp = self.client.get(f"/api/users/{self.user.id}/profile-card")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data["banner_image"], "data:image/gif;base64,AAAA")
+
+    def test_profile_card_denied_to_stranger(self):
+        stranger = User.objects.create_user(username="pp_stranger", password="pw12345")
+        self.client.force_authenticate(stranger)
+        resp = self.client.get(f"/api/users/{self.user.id}/profile-card")
+        self.assertEqual(resp.status_code, 403)
+
+
+class HeartbeatSweepTests(TestCase):
+    """Sweep призрачных presence-сессий: обе починки из код-ревью."""
+
+    def setUp(self):
+        from . import heartbeat_sweep
+
+        self.sweep = heartbeat_sweep
+        self.user = User.objects.create_user(username="hs_user", password="pw12345")
+        self.other = User.objects.create_user(username="hs_other", password="pw12345")
+        self.uid = str(self.user.id)
+        presence.force_offline(self.uid)
+        presence.force_offline(str(self.other.id))
+
+    def tearDown(self):
+        presence.force_offline(self.uid)
+        presence.force_offline(str(self.other.id))
+
+    def test_dm_room_does_not_raise(self):
+        """Комната звонка в личке — строка "dm_<id>", а не число. Раньше она
+        уходила прямо в Channel.objects.get(id=...), где целочисленное поле
+        бросало ValueError (не DoesNotExist), он пролетал мимо except и рвал
+        весь проход sweep'а."""
+        conversation = Conversation.objects.create(kind=Conversation.DM)
+        ConversationParticipant.objects.create(
+            conversation=conversation, user=self.user)
+        presence.user_connected(self.uid)
+        presence.join_voice(self.uid, dm_room(conversation.id))
+
+        layer = _FakeChannelLayer()
+        self.sweep._force_disconnect_uid(self.uid, layer)
+
+        self.assertFalse(presence.is_online(self.uid))
+        groups = [group for group, _payload in layer.sent]
+        self.assertIn(f"conversation_{conversation.id}", groups)
+        dm_events = [
+            payload for _group, payload in layer.sent
+            if payload["op"] == "dm_voice_state_update"
+        ]
+        self.assertEqual(len(dm_events), 1)
+        self.assertFalse(dm_events[0]["in_call"])
+
+    def test_one_bad_uid_does_not_abort_whole_sweep(self):
+        """Раньше исключение на одном пользователе срывало проход целиком, и
+        остальные призраки оставались онлайн до следующей минуты."""
+        presence.user_connected(self.uid)
+        presence.user_connected(str(self.other.id))
+        presence.clear_heartbeat(self.uid)
+        presence.clear_heartbeat(str(self.other.id))
+
+        original = self.sweep._force_disconnect_uid
+        calls = []
+
+        def flaky(uid, layer):
+            calls.append(uid)
+            if uid == self.uid:
+                raise RuntimeError("сломалось на этом участнике")
+            return original(uid, layer)
+
+        self.sweep._force_disconnect_uid = flaky
+        try:
+            # assertLogs заодно глушит вывод в консоль — исключение здесь
+            # бросается специально, и его трейсбек в прогоне только путает.
+            with self.assertLogs("chat.heartbeat_sweep", level="ERROR") as logged:
+                self.sweep._sweep_once()
+        finally:
+            self.sweep._force_disconnect_uid = original
+        self.assertTrue(any("не удалось отключить" in line for line in logged.output))
+
+        # Суть проверки: до второго участника проход ДОШЁЛ, хотя первый упал.
+        # (Состояние в Redis тут не утверждаем: _sweep_once зовёт
+        # close_old_connections(), а внутри TestCase это рвёт соединение,
+        # обёрнутое в транзакцию теста, — к самому багу отношения не имеет.)
+        self.assertEqual(len(calls), 2)
+        self.assertIn(str(self.other.id), calls)
+
+    def test_heartbeat_restores_user_wrongly_swept(self):
+        """Пинг задержался дольше TTL, sweep счёл сокет призраком — но сокет
+        жив. Раньше heartbeat трогал только TTL, и такой пользователь
+        оставался офлайн для всех навсегда."""
+        presence.user_connected(self.uid)
+        self.assertTrue(presence.is_online(self.uid))
+
+        presence.force_offline(self.uid)
+        self.assertFalse(presence.is_online(self.uid))
+
+        restored = presence.heartbeat(self.uid)
+        self.assertTrue(restored)
+        self.assertTrue(presence.is_online(self.uid))
+        # Повторный пинг уже ничего не восстанавливает.
+        self.assertFalse(presence.heartbeat(self.uid))
+
+
+class MuteVoteClaimTests(TestCase):
+    """Резолв голосования дёргают два независимых места (consumers и
+    vote_sweep). Раньше read → tally → clear шли тремя операциями, и при
+    совпадении по времени результат рассылался дважды."""
+
+    def setUp(self):
+        self.channel_id = "9911"
+        presence.clear_mute_vote(self.channel_id)
+
+    def tearDown(self):
+        presence.clear_mute_vote(self.channel_id)
+
+    def test_claim_returns_data_to_exactly_one_caller(self):
+        presence.start_mute_vote(self.channel_id, 2, 1, 20)
+        presence.cast_mute_vote(self.channel_id, 1, True)
+
+        first_vote, first_for, _first_against = presence.claim_mute_vote(self.channel_id)
+        second_vote, second_for, _second_against = presence.claim_mute_vote(
+            self.channel_id)
+
+        self.assertIsNotNone(first_vote)
+        self.assertEqual(first_for, {"1"})
+        self.assertIsNone(second_vote)
+        self.assertEqual(second_for, set())
+
+    def test_claim_clears_active_set(self):
+        presence.start_mute_vote(self.channel_id, 2, 1, 20)
+        self.assertIn(self.channel_id, presence.active_vote_channel_ids())
+        presence.claim_mute_vote(self.channel_id)
+        self.assertNotIn(self.channel_id, presence.active_vote_channel_ids())
+
+    def test_resolve_twice_broadcasts_once(self):
+        server_owner = User.objects.create_user(username="mvc_owner", password="pw12345")
+        server = Server.objects.create(name="s", owner=server_owner)
+        channel = Channel.objects.create(
+            server=server, name="v", kind=Channel.VOICE)
+        target = User.objects.create_user(username="mvc_target", password="pw12345")
+        voter = User.objects.create_user(username="mvc_voter", password="pw12345")
+
+        presence.clear_mute_vote(channel.id)
+        presence.start_mute_vote(channel.id, target.id, voter.id, 20)
+        presence.cast_mute_vote(channel.id, voter.id, True)
+
+        layer = _FakeChannelLayer()
+        mute_vote.resolve(channel.id, layer)
+        mute_vote.resolve(channel.id, layer)
+
+        results = [
+            payload for _group, payload in layer.sent
+            if payload["op"] == "voice_mute_vote_result"
+        ]
+        self.assertEqual(len(results), 1)
+        presence.clear_forced_mute(target.id)

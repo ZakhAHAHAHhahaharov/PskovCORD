@@ -5,6 +5,12 @@ export type EffectiveStatus = 'online' | 'dnd' | 'offline'
 /** Кто может НАЧАТЬ новую личку со мной — не действует на уже идущие диалоги. */
 export type DmPrivacy = 'friends' | 'nobody' | 'everyone'
 
+/** Публичный профиль — то, что приходит про ДРУГИХ людей.
+ *
+ * Тяжёлой гифки-баннера здесь намеренно нет: этот объект вложен в каждое
+ * сообщение и в каждую строку ростера, и баннер (до 4 МБ data-URL'ом) уезжал
+ * десятки раз за один ответ. Для чужой карточки профиля он догружается
+ * отдельно по требованию — api.profileCard(). */
 export interface User {
   id: number
   username: string
@@ -13,10 +19,21 @@ export interface User {
   avatar_image: string
   /** CSS linear-gradient() для фона карточки профиля; пусто — дефолтный градиент. */
   banner_gradient: string
+  status: UserStatus
+}
+
+/** Свой профиль (/api/auth/me) — всё, включая личные настройки и баннер. */
+export interface Me extends User {
   /** Гифка фона карточки профиля (data-URL); если задана — приоритетнее градиента. */
   banner_image: string
-  status: UserStatus
   dm_privacy: DmPrivacy
+}
+
+/** Тяжёлая часть чужого профиля — грузится, когда открыли карточку. */
+export interface ProfileCard {
+  id: number
+  banner_gradient: string
+  banner_image: string
 }
 
 export interface Channel {
@@ -33,17 +50,19 @@ export interface Channel {
 
 /** Права роли на сервере — 1:1 с булевыми полями chat.models.Role
  * (список и порядок для UI — chat/roles.py PERMISSION_FIELDS). */
+// manage_invites / manage_nicknames / mention_everyone отсюда убраны: они
+// охраняли фичи, которых в проекте нет (модели Invite, никнеймов на сервере
+// и разбора @all/@online/@here не существует), и были переключателями,
+// которые не делали ничего. Колонки в БД остались — вернутся сюда вместе с
+// самими фичами (см. chat/roles.py RESERVED_PERMISSION_FIELDS).
 export type ServerPermission =
   | 'view_channels'
   | 'manage_channels'
   | 'manage_roles'
   | 'manage_server'
-  | 'manage_invites'
-  | 'manage_nicknames'
   | 'manage_members'
   | 'send_messages'
   | 'delete_messages'
-  | 'mention_everyone'
   | 'speak'
   | 'video'
 
@@ -202,18 +221,74 @@ export interface ConversationMessage extends ChatMessageBase {
 const API: string = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
 
 let accessToken: string | null = localStorage.getItem('access')
+// Раньше refresh-токен приходил с логина и молча выбрасывался: механизма
+// обновления сессии не существовало вовсе, так что время жизни сессии было
+// равно времени жизни access-токена, а по его истечении все запросы начинали
+// падать без единого объяснения.
+let refreshToken: string | null = localStorage.getItem('refresh')
 
-export function setToken(t: string | null) {
-  accessToken = t
-  if (t) localStorage.setItem('access', t)
+export function setTokens(access: string | null, refresh: string | null) {
+  accessToken = access
+  if (access) localStorage.setItem('access', access)
   else localStorage.removeItem('access')
+  refreshToken = refresh
+  if (refresh) localStorage.setItem('refresh', refresh)
+  else localStorage.removeItem('refresh')
 }
 
 export function getToken(): string | null {
   return accessToken
 }
 
-async function req(path: string, options: RequestInit = {}): Promise<any> {
+export function getRefreshToken(): string | null {
+  return refreshToken
+}
+
+/** Колбэк «сессия окончательно умерла» — ставит auth.tsx, чтобы разлогинить
+ * UI. Без него истёкший токен приводил к тому, что все экраны молча
+ * схлопывались в пустое состояние: серверов нет, сообщений нет, друзей нет,
+ * а причина не показана нигде. */
+let onSessionExpired: (() => void) | null = null
+
+export function setSessionExpiredHandler(fn: (() => void) | null) {
+  onSessionExpired = fn
+}
+
+// Один общий промис на все параллельные 401. Иначе десяток одновременных
+// запросов запустил бы десяток refresh'ей, а с ротацией токенов на сервере
+// (SIMPLE_JWT.ROTATE_REFRESH_TOKENS) выжил бы ровно один — остальные
+// получили бы отказ и выкинули пользователя на логин без причины.
+let refreshInFlight: Promise<string | null> | null = null
+
+function refreshAccessToken(): Promise<string | null> {
+  if (!refreshToken) return Promise.resolve(null)
+  if (!refreshInFlight) {
+    refreshInFlight = (async () => {
+      try {
+        const res = await fetch(`${API}/api/auth/token/refresh`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ refresh: refreshToken }),
+        })
+        if (!res.ok) return null
+        const data = await res.json()
+        // ROTATE_REFRESH_TOKENS=True — сервер отдаёт заодно новый refresh, а
+        // старый отправляет в блэклист. Не сохранить его = разлогиниться на
+        // следующем же обновлении.
+        setTokens(data.access, data.refresh ?? refreshToken)
+        return data.access as string
+      } catch {
+        return null
+      } finally {
+        refreshInFlight = null
+      }
+    })()
+  }
+  return refreshInFlight
+}
+
+async function req(path: string, options: RequestInit = {}, allowRetry = true): Promise<any> {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     ...((options.headers as Record<string, string>) || {}),
@@ -224,6 +299,18 @@ async function req(path: string, options: RequestInit = {}): Promise<any> {
   // в деве Vite (:5173) и API (:8000) разные origin'ы, без явного include
   // браузер cookie не сохранит/не пришлёт.
   const res = await fetch(`${API}${path}`, { ...options, headers, credentials: 'include' })
+
+  // 401 больше не сваливается в общую кучу ошибок: сначала пробуем обновить
+  // токен и повторить запрос ровно один раз, и только если это не вышло —
+  // честно сообщаем, что сессия кончилась.
+  if (res.status === 401 && allowRetry && accessToken) {
+    const fresh = await refreshAccessToken()
+    if (fresh) return req(path, options, false)
+    setTokens(null, null)
+    onSessionExpired?.()
+    throw new Error('Сессия истекла — войдите заново.')
+  }
+
   if (!res.ok) {
     let detail = res.statusText
     try {
@@ -245,6 +332,12 @@ async function req(path: string, options: RequestInit = {}): Promise<any> {
   return res.json()
 }
 
+function buildQuery(params: Record<string, number | undefined>): string {
+  const entries = Object.entries(params).filter(([, v]) => v !== undefined)
+  if (entries.length === 0) return ''
+  return '?' + entries.map(([k, v]) => `${k}=${v}`).join('&')
+}
+
 export const api = {
   register: (username: string, password: string) =>
     req('/api/auth/register', {
@@ -252,19 +345,31 @@ export const api = {
       body: JSON.stringify({ username, password }),
     }),
   login: (username: string, password: string): Promise<{ access: string; refresh: string }> =>
-    req('/api/auth/token', {
+    // allowRetry=false: 401 здесь означает «неверный логин/пароль», а вовсе
+    // не протухший токен — обновлять нечего, и попытка refresh'а только
+    // подменила бы понятную ошибку на «сессия истекла».
+    req(
+      '/api/auth/token',
+      { method: 'POST', body: JSON.stringify({ username, password }) },
+      false,
+    ),
+  // refresh отдаём серверу, чтобы он положил его в блэклист — иначе «выход»
+  // не отзывал ничего и токен жил ещё неделю.
+  logout: () =>
+    req('/api/auth/logout', {
       method: 'POST',
-      body: JSON.stringify({ username, password }),
+      body: JSON.stringify({ refresh: getRefreshToken() }),
     }),
-  logout: () => req('/api/auth/logout', { method: 'POST' }),
-  me: (): Promise<User> => req('/api/auth/me'),
+  me: (): Promise<Me> => req('/api/auth/me'),
   updateProfile: (data: {
     username?: string
     avatar_image?: string
     banner_gradient?: string
     banner_image?: string
     dm_privacy?: DmPrivacy
-  }): Promise<User> => req('/api/auth/me', { method: 'PATCH', body: JSON.stringify(data) }),
+  }): Promise<Me> => req('/api/auth/me', { method: 'PATCH', body: JSON.stringify(data) }),
+  profileCard: (userId: number): Promise<ProfileCard> =>
+    req(`/api/users/${userId}/profile-card`),
   changePassword: (current_password: string, new_password: string) =>
     req('/api/auth/change-password', {
       method: 'POST',
@@ -344,8 +449,13 @@ export const api = {
       body: JSON.stringify({ name, kind }),
     }),
 
-  messages: (channelId: number): Promise<Message[]> =>
-    req(`/api/channels/${channelId}/messages`),
+  /** before — страница старше указанного сообщения (скролл вверх),
+   *  after — то, что появилось после (добор пропущенного, когда WS лежал). */
+  messages: (
+    channelId: number,
+    opts: { before?: number; after?: number; limit?: number } = {},
+  ): Promise<Message[]> =>
+    req(`/api/channels/${channelId}/messages${buildQuery(opts)}`),
   voiceCredentials: (
     channelId: number,
   ): Promise<{ sfu_url: string; sfu_token: string; ttl: number }> =>
@@ -377,8 +487,15 @@ export const api = {
     name?: string
   }): Promise<Conversation> =>
     req('/api/conversations', { method: 'POST', body: JSON.stringify(data) }),
-  conversationMessages: (conversationId: number): Promise<ConversationMessage[]> =>
-    req(`/api/conversations/${conversationId}/messages`),
+  conversationMessages: (
+    conversationId: number,
+    opts: { before?: number; after?: number; limit?: number } = {},
+  ): Promise<ConversationMessage[]> =>
+    req(`/api/conversations/${conversationId}/messages${buildQuery(opts)}`),
+  /** Выйти из беседы. Раньше выхода не существовало вовсе — из группы,
+   *  в которую тебя добавили, деться было некуда. */
+  leaveConversation: (conversationId: number) =>
+    req(`/api/conversations/${conversationId}`, { method: 'DELETE' }),
   conversationVoiceCredentials: (
     conversationId: number,
   ): Promise<{ sfu_url: string; sfu_token: string; ttl: number }> =>

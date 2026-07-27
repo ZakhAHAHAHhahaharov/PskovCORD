@@ -1,5 +1,12 @@
-import { useLayoutEffect, useRef, useState, KeyboardEvent as ReactKeyboardEvent } from 'react'
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  KeyboardEvent as ReactKeyboardEvent,
+} from 'react'
 import { UserPlus, MessageSquare, Smile } from 'lucide-react'
+import { api } from '../api'
 import Avatar from './Avatar'
 
 export interface ProfilePopupUser {
@@ -47,6 +54,30 @@ export default function MiniProfilePopup({
   const [message, setMessage] = useState('')
   const { user } = target
   const isSelf = user.id === currentUserId
+
+  // Баннер чужого профиля больше не приходит вместе с самим профилем: он
+  // весит до 4 МБ, а профиль вложен в каждое сообщение и в каждую строку
+  // ростера. Догружаем ровно здесь — когда карточку реально открыли.
+  const [banner, setBanner] = useState<{ gradient: string; image: string } | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    void (async () => {
+      try {
+        const card = await api.profileCard(user.id)
+        if (!cancelled) {
+          setBanner({ gradient: card.banner_gradient, image: card.banner_image })
+        }
+      } catch {
+        // Нет доступа или сеть — просто оставим фон по умолчанию.
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [user.id])
+
+  const bannerGradient = banner?.gradient ?? user.banner_gradient
+  const bannerImage = banner?.image ?? user.banner_image
 
   useLayoutEffect(() => {
     const el = ref.current
@@ -100,8 +131,8 @@ export default function MiniProfilePopup({
       <div
         className="profile-popup-banner"
         style={{
-          background: user.banner_image ? undefined : user.banner_gradient || undefined,
-          backgroundImage: user.banner_image ? `url(${user.banner_image})` : undefined,
+          background: bannerImage ? undefined : bannerGradient || undefined,
+          backgroundImage: bannerImage ? `url(${bannerImage})` : undefined,
         }}
       >
         <Avatar

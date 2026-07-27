@@ -84,8 +84,20 @@ export default function AppShell() {
   const [channelId, setChannelId] = useState<number | null>(null)
   const [members, setMembers] = useState<Member[]>([])
   const [messages, setMessages] = useState<Message[]>([])
+  // Читаются в обработчике "ready" (добор пропущенного) — через ref, чтобы не
+  // тащить их в зависимости большого gateway-эффекта.
+  const messagesRef = useRef<Message[]>([])
+  messagesRef.current = messages
   const [voice, setVoice] = useState<VoiceState | null>(null)
   const [voiceStatus, setVoiceStatus] = useState<VoiceStatus>('connecting')
+  // Актуальный voice для обработчиков событий. Нужен, чтобы решения «мы сейчас
+  // в этом канале?» принимались СНАРУЖИ апдейтеров setVoice: React.StrictMode
+  // намеренно вызывает апдейтеры дважды, ловя нарушения их чистоты, — и
+  // побочки внутри них (alert, отправка в сокет) срабатывали по два раза.
+  const voiceRef = useRef<VoiceState | null>(voice)
+  voiceRef.current = voice
+  const userRef = useRef(user)
+  userRef.current = user
   const [showDiscover, setShowDiscover] = useState(false)
   const [showServerSettings, setShowServerSettings] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
@@ -111,8 +123,17 @@ export default function AppShell() {
 
   // --- домашний экран: диалоги/группы, друзья, звонки в них -------------
   const [conversations, setConversations] = useState<Conversation[]>([])
+  // Как и voiceRef: читаем в обработчиках через ref, чтобы conversations не
+  // висел в зависимостях большого gateway-эффекта. Раньше висел — и любое
+  // входящее ЛС меняло список, эффект пересоздавался и заново
+  // переподписывал все ~24 обработчика; сообщение, пришедшее в окне между
+  // отпиской и подпиской, мог потерять любой из них.
+  const conversationsRef = useRef<Conversation[]>([])
+  conversationsRef.current = conversations
   const [activeConversationId, setActiveConversationId] = useState<number | null>(null)
   const [dmMessages, setDmMessages] = useState<ConversationMessage[]>([])
+  const dmMessagesRef = useRef<ConversationMessage[]>([])
+  dmMessagesRef.current = dmMessages
   const [dmReplyTarget, setDmReplyTarget] = useState<ChatMessageBase | null>(null)
   const [dmEditTarget, setDmEditTarget] = useState<ChatMessageBase | null>(null)
   const [friends, setFriends] = useState<FriendsState>({ friends: [], incoming: [], outgoing: [] })
@@ -341,14 +362,13 @@ export default function AppShell() {
     // Нас принудительно отключили от голосового канала (см.
     // handleDisconnectUser/chat.consumers._handle_voice_disconnect_user).
     const offVoiceKicked = gateway.on('voice_kicked', (d) => {
-      setVoice((v) => {
-        if (v && v.room.kind === 'channel' && v.room.id === d.channel_id) {
-          gateway.voiceLeave()
-          alert('Вас отключили от голосового канала.')
-          return null
-        }
-        return v
-      })
+      const current = voiceRef.current
+      if (!current || current.room.kind !== 'channel' || current.room.id !== d.channel_id) {
+        return
+      }
+      gateway.voiceLeave()
+      setVoice(null)
+      alert('Вас отключили от голосового канала.')
     })
     // Новое голосование за мут в каком-то голосовом канале сервера — модалку
     // показываем, только если это канал, в котором мы сейчас сами сидим, и
@@ -356,10 +376,11 @@ export default function AppShell() {
     const offMuteVoteStart = gateway.on('voice_mute_vote_start', (d) => {
       setActiveMuteVoteChannelId(d.channel_id)
       setMuteVote((prev) => {
+        const current = voiceRef.current
         if (
-          voice?.room.kind === 'channel' &&
-          voice.room.id === d.channel_id &&
-          d.target_user_id !== user?.id
+          current?.room.kind === 'channel' &&
+          current.room.id === d.channel_id &&
+          d.target_user_id !== userRef.current?.id
         ) {
           return { channelId: d.channel_id, targetUserId: d.target_user_id, endsAt: d.ends_at }
         }
@@ -373,7 +394,8 @@ export default function AppShell() {
     // Кто-то из того же голосового канала попросил нас включить демонстрацию —
     // только звук (см. задачу), никакой модалки.
     const offScreenShareRequested = gateway.on('voice_screen_share_requested', (d) => {
-      if (voice?.room.kind === 'channel' && voice.room.id === d.channel_id) {
+      const current = voiceRef.current
+      if (current?.room.kind === 'channel' && current.room.id === d.channel_id) {
         playScreenShareRequestSound()
       }
     })
@@ -475,7 +497,10 @@ export default function AppShell() {
       // Ростер звонка привязан к комнате АКТИВНОГО ЗВОНКА (voice.room), а не
       // к тому, чей диалог сейчас открыт в чате — можно писать в одном
       // диалоге, оставаясь в звонке другого.
-      if (voice?.room.kind !== 'conversation' || voice.room.id !== d.conversation_id) return
+      const activeCall = voiceRef.current
+      if (activeCall?.room.kind !== 'conversation' || activeCall.room.id !== d.conversation_id) {
+        return
+      }
       setDmCallParticipants((prev) => {
         const next = { ...prev }
         if (d.in_call) {
@@ -494,8 +519,11 @@ export default function AppShell() {
     // только с id (без username/аватара), достаём их из уже загруженных
     // participants активного диалога (см. api.conversations()).
     const offDmPeers = gateway.on('dm_voice_peers', (d) => {
-      if (voice?.room.kind !== 'conversation' || voice.room.id !== d.conversation_id) return
-      const conv = conversations.find((c) => c.id === d.conversation_id)
+      const activeCall = voiceRef.current
+      if (activeCall?.room.kind !== 'conversation' || activeCall.room.id !== d.conversation_id) {
+        return
+      }
+      const conv = conversationsRef.current.find((c) => c.id === d.conversation_id)
       const lookup = new Map((conv?.participants ?? []).map((p) => [p.id, p]))
       const peerFlags = (d.peer_flags ?? {}) as Record<
         number, { muted?: boolean; deafened?: boolean; sharing_screen?: boolean }
@@ -519,7 +547,10 @@ export default function AppShell() {
     })
     const offCallRing = gateway.on('conversation_call_ring', (d) => {
       // Не звоним сами себе, если уже в этом звонке (второй таб/устройство).
-      if (voice?.room.kind === 'conversation' && voice.room.id === d.conversation_id) return
+      const activeCall = voiceRef.current
+      if (activeCall?.room.kind === 'conversation' && activeCall.room.id === d.conversation_id) {
+        return
+      }
       setIncomingCall({ conversationId: d.conversation_id, caller: d.caller })
     })
     const offFriendRequestCreate = gateway.on('friend_request_create', (d) => {
@@ -534,6 +565,87 @@ export default function AppShell() {
         incoming: prev.incoming.filter((r) => r.id !== d.id),
         outgoing: prev.outgoing.filter((r) => r.id !== d.id),
       }))
+    })
+
+    // Каждый (пере)коннект gateway начинается с "ready". Пока сокет лежал,
+    // сообщения продолжали приходить другим — а этот клиент их не получал и
+    // раньше не добирал никогда: они не появлялись до переключения канала.
+    // Курсор after=<последний известный id> закрывает ровно этот разрыв.
+    const offReady = gateway.on('ready', () => {
+      void (async () => {
+        const lastMessage = messagesRef.current[messagesRef.current.length - 1]
+        if (channelId != null && lastMessage) {
+          try {
+            const missed = await api.messages(channelId, { after: lastMessage.id })
+            if (missed.length) {
+              setMessages((prev) => {
+                const known = new Set(prev.map((m) => m.id))
+                return [...prev, ...missed.filter((m) => !known.has(m.id))]
+              })
+            }
+          } catch {
+            /* добор не критичен — история перечитается при смене канала */
+          }
+        }
+        const lastDm = dmMessagesRef.current[dmMessagesRef.current.length - 1]
+        if (activeConversationId != null && lastDm) {
+          try {
+            const missed = await api.conversationMessages(activeConversationId, {
+              after: lastDm.id,
+            })
+            if (missed.length) {
+              setDmMessages((prev) => {
+                const known = new Set(prev.map((m) => m.id))
+                return [...prev, ...missed.filter((m) => !known.has(m.id))]
+              })
+            }
+          } catch {
+            /* см. выше */
+          }
+        }
+      })()
+    })
+
+    // Членство на сервере изменилось при живом сокете. Сама подписка/отписка
+    // от группы сервера делается на стороне консьюмера (см. chat/consumers.py,
+    // op'ы server_membership_*) — здесь только приводим UI в соответствие.
+    const offMembershipGranted = gateway.on('server_membership_granted', () => {
+      void (async () => {
+        try {
+          setServers(await api.servers())
+        } catch {
+          /* перечитаем при следующем событии */
+        }
+      })()
+    })
+    const offMembershipRevoked = gateway.on('server_membership_revoked', (d) => {
+      setServers((prev) => prev.filter((s) => s.id !== d.server_id))
+      if (serverId === d.server_id) {
+        setServerId(null)
+        setChannelId(null)
+      }
+    })
+    // Мы сами вышли из беседы (см. api.leaveConversation).
+    const offConversationLeft = gateway.on('conversation_left', (d) => {
+      setConversations((prev) => prev.filter((c) => c.id !== d.conversation_id))
+      if (activeConversationId === d.conversation_id) setActiveConversationId(null)
+    })
+    // Из беседы вышел кто-то другой — убрать из списка участников и из
+    // ростера звонка, если он там был.
+    const offParticipantLeave = gateway.on('conversation_participant_leave', (d) => {
+      setConversations((prev) =>
+        prev.map((c) =>
+          c.id === d.conversation_id
+            ? { ...c, participants: c.participants.filter((p) => p.id !== d.user_id) }
+            : c,
+        ),
+      )
+      setDmCallParticipants((prev) => {
+        if (!prev[d.user_id]) return prev
+        const next = { ...prev }
+        delete next[d.user_id]
+        return next
+      })
     })
 
     return () => {
@@ -562,8 +674,19 @@ export default function AppShell() {
       offCallRing()
       offFriendRequestCreate()
       offFriendRequestAccept()
+      offMembershipGranted()
+      offMembershipRevoked()
+      offConversationLeft()
+      offParticipantLeave()
+      offReady()
     }
-  }, [gateway, channelId, serverId, activeConversationId, conversations, voice, user])
+    // conversations/voice/user намеренно НЕ в зависимостях: они читаются
+    // через ref'ы выше. Иначе каждое входящее ЛС (setConversations) снимало и
+    // заново вешало все обработчики этого эффекта — см. комментарий у
+    // conversationsRef. Подавления exhaustive-deps здесь не нужно: после
+    // перевода на ref'ы список зависимостей стал полным (линтер это
+    // подтверждает).
+  }, [gateway, channelId, serverId, activeConversationId])
 
   const openProfilePopup = useCallback((popupUser: ProfilePopupUser, e: ReactMouseEvent) => {
     e.stopPropagation()
@@ -928,22 +1051,19 @@ export default function AppShell() {
   const handleVoiceStatus = useCallback(
     (status: VoiceStatus) => {
       setVoiceStatus(status)
-      if (status === 'failed') {
-        setVoice((v) => {
-          if (v) {
-            gateway.voiceLeave()
-            // 'failed' сюда долетает только с самого первого коннекта (ни разу
-            // не подключились) — если связь обрывается ПОСЛЕ успешного коннекта,
-            // voice.ts сам бесконечно пытается восстановиться сам, без алертов
-            // и выкидывания из канала (см. handleDropped в voice.ts).
-            alert(
-              `Не удалось подключиться к голосовому каналу «${v.room.name}». ` +
-                'Проверь интернет-соединение (возможна блокировка WebRTC/UDP на твоей сети/VPN) и попробуй зайти снова.',
-            )
-          }
-          return null
-        })
-      }
+      if (status !== 'failed') return
+      const current = voiceRef.current
+      if (!current) return
+      gateway.voiceLeave()
+      setVoice(null)
+      // 'failed' сюда долетает только с самого первого коннекта (ни разу не
+      // подключились) — если связь обрывается ПОСЛЕ успешного коннекта,
+      // voice.ts бесконечно восстанавливается сам, без алертов и выкидывания
+      // из канала (см. handleDropped в voice.ts).
+      alert(
+        `Не удалось подключиться к голосовому каналу «${current.room.name}». ` +
+          'Проверь интернет-соединение (возможна блокировка WebRTC/UDP на твоей сети/VPN) и попробуй зайти снова.',
+      )
     },
     [gateway],
   )
