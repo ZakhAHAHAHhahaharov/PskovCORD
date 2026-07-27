@@ -4,7 +4,7 @@
 
 | Что | Значение |
 |-----|----------|
-| Сервер | Ubuntu 26.04, 1 vCPU / 4GB RAM, IP `94.26.90.101` |
+| Сервер | Ubuntu 26.04, 1 vCPU / 4GB RAM, IP `<SERVER_IP>` |
 | Домен | https://pskord.zlgvpn.org (TLS — общий wildcard `*.zlgvpn.org`) |
 | Путь на сервере | `/opt/pskovcord` (git-репозиторий, ветка `main`) |
 | Пользователь деплоя | `deploy` (группа `docker`, вход только по SSH-ключу) |
@@ -65,7 +65,7 @@ UDP/TCP 40000-40100 на публичном IP, мимо nginx и docker NAT.
   дублировать в `backend/.env` не нужно. Если не задать — обе стороны возьмут
   небезопасный dev-дефолт (голос заработает, но токен можно подделать).
 - `SFU_PUBLIC_URL` и `SFU_ANNOUNCED_IP` **задавать не нужно** — прод-значения
-  (`wss://pskord.zlgvpn.org/sfu` и `94.26.90.101`) зашиты в
+  (`wss://pskord.zlgvpn.org/sfu` и `<SERVER_IP>`) зашиты в
   `deploy/docker-compose.prod.yml` и перекрывают `backend/.env`.
 
 **Firewall на сервере** (вручную, не через docker — `sfu` в `network_mode: host`):
@@ -83,7 +83,7 @@ ufw allow 40000:40100/tcp
 ## Ручные операции на сервере
 
 ```bash
-ssh deploy@94.26.90.101   # ключ deploy_key, не пароль root
+ssh deploy@<SERVER_IP>   # ключ deploy_key, не пароль root
 
 cd /opt/pskovcord
 docker compose --env-file .env -f deploy/docker-compose.prod.yml ps
