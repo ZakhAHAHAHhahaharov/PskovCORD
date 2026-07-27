@@ -1,4 +1,12 @@
-# PskovCord — локальный стек. Тот же compose деплоим на сервер.
+# PskovCord — ТОЛЬКО локальный стек для разработки.
+#
+# На сервер деплоится deploy/docker-compose.prod.yml (см. DEPLOY.md и
+# deploy/deploy.sh) — он заметно строже: не публикует порты БД наружу, не
+# монтирует исходники внутрь контейнера, требует настоящие секреты. Здесь
+# раньше стояло «тот же compose деплоим на сервер» — неправда, и цена ошибки
+# высока: этот файл поднимает Postgres и Redis с дефолтным паролем и coturn
+# без TLS.
+#
 # Запуск:  docker compose up --build
 name: pskovcord
 
@@ -12,7 +20,10 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     ports:
-      - "5432:5432"
+      # Только на loopback: "5432:5432" слушает на ВСЕХ интерфейсах, то есть
+      # на любой машине в общей сети (кафе, коворкинг, проброшенный порт)
+      # база с паролем changeme оказывалась доступна снаружи.
+      - "127.0.0.1:5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 5s
@@ -25,7 +36,8 @@ services:
     volumes:
       - redis_data:/data
     ports:
-      - "6379:6379"
+      # Redis без пароля — тем более не должен торчать наружу (см. postgres).
+      - "127.0.0.1:6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -49,6 +61,11 @@ services:
   sfu:
     build: ./sfu
     env_file: .env
+    environment:
+      # SFU отказывается стартовать с секретом из .env.example (см.
+      # sfu/src/config.ts). Здесь это осознанно разрешено — файл только для
+      # локальной разработки; в прод-compose такого флага нет.
+      SFU_ALLOW_DEV_SECRET: "1"
     # host-сеть — как у coturn: mediasoup'у нужны прямой UDP/TCP-диапазон
     # (SFU_RTC_MIN_PORT..MAX_PORT) и реальный announcedIp, а не bridge-NAT.
     # Слушает WS-сигналинг на SFU_LISTEN_PORT (по умолчанию 4443).

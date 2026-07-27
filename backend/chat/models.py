@@ -255,6 +255,27 @@ class Conversation(models.Model):
         through="ConversationParticipant",
         related_name="conversations",
     )
+    # Канонический ключ пары для kind=dm: "<меньший id>:<больший id>".
+    # Уникальный индекс по нему — единственный надёжный способ не получить два
+    # параллельных диалога между одной и той же парой: «проверить, что диалога
+    # нет, и создать» — это гонка (двойной клик, две вкладки), которую нельзя
+    # закрыть на уровне приложения. Пусто у групп и у дублей, доставшихся из
+    # истории (см. миграцию 0006) — их индекс не трогает.
+    dm_key = models.CharField(max_length=64, blank=True, default="")
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["dm_key"],
+                condition=models.Q(kind="dm") & ~models.Q(dm_key=""),
+                name="unique_dm_conversation_pair",
+            )
+        ]
+
+    @staticmethod
+    def build_dm_key(user_a_id, user_b_id) -> str:
+        low, high = sorted((int(user_a_id), int(user_b_id)))
+        return f"{low}:{high}"
 
     def __str__(self) -> str:
         return self.name or f"conversation#{self.id}"

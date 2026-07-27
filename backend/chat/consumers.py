@@ -87,6 +87,15 @@ GatewayConsumer — единственный WebSocket на клиента (по
     {"op": "friend_request_create", "id": <id>, "from_user": {...}}
     {"op": "friend_request_accept", "id": <id>, "user": {...}}
      — оба лично адресатy через user_{id} (см. accounts/chat.views).
+    {"op": "server_membership_granted", "server_id": <id>} — лично тому, кто
+     только что вступил на сервер (или чью заявку одобрили): консьюмер
+     доподписывает своё соединение на server_{id}, иначе realtime по этому
+     серверу молчал бы до перезагрузки страницы.
+    {"op": "server_membership_revoked", "server_id": <id>} — лично тому, кого
+     выгнали/забанили: консьюмер отписывается от server_{id} и выходит из
+     голосового канала этого сервера. Без этого исключённый продолжал читать
+     весь чат сервера, пока сам не закроет вкладку (писать он уже не мог —
+     проверки при отправке смотрят в Membership).
 
 Персональная группа user_{id} — для событий адресованных конкретному
 человеку, а не всем на сервере/в диалоге (заявка в друзья, новый диалог,
@@ -254,7 +263,13 @@ class GatewayConsumer(AsyncWebsocketConsumer):
             # Хартбит живости соединения — см. presence.heartbeat и
             # chat.heartbeat_sweep (страховка на случай, если WS оборвётся
             # без close-фрейма и обычный disconnect() не придёт).
-            await asyncio.to_thread(presence.heartbeat, self.uid)
+            restored = await asyncio.to_thread(presence.heartbeat, self.uid)
+            if restored:
+                # Sweep успел счесть нас призраком (пинг задержался дольше
+                # HEARTBEAT_TTL — спящая вкладка, длинный сетевой провал),
+                # хотя сокет жив. Возвращаем себя в онлайн для остальных:
+                # иначе для них мы так и остались бы офлайн навсегда.
+                await self._broadcast_presence(True)
 
     # --- операции -----------------------------------------------------------
     async def _handle_send(self, data):
@@ -591,7 +606,11 @@ class GatewayConsumer(AsyncWebsocketConsumer):
         server = Server.objects.filter(id=server_id).first()
         if not server or server.owner_id == int(target_user_id):
             return False
-        return roles.has_permission(self.user, server, "manage_members")
+        if not roles.has_permission(self.user, server, "manage_members"):
+            return False
+        # Иерархия ролей действует и здесь: отключить от голоса можно только
+        # того, кто строго ниже — иначе модератор глушил бы администратора.
+        return roles.can_act_on_member(self.user, server, target_user_id)
 
     @database_sync_to_async
     def _target_not_owner(self, server_id, target_user_id):
@@ -706,10 +725,48 @@ class GatewayConsumer(AsyncWebsocketConsumer):
                 "topic": state["topic"],
             }})
 
+    async def _leave_voice_of_server(self, server_id):
+        """Выкинуть из голосового канала сервера, из которого только что
+        исключили. Сама presence-запись при удалении Membership не исчезает,
+        так что без этого исключённый оставался бы в ростере канала."""
+        room = await asyncio.to_thread(presence.voice_channel, self.uid)
+        if not room or is_dm_room(room):
+            return
+        if await self._channel_server(room) != server_id:
+            return
+        await self._handle_voice_leave()
+        await self._send({"op": "voice_kicked", "channel_id": int(room)})
+
     async def broadcast(self, event):
         """Обработчик group_send(type="broadcast")."""
         payload = event["payload"]
-        if payload.get("op") == "conversation_create":
+        op = payload.get("op")
+        if op == "server_membership_granted":
+            # Вступили в сервер (или одобрили заявку) с уже открытым сокетом.
+            # Список server_-групп собирается один раз в connect(), поэтому
+            # доподписываемся здесь — иначе realtime по этому серверу молчит
+            # до перезагрузки страницы.
+            group = f"server_{payload['server_id']}"
+            if group not in self.server_groups:
+                self.server_groups.append(group)
+                await self.channel_layer.group_add(group, self.channel_name)
+        elif op == "server_membership_revoked":
+            # Выгнали/забанили — отписываемся немедленно, а не ждём, пока
+            # пользователь сам закроет вкладку (до этого он продолжал читать
+            # весь чат и presence сервера).
+            group = f"server_{payload['server_id']}"
+            if group in self.server_groups:
+                self.server_groups.remove(group)
+                await self.channel_layer.group_discard(group, self.channel_name)
+            await self._leave_voice_of_server(payload["server_id"])
+        elif op == "conversation_left":
+            # Сами вышли из беседы (см. chat.views.ConversationDetail.delete) —
+            # отписываемся, иначе продолжали бы получать её сообщения.
+            group = f"conversation_{payload['conversation_id']}"
+            if group in self.conversation_groups:
+                self.conversation_groups.remove(group)
+                await self.channel_layer.group_discard(group, self.channel_name)
+        if op == "conversation_create":
             # Новый диалог/группа создаётся REST-вьюхой (chat.views), не этим
             # консьюмером — уже открытое соединение ещё не подписано на
             # conversation_{id} (группа собиралась один раз в connect() из
@@ -744,7 +801,8 @@ class GatewayConsumer(AsyncWebsocketConsumer):
             user=self.user, server=channel.server
         ).exists():
             return None
-        if not roles.has_permission(self.user, channel.server, "send_messages"):
+        perms = roles.permissions_for(self.user, channel.server)
+        if not perms.get("view_channels") or not perms.get("send_messages"):
             return None
         reply_to = None
         if reply_to_id:
@@ -795,10 +853,17 @@ class GatewayConsumer(AsyncWebsocketConsumer):
 
     @database_sync_to_async
     def _voice_channel_server(self, channel_id):
-        """server_id, если это голосовой канал и юзер — участник сервера, иначе None."""
+        """server_id, если это голосовой канал, юзер — участник сервера и у
+        него есть права видеть канал и говорить в нём, иначе None.
+
+        view_channels/speak проверяются и здесь, и в VoiceCredentials: там —
+        чтобы не выдать медиа-токен, тут — чтобы не пустить в presence-ростер
+        канала (иначе участник без права «Говорить» всё равно висел бы в
+        списке подключённых, просто молча).
+        """
         try:
             channel = Channel.objects.select_related("server").get(id=channel_id)
-        except Channel.DoesNotExist:
+        except (Channel.DoesNotExist, ValueError, TypeError):
             return None
         if channel.kind != Channel.VOICE:
             return None
@@ -806,13 +871,19 @@ class GatewayConsumer(AsyncWebsocketConsumer):
             user=self.user, server=channel.server
         ).exists():
             return None
+        perms = roles.permissions_for(self.user, channel.server)
+        if not perms.get("view_channels") or not perms.get("speak"):
+            return None
         return channel.server_id
 
     @database_sync_to_async
     def _channel_server(self, channel_id):
+        # ValueError/TypeError — на случай, если сюда всё-таки долетит
+        # синтетическая комната dm_<id> (см. models.is_dm_room): id канала
+        # целочисленный, и Django бросит именно их, а не DoesNotExist.
         try:
             return Channel.objects.get(id=channel_id).server_id
-        except Channel.DoesNotExist:
+        except (Channel.DoesNotExist, ValueError, TypeError):
             return None
 
     @database_sync_to_async

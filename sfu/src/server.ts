@@ -10,13 +10,21 @@ interface TokenClaims {
   uid: number
   room: string
   name?: string
+  /** Права роли на сервере (см. chat/sfu.py). В токенах, выпущенных до их
+   * появления, отсутствуют — тогда считаем разрешённым (см. Peer). */
+  speak?: boolean
+  video?: boolean
 }
 
 /** Верификация access-токена из query (?token=...), подписан SFU_SECRET. */
 function verifyToken(rawUrl: string | undefined): TokenClaims {
   const url = new URL(rawUrl || '', 'http://localhost')
   const token = url.searchParams.get('token') || ''
-  return jwt.verify(token, config.sfuSecret) as TokenClaims
+  // Явный allow-list алгоритмов: иначе проверка опирается на дефолты
+  // библиотеки, а не на наше решение.
+  return jwt.verify(token, config.sfuSecret, {
+    algorithms: ['HS256'],
+  }) as TokenClaims
 }
 
 export function startServer(): void {
@@ -32,7 +40,10 @@ export function startServer(): void {
       return
     }
 
-    const peer = new Peer(Number(claims.uid), ws)
+    const peer = new Peer(Number(claims.uid), ws, {
+      canSpeak: claims.speak !== false,
+      canVideo: claims.video !== false,
+    })
     // Комната резолвится асинхронно (первый вход создаёт mediasoup Router),
     // но 'message'/'close' вешаем СРАЗУ и синхронно — если бы мы сначала
     // ждали Rooms.get(), а слушатель добавляли после await, самое первое
@@ -53,7 +64,18 @@ export function startServer(): void {
     }
 
     ws.on('message', async (raw) => {
-      const r = await ensureJoined()
+      let r: Awaited<ReturnType<typeof ensureJoined>>
+      try {
+        r = await ensureJoined()
+      } catch (err) {
+        // Комнату не удалось создать (упал mediasoup-воркер и т.п.). Раньше
+        // reject уходил в никуда: клиент вис без ответа, а необработанный
+        // rejection мог утащить за собой весь процесс — вместе с остальными
+        // комнатами на этом же SFU.
+        console.error(`[sfu] peer ${peer.id}: не удалось войти в комнату:`, err)
+        ws.close(1011, 'room unavailable')
+        return
+      }
       let msg: any
       try {
         msg = JSON.parse(raw.toString())

@@ -1,11 +1,8 @@
-import base64
-import binascii
-
 from rest_framework import serializers
 
 from accounts.serializers import (
     ALLOWED_AVATAR_MIME, ALLOWED_BANNER_MIME, GRADIENT_RE, MAX_BANNER_BYTES,
-    UserSerializer,
+    UserSerializer, validate_data_url,
 )
 
 from . import presence, roles
@@ -26,26 +23,6 @@ MAX_TAG_LEN = 32
 MAX_RULES = 20
 
 
-def _validate_data_url(value, allowed_mime, max_bytes, what):
-    """Общая проверка картинки-data-URL (значок/баннер сервера) — тот же
-    разбор, что и в accounts.serializers для аватара/баннера профиля."""
-    if not value:
-        return value
-    if not value.startswith("data:"):
-        raise serializers.ValidationError("Ожидался data-URL картинки.")
-    header, _, b64data = value.partition(",")
-    mime = header[len("data:"):].split(";")[0]
-    if mime not in allowed_mime:
-        raise serializers.ValidationError("Неподдерживаемый формат картинки.")
-    try:
-        decoded = base64.b64decode(b64data, validate=True)
-    except (binascii.Error, ValueError):
-        raise serializers.ValidationError(f"Битые данные ({what}).")
-    if len(decoded) > max_bytes:
-        raise serializers.ValidationError(f"Слишком большой файл ({what}).")
-    return value
-
-
 class ChannelSerializer(serializers.ModelSerializer):
     # Длительность текущего разговора и статус — только для голосовых
     # каналов, живут в presence (Redis), пока в канале кто-то есть.
@@ -58,15 +35,25 @@ class ChannelSerializer(serializers.ModelSerializer):
                   "call_started_at", "topic"]
         read_only_fields = ["server"]
 
+    def _state(self, obj):
+        """Состояние звонка канала. Если вызывающий заранее сложил в контекст
+        call_states (см. chat.views.server_context), берём оттуда — иначе на
+        каждый голосовой канал уходило бы по два отдельных обращения к Redis
+        прямо во время сериализации."""
+        states = self.context.get("call_states")
+        if states is not None:
+            return states.get(str(obj.id)) or {"call_started_at": None, "topic": None}
+        return presence.call_state(obj.id)
+
     def get_call_started_at(self, obj):
         if obj.kind != Channel.VOICE:
             return None
-        return presence.call_started_at(obj.id)
+        return self._state(obj)["call_started_at"]
 
     def get_topic(self, obj):
         if obj.kind != Channel.VOICE:
             return None
-        return presence.call_topic(obj.id)
+        return self._state(obj)["topic"]
 
 
 class RoleSerializer(serializers.ModelSerializer):
@@ -108,6 +95,11 @@ class ServerSerializer(serializers.ModelSerializer):
         return roles.permissions_for(request.user, obj)
 
     def get_member_count(self, obj):
+        # Предпочитаем аннотацию из queryset'а (см. chat.views) — без неё на
+        # каждый сервер в списке уходил отдельный COUNT.
+        annotated = getattr(obj, "member_total", None)
+        if annotated is not None:
+            return annotated
         return obj.memberships.count()
 
 
@@ -129,11 +121,11 @@ class ServerUpdateSerializer(serializers.ModelSerializer):
         return value
 
     def validate_icon(self, value):
-        return _validate_data_url(
+        return validate_data_url(
             value, ALLOWED_AVATAR_MIME, MAX_ICON_BYTES, "значок сервера")
 
     def validate_banner_image(self, value):
-        return _validate_data_url(
+        return validate_data_url(
             value, ALLOWED_BANNER_MIME, MAX_BANNER_BYTES, "баннер сервера")
 
     def validate_banner_gradient(self, value):
@@ -247,7 +239,11 @@ class ConversationSerializer(serializers.ModelSerializer):
         return UserSerializer(qs, many=True).data
 
     def get_last_message(self, obj):
-        last = obj.messages.order_by("-created_at").first()
+        cached = self.context.get("last_messages")
+        if cached is not None:
+            last = cached.get(obj.id)
+        else:
+            last = obj.messages.order_by("-created_at").first()
         if not last:
             return None
         return {
@@ -257,4 +253,10 @@ class ConversationSerializer(serializers.ModelSerializer):
         }
 
     def get_call_started_at(self, obj):
-        return presence.call_started_at(dm_room(obj.id))
+        # Как и у каналов: если вызывающий сложил состояния в контекст одним
+        # пайплайном (см. chat.views.conversation_context), берём оттуда.
+        states = self.context.get("call_states")
+        room = dm_room(obj.id)
+        if states is not None:
+            return (states.get(room) or {}).get("call_started_at")
+        return presence.call_started_at(room)

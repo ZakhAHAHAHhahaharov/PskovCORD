@@ -3,15 +3,21 @@ from channels.layers import get_channel_layer
 from django.contrib.auth import login as django_login, logout as django_logout
 from rest_framework import generics, permissions
 from rest_framework.response import Response
+from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
+from rest_framework_simplejwt.exceptions import TokenError
+from rest_framework_simplejwt.token_blacklist.models import (
+    BlacklistedToken,
+    OutstandingToken,
+)
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenObtainPairView
 
 from .serializers import (
     ChangePasswordSerializer,
+    MeSerializer,
     ProfileUpdateSerializer,
     RegisterSerializer,
-    UserSerializer,
 )
 
 
@@ -43,9 +49,25 @@ def tokens_for(user):
     return {"access": str(refresh.access_token), "refresh": str(refresh)}
 
 
+def revoke_all_refresh_tokens(user):
+    """Отозвать все выданные пользователю refresh-токены.
+
+    Нужно при смене пароля: его меняют в том числе тогда, когда он утёк, и
+    остальные сессии обязаны умереть. Access-токены так не отозвать — они
+    проверяются по подписи, без похода в БД, — но их срок теперь 15 минут
+    (см. settings.SIMPLE_JWT), это и есть верхняя граница окна.
+    """
+    for token in OutstandingToken.objects.filter(user=user):
+        BlacklistedToken.objects.get_or_create(token=token)
+
+
 class RegisterView(generics.CreateAPIView):
     serializer_class = RegisterSerializer
     permission_classes = [permissions.AllowAny]
+    # Отдельная жёсткая шкала для auth-ручек (10/min, см. settings) — без неё
+    # подбор пароля ограничивался только шириной канала.
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "auth"
 
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
@@ -56,7 +78,7 @@ class RegisterView(generics.CreateAPIView):
         # входа (см. LoginView.post — тот же приём).
         django_login(request, user)
         return Response(
-            {"user": UserSerializer(user).data, **tokens_for(user)},
+            {"user": MeSerializer(user).data, **tokens_for(user)},
             status=201,
         )
 
@@ -67,6 +89,9 @@ class LoginView(TokenObtainPairView):
     поэтому staff-пользователи сразу попадают в /adminpskordpro/ тем же
     логином/паролем, без отдельного входа в админку."""
 
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "auth"
+
     def post(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -76,16 +101,27 @@ class LoginView(TokenObtainPairView):
 
 class LogoutView(APIView):
     """Гасит Django-сессию (см. LoginView) при выходе из приложения — иначе
-    после логаута в SPA сессия в админке молча жила бы своим сроком."""
+    после логаута в SPA сессия в админке молча жила бы своим сроком — и
+    отзывает refresh-токен, если клиент его прислал."""
 
     def post(self, request):
+        # Раньше выход не отзывал вообще ничего: refresh жил ещё неделю,
+        # access — сутки. Теперь refresh уезжает в блэклист, а короткий срок
+        # access'а (15 минут) ограничивает остаток окна.
+        refresh = request.data.get("refresh")
+        if refresh:
+            try:
+                RefreshToken(refresh).blacklist()
+            except TokenError:
+                # Уже протух или отозван — для выхода это всё равно успех.
+                pass
         django_logout(request)
         return Response(status=204)
 
 
 class MeView(APIView):
     def get(self, request):
-        return Response(UserSerializer(request.user).data)
+        return Response(MeSerializer(request.user).data)
 
     def patch(self, request):
         serializer = ProfileUpdateSerializer(
@@ -93,14 +129,21 @@ class MeView(APIView):
         serializer.is_valid(raise_exception=True)
         user = serializer.save()
         _broadcast_profile_update(user)
-        return Response(UserSerializer(user).data)
+        return Response(MeSerializer(user).data)
 
 
 class ChangePasswordView(APIView):
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "auth"
+
     def post(self, request):
         serializer = ChangePasswordSerializer(
             data=request.data, context={"request": request})
         serializer.is_valid(raise_exception=True)
         request.user.set_password(serializer.validated_data["new_password"])
         request.user.save(update_fields=["password"])
+        # Смена пароля должна выкидывать остальные сессии — иначе смена
+        # пароля после утечки ничего не давала: старые токены продолжали
+        # работать весь свой срок.
+        revoke_all_refresh_tokens(request.user)
         return Response(status=204)

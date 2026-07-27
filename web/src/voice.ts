@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useRef, useState } from 'react'
 import type { VoiceState } from './components/AppShell'
+import { api } from './api'
 import { SfuClient } from './sfu'
 import { playDisconnectSound, playReconnectedSound } from './sounds'
 import { useSettings } from './settings'
@@ -194,11 +195,33 @@ export function useVoiceMesh(
     let hasConnectedOnce = false
     setStatus('connecting')
 
+    // Credentials текущей попытки. Токен SFU короткоживущий (см. chat/sfu.py
+    // DEFAULT_TTL), а reconnect-цикл бессрочный — раньше все попытки
+    // переиспользовали тот самый токен, что выдали при входе в канал. Стоило
+    // разговору пережить срок токена и словить любой обрыв связи, как клиент
+    // уходил в 'reconnecting' НАВСЕГДА: SFU отвечал 4001 на каждую попытку, а
+    // сообщения об ошибке в этом состоянии не предусмотрено. Перед каждой
+    // повторной попыткой берём свежие — заодно это подхватывает отзыв прав и
+    // бан, потому что сервер просто не выдаст новый токен.
+    const creds = { url: voice.sfuUrl, token: voice.sfuToken }
+
+    const refreshCredentials = async () => {
+      // VoiceRoom.id объявлен как number | string (см. AppShell) — на деле это
+      // всегда числовой id канала или беседы.
+      const roomId = Number(voice.room.id)
+      const res =
+        voice.room.kind === 'conversation'
+          ? await api.conversationVoiceCredentials(roomId)
+          : await api.voiceCredentials(roomId)
+      creds.url = res.sfu_url
+      creds.token = res.sfu_token
+    }
+
     const startAttempt = () => {
       if (cancelled) return
       const isReconnect = hasConnectedOnce
 
-      const sfu = new SfuClient(voice.sfuUrl, voice.sfuToken, {
+      const sfu = new SfuClient(creds.url, creds.token, {
         onRemoteStream: (userId, stream) => {
           setRemoteStreams((prev) => {
             const next = new Map(prev)
@@ -343,7 +366,19 @@ export function useVoiceMesh(
         RECONNECT_BASE_DELAY_MS * 2 ** (reconnectAttempt - 1),
         RECONNECT_MAX_DELAY_MS,
       )
-      reconnectTimer = setTimeout(startAttempt, delay)
+      reconnectTimer = setTimeout(() => {
+        void (async () => {
+          if (cancelled) return
+          try {
+            await refreshCredentials()
+          } catch {
+            // Токен не выдали: могли отобрать право говорить, забанить или
+            // просто нет сети. Пробуем подключиться со старым — если дело
+            // было в сети, следующая итерация возьмёт свежий.
+          }
+          startAttempt()
+        })()
+      }, delay)
     }
 
     void (async () => {
@@ -613,17 +648,39 @@ export function useVoiceMesh(
     void navigator.mediaDevices
       .getDisplayMedia({ video: true, audio: true })
       .then(async (stream) => {
+        // Пока открыт системный диалог выбора экрана, можно успеть выйти из
+        // канала — тогда client.current уже null. Раньше здесь стоял
+        // non-null assertion, исключение улетало в .catch, и захват экрана
+        // оставался ЖИТЬ: индикатор «идёт демонстрация» у браузера/ОС горел
+        // дальше, выключить его можно было только нативной кнопкой.
+        const sfu = client.current
+        if (!sfu) {
+          stream.getTracks().forEach((t) => t.stop())
+          return
+        }
         displayStream.current = stream
         // Пользователь может остановить показ нативной кнопкой браузера —
         // ловим конец видеодорожки и синхронизируем состояние.
         const videoTrack = stream.getVideoTracks()[0]
         if (videoTrack) videoTrack.addEventListener('ended', stopSharing)
-        await client.current!.startScreen(stream.getTracks())
+        try {
+          await sfu.startScreen(stream.getTracks())
+        } catch (e) {
+          // Не смогли отдать треки SFU (нет права «Показывать видео», обрыв) —
+          // обязательно гасим сам захват, иначе он останется висеть.
+          stream.getTracks().forEach((t) => t.stop())
+          displayStream.current = null
+          throw e
+        }
         setIsSharingScreen(true)
         setOwnScreenStream(stream)
       })
       .catch(() => {
-        // Пользователь отменил выбор экрана — ничего не делаем.
+        // Пользователь отменил выбор экрана в системном диалоге — самый
+        // частый путь сюда, делать нечего. Остальные пути уже прибрали
+        // за собой выше.
+        if (!displayStream.current) return
+        displayStream.current.getTracks().forEach((t) => t.stop())
         displayStream.current = null
       })
   }

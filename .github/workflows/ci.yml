@@ -5,6 +5,9 @@ on:
     branches: [main, dev]
   push:
     branches: [dev]
+  # Позволяет вызывать этот воркфлоу из deploy.yml как обязательное условие
+  # (needs: ci) — раньше деплой уходил на прод, не дожидаясь тестов вовсе.
+  workflow_call: {}
 
 jobs:
   web:
@@ -18,6 +21,11 @@ jobs:
           cache: "npm"
           cache-dependency-path: web/package-lock.json
       - run: npm ci
+        working-directory: web
+      # Линтера в проекте не было вовсе, при том что в коде стояли
+      # eslint-disable-комментарии — правило, которое они подавляют, никто не
+      # проверял (см. web/eslint.config.js).
+      - run: npm run lint
         working-directory: web
       - run: npm run build
         working-directory: web
@@ -70,3 +78,31 @@ jobs:
         working-directory: backend
       - run: python manage.py test
         working-directory: backend
+      # Прод-конфигурация (DEBUG=0) до этого не проверялась ничем: тесты и
+      # check гонялись только с DEBUG=1, так что ветка с обязательными
+      # секретами, Secure-cookie и CORS могла сломаться незамеченной.
+      - name: check --deploy (прод-конфигурация)
+        working-directory: backend
+        env:
+          DJANGO_DEBUG: "0"
+          DJANGO_SECRET_KEY: ci-only-secret-key-0123456789abcdefghijklmnopqrstuvwxyz-not-for-prod
+          DJANGO_ALLOWED_HOSTS: example.com
+          POSTGRES_PASSWORD: ci-only-postgres-password
+          TURN_SECRET: ci-only-turn-secret-0123456789abcdef
+          SFU_SECRET: ci-only-sfu-secret-0123456789abcdef
+        run: python manage.py check --deploy --fail-level ERROR
+
+  sfu:
+    name: sfu (typecheck + build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: sfu/package-lock.json
+      - run: npm ci
+        working-directory: sfu
+      - run: npm run build
+        working-directory: sfu

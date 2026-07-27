@@ -26,6 +26,12 @@ export const BANNER_MAX_W = 640
 export const BANNER_MAX_H = 320
 export const BANNER_MAX_BYTES = 4_000_000
 
+/** Потолок на ИСХОДНЫЙ файл, который читаем в память перед сжатием (аватар,
+ * значок сервера). Сам результат после кропа и JPEG-сжатия — десятки КБ, но
+ * читать в память приходится оригинал целиком, а FileReader на файле в
+ * сотни МБ подвешивает вкладку. */
+export const SOURCE_IMAGE_MAX_BYTES = 20_000_000
+
 /** Сторона квадрата аватара пользователя — держит data-URL небольшим
  * (десятки КБ): он летит в каждой строке ростера/сообщении. */
 export const AVATAR_SIZE = 256
@@ -100,6 +106,18 @@ export function fileToBannerDataUrl(file: File): Promise<string> {
  * и для аватара пользователя, и для значка сервера (разный только размер). */
 export function fileToSquareDataUrl(file: File, size: number): Promise<string> {
   return new Promise((resolve, reject) => {
+    // Проверка веса ДО чтения в память. Соседняя fileToBannerDataUrl это
+    // делает, а здесь не делалось: accept="image/*" ограничением не является,
+    // и файл на сотни мегабайт читался целиком через FileReader — вкладка
+    // подвисала или падала ещё до того, как дело доходило до сжатия.
+    if (file.size > SOURCE_IMAGE_MAX_BYTES) {
+      reject(
+        new Error(
+          `Файл слишком большой (макс. ${Math.round(SOURCE_IMAGE_MAX_BYTES / 1_000_000)} МБ).`,
+        ),
+      )
+      return
+    }
     const reader = new FileReader()
     reader.onerror = () => reject(new Error('Не удалось прочитать файл.'))
     reader.onload = () => {

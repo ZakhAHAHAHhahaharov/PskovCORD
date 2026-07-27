@@ -42,8 +42,9 @@ const PERMISSION_GROUPS: { title: string; items: [ServerPermission, string][] }[
       ['manage_channels', 'Управлять каналами'],
       ['manage_roles', 'Управлять ролями'],
       ['manage_server', 'Управлять сервером'],
-      ['manage_invites', 'Управлять приглашениями'],
-      ['manage_nicknames', 'Управлять никнеймами'],
+      // manage_invites / manage_nicknames отсюда убраны: они охраняли фичи,
+      // которых в проекте нет, и были переключателями, не делавшими ничего.
+      // Вернутся вместе с самими фичами — см. chat/roles.py.
       ['manage_members', 'Выгонять / одобрять / банить участников'],
     ],
   },
@@ -52,7 +53,7 @@ const PERMISSION_GROUPS: { title: string; items: [ServerPermission, string][] }[
     items: [
       ['send_messages', 'Отправка сообщений'],
       ['delete_messages', 'Удаление сообщений'],
-      ['mention_everyone', 'Упоминания @all / @online / @here'],
+      // mention_everyone — там же: разбора @all/@online/@here нет нигде.
     ],
   },
   {
@@ -987,6 +988,13 @@ function BansTab({
   const ban = async () => {
     const userId = Number(banTargetId)
     if (!userId) return
+    // Подтверждение: бан выкидывает с сервера и закрывает вход обратно, а
+    // срабатывал он раньше сразу по клику — при том что удаление одного
+    // сообщения (MessageList) подтверждения спрашивает.
+    const target = bannable.find((m) => m.id === userId)
+    if (!window.confirm(`Забанить ${target?.username ?? 'участника'} на сервере?`)) {
+      return
+    }
     try {
       const entry = await api.banMember(server.id, userId, banReason.trim())
       setBans((prev) => [entry, ...prev.filter((b) => b.user.id !== userId)])
