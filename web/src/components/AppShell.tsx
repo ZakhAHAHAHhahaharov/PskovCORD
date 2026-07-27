@@ -599,7 +599,6 @@ export default function AppShell() {
 
   const handleDisconnectUser = useCallback(
     (userId: number) => {
-      setContextMenuTarget(null)
       gateway.voiceDisconnectUser(userId)
     },
     [gateway],
@@ -607,7 +606,6 @@ export default function AppShell() {
 
   const handleStartMuteVote = useCallback(
     (userId: number) => {
-      setContextMenuTarget(null)
       gateway.voiceMuteVoteStart(userId)
     },
     [gateway],
@@ -623,7 +621,6 @@ export default function AppShell() {
 
   const handleRequestScreenShare = useCallback(
     (userId: number) => {
-      setContextMenuTarget(null)
       gateway.voiceRequestScreenShare(userId)
     },
     [gateway],
