@@ -8,12 +8,17 @@ export default function LoginScreen() {
   const [mode, setMode] = useState<'login' | 'register'>('login')
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault()
     setError(null)
+    if (mode === 'register' && password !== confirmPassword) {
+      setError('Пароли не совпадают')
+      return
+    }
     setBusy(true)
     try {
       if (mode === 'login') await login(username.trim(), password)
@@ -51,6 +56,19 @@ export default function LoginScreen() {
           required
         />
 
+        {mode === 'register' && (
+          <>
+            <label className="field-label">Повтори пароль</label>
+            <input
+              className="field-input"
+              type="password"
+              value={confirmPassword}
+              onChange={(e) => setConfirmPassword(e.target.value)}
+              required
+            />
+          </>
+        )}
+
         {error && <div className="login-error">{error}</div>}
 
         <button className="btn-primary" type="submit" disabled={busy}>
@@ -64,6 +82,7 @@ export default function LoginScreen() {
             className="link"
             onClick={() => {
               setMode(mode === 'login' ? 'register' : 'login')
+              setConfirmPassword('')
               setError(null)
             }}
           >
