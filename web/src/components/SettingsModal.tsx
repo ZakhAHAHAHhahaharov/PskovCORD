@@ -7,8 +7,10 @@ import {
   X,
   User as UserIcon,
   Image as ImageIcon,
+  Palette,
+  Monitor,
 } from 'lucide-react'
-import { useSettings, DEFAULT_SETTINGS } from '../settings'
+import { useSettings, DEFAULT_SETTINGS, ThemeChoice } from '../settings'
 
 // RMS, соответствующий 100% ширины шкалы чувствительности — обычная громкая
 // речь в микрофон редко превышает это значение. Порог живёт в её левой
@@ -19,12 +21,62 @@ const THRESHOLD_MIN = 0.005
 const THRESHOLD_MAX = 0.15
 const THRESHOLD_STEP = 0.005
 
-type SettingsCategory = 'account' | 'voice'
+type SettingsCategory = 'account' | 'appearance' | 'voice'
 
 const CATEGORIES: { id: SettingsCategory; label: string; icon: ReactNode }[] = [
   { id: 'account', label: 'Аккаунт', icon: <UserIcon size={16} /> },
+  { id: 'appearance', label: 'Внешний вид', icon: <Palette size={16} /> },
   { id: 'voice', label: 'Голос и видео', icon: <AudioWaveform size={16} /> },
 ]
+
+// Превью — реальные цвета rail/chat той темы, чтобы кружок в выборе совпадал
+// с тем, что реально увидишь после переключения (см. [data-theme=...] в
+// index.css). 'system' — свой вид (иконка монитора), это не палитра сама
+// по себе, а разрешение в dark/light по ОС.
+const THEME_OPTIONS: { id: ThemeChoice; label: string; swatch: [string, string] | null }[] = [
+  { id: 'dark', label: 'Тёмная', swatch: ['#2b2d31', '#313338'] },
+  { id: 'light', label: 'Светлая', swatch: ['#f2f3f5', '#ffffff'] },
+  { id: 'oled', label: 'Оникс', swatch: ['#0a0a0a', '#000000'] },
+  { id: 'ash', label: 'Пепел', swatch: ['#4b4d54', '#54565d'] },
+  { id: 'system', label: 'Системная', swatch: null },
+]
+
+function ThemePicker() {
+  const { theme, setTheme } = useSettings()
+
+  return (
+    <div className="settings-field">
+      <div className="settings-field-header">
+        <span className="settings-field-label">
+          <Palette size={15} /> Тема оформления
+        </span>
+      </div>
+      <div className="theme-picker">
+        {THEME_OPTIONS.map((opt) => (
+          <button
+            key={opt.id}
+            className={`theme-option${theme === opt.id ? ' active' : ''}`}
+            onClick={() => setTheme(opt.id)}
+          >
+            {opt.swatch ? (
+              <span
+                className="theme-swatch"
+                style={{
+                  background: `linear-gradient(135deg, ${opt.swatch[0]} 50%, ${opt.swatch[1]} 50%)`,
+                }}
+              />
+            ) : (
+              <span className="theme-swatch system">
+                <Monitor size={16} />
+              </span>
+            )}
+            {opt.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+}
 
 /** Живой уровень СВОЕГО микрофона — отдельный от голосового канала захват:
  * раньше метр показывал что-то только во время звонка (getMicLevel() из
@@ -137,7 +189,7 @@ function MicSensitivityField({
       </div>
       <p className="settings-hint">
         Зелёная полоса — живой уровень вашего микрофона, работает и вне голосового канала.
-        Белая метка — порог: перетащите её туда, с какой громкости у вас должно загораться
+        Кружок — порог: перетащите его туда, с какой громкости у вас должно загораться
         кольцо «говорит».
       </p>
     </div>
@@ -227,7 +279,15 @@ export default function SettingsModal({
 
           <div className="settings-content">
             {category === 'account' && (
+              <button className="settings-logout" onClick={onLogout}>
+                <LogOut size={15} /> Выйти из аккаунта
+              </button>
+            )}
+
+            {category === 'appearance' && (
               <>
+                <ThemePicker />
+
                 <button
                   className="settings-logout"
                   onClick={() =>
@@ -237,10 +297,6 @@ export default function SettingsModal({
                   }
                 >
                   <ImageIcon size={15} /> Иконка сайта (скоро)
-                </button>
-
-                <button className="settings-logout" onClick={onLogout}>
-                  <LogOut size={15} /> Выйти из аккаунта
                 </button>
               </>
             )}
