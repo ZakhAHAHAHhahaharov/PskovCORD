@@ -28,13 +28,16 @@ def resolve(channel_id, channel_layer):
     просто ничего не делает."""
     from .models import Channel
 
-    vote = presence.active_mute_vote(channel_id)
+    # Забираем голосование атомарно: прочитать-и-стереть одним движением.
+    # Раньше здесь было read → tally → clear тремя отдельными операциями, и
+    # если последний голос приходил ровно к ends_at, consumers и vote_sweep
+    # успевали оба прочитать ещё не стёртые данные — результат рассылался
+    # дважды (двойной мут, дубли событий у всех клиентов).
+    vote, votes_for, votes_against = presence.claim_mute_vote(channel_id)
     if not vote:
         return
 
     target_uid = vote["target_uid"]
-    votes_for, votes_against = presence.mute_vote_tally(channel_id)
-    presence.clear_mute_vote(channel_id)
 
     try:
         server_id = Channel.objects.get(id=channel_id).server_id

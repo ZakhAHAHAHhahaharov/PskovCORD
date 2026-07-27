@@ -46,8 +46,12 @@ urlpatterns = [
     path("friends/<int:user_id>", views.FriendRemove.as_view(), name="friend-remove"),
 
     path("people/known", views.KnownPeople.as_view(), name="known-people"),
+    path("users/<int:user_id>/profile-card",
+         views.UserProfileCard.as_view(), name="user-profile-card"),
 
     path("conversations", views.ConversationListCreate.as_view(), name="conversation-list"),
+    path("conversations/<int:conversation_id>",
+         views.ConversationDetail.as_view(), name="conversation-detail"),
     path("conversations/<int:conversation_id>/messages",
          views.ConversationMessages.as_view(), name="conversation-messages"),
     path("conversations/<int:conversation_id>/voice-credentials",

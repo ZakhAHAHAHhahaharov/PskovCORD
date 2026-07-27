@@ -34,12 +34,19 @@ def _sweep_once():
     for uid in presence.online_user_ids():
         if presence.is_heartbeat_alive(uid):
             continue
-        _force_disconnect_uid(uid, channel_layer)
+        # try/except на КАЖДЫЙ uid, а не на проход целиком: раньше одно
+        # исключение срывало всю итерацию, и остальные призраки оставались
+        # «онлайн» до следующей минуты — и так по кругу, пока проблемная
+        # запись не исчезнет сама.
+        try:
+            _force_disconnect_uid(uid, channel_layer)
+        except Exception:
+            logger.exception("presence sweep: не удалось отключить uid=%s", uid)
 
 
 def _force_disconnect_uid(uid, channel_layer):
     from accounts.models import User  # локальные импорты — без циклов при старте приложения
-    from .models import Channel, Membership
+    from .models import Channel, Membership, dm_conversation_id, is_dm_room
 
     prev_voice = presence.force_offline(uid)
     logger.info("presence sweep: uid=%s признан отключённым (heartbeat истёк)", uid)
@@ -56,6 +63,7 @@ def _force_disconnect_uid(uid, channel_layer):
         "user_id": user.id,
         "username": user.username,
         "avatar_color": user.avatar_color,
+        "avatar_image": user.avatar_image,
         "online": False,
         "status": "offline",
     }
@@ -68,9 +76,33 @@ def _force_disconnect_uid(uid, channel_layer):
 
     if not prev_voice:
         return
+
+    # Комната могла быть звонком в личке/группе — presence хранит её как
+    # непрозрачную строку вида "dm_<conversation_id>" и сервер от диалога не
+    # отличает (см. models.is_dm_room). Раньше эта строка уходила прямо в
+    # Channel.objects.get(id=...), где целочисленное поле бросало ValueError
+    # (не DoesNotExist!) — он пролетал мимо except и срывал весь проход
+    # sweep'а, а участники звонка так и не узнавали, что собеседник отвалился:
+    # он висел в разговоре бессрочно.
+    if is_dm_room(prev_voice):
+        conversation_id = dm_conversation_id(prev_voice)
+        async_to_sync(channel_layer.group_send)(
+            f"conversation_{conversation_id}",
+            {"type": "broadcast", "payload": {
+                "op": "dm_voice_state_update",
+                "user_id": user.id,
+                "username": user.username,
+                "avatar_color": user.avatar_color,
+                "avatar_image": user.avatar_image,
+                "conversation_id": conversation_id,
+                "in_call": False,
+            }},
+        )
+        return
+
     try:
         server_id = Channel.objects.get(id=prev_voice).server_id
-    except Channel.DoesNotExist:
+    except (Channel.DoesNotExist, ValueError, TypeError):
         return
 
     state = presence.call_state(prev_voice)

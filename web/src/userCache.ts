@@ -1,4 +1,4 @@
-import { User } from './api'
+import { Me } from './api'
 
 const KEY = 'pskovcord_user_cache'
 // Аватар и баннер — самые тяжёлые поля профиля (data-URL, гифка баннера до
@@ -11,11 +11,11 @@ const TTL_MS = 2 * 60 * 60 * 1000
 /** Последний известный профиль (включая аватар/баннер) — не старше 2 часов.
  * Используется только для мгновенной отрисовки до ответа /api/auth/me;
  * этот ответ всегда приходит следом и остаётся источником истины. */
-export function loadCachedUser(): User | null {
+export function loadCachedMe(): Me | null {
   try {
     const raw = localStorage.getItem(KEY)
     if (!raw) return null
-    const { user, ts } = JSON.parse(raw) as { user: User; ts: number }
+    const { user, ts } = JSON.parse(raw) as { user: Me; ts: number }
     if (Date.now() - ts > TTL_MS) return null
     return user
   } catch {
@@ -23,7 +23,7 @@ export function loadCachedUser(): User | null {
   }
 }
 
-export function saveCachedUser(user: User): void {
+export function saveCachedMe(user: Me): void {
   try {
     localStorage.setItem(KEY, JSON.stringify({ user, ts: Date.now() }))
   } catch {
@@ -31,7 +31,7 @@ export function saveCachedUser(user: User): void {
   }
 }
 
-export function clearCachedUser(): void {
+export function clearCachedMe(): void {
   try {
     localStorage.removeItem(KEY)
   } catch {

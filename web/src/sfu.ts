@@ -110,13 +110,40 @@ export class SfuClient {
       const sep = this.url.includes('?') ? '&' : '?'
       const ws = new WebSocket(`${this.url}${sep}token=${encodeURIComponent(this.token)}`)
       this.ws = ws
-      ws.onopen = () => resolve()
-      ws.onerror = () => reject(new Error('SFU WebSocket error'))
+      let settled = false
+      ws.onopen = () => {
+        settled = true
+        resolve()
+      }
+      ws.onerror = () => {
+        if (settled) return
+        settled = true
+        reject(new Error('SFU WebSocket error'))
+      }
       ws.onclose = () => {
+        // Сервер может закрыть соединение уже ПОСЛЕ успешного хендшейка —
+        // ровно так выглядит отказ по токену (close(4001, 'unauthorized')).
+        // Браузер в этом случае шлёт onclose без onerror, и раньше промис
+        // openSocket() не резолвился и не реджектился НИКОГДА: connect()
+        // висел вечно, а спасал только сторожевой таймер в voice.ts.
+        if (!settled) {
+          settled = true
+          reject(new Error('SFU WebSocket closed before open'))
+        }
+        this.rejectPending(new Error('SFU socket closed'))
         if (!this.closed) this.cb.onStatus('failed')
       }
       ws.onmessage = (e) => this.onMessage(e.data)
     })
+  }
+
+  /** Оборвать все запросы, ждущие ответа. Без этого они висели бы вечно:
+   * request() не ставит таймаут, а close() раньше просто чистил Map, никого
+   * не оповестив — любой await на таком запросе не завершался ни успехом,
+   * ни ошибкой. */
+  private rejectPending(err: Error) {
+    for (const p of this.pending.values()) p.reject(err)
+    this.pending.clear()
   }
 
   private onMessage(raw: string) {
@@ -466,7 +493,7 @@ export class SfuClient {
     this.screenProducers = []
     this.sendTransport?.close()
     this.recvTransport?.close()
-    this.pending.clear()
+    this.rejectPending(new Error('SFU client closed'))
     this.ws?.close()
     this.ws = null
   }

@@ -1,0 +1,29 @@
+# Нормализация переводов строк.
+#
+# У разработки Windows-машины с core.autocrlf=true: при checkout'е git
+# переписывает LF в CRLF. Для исходников это безобидно, но не для файлов,
+# которые ИСПОЛНЯЮТСЯ внутри Linux-контейнера: shell-скрипт с CRLF падает на
+# `#!/bin/sh\r` с невнятным "no such file or directory". Ровно так ломается
+# backend/entrypoint.sh, если собрать образ на Windows.
+
+# По умолчанию — нормализовать в репозитории, в рабочей копии как в системе.
+* text=auto
+
+# А это должно оставаться LF ВСЕГДА, включая рабочую копию на Windows.
+*.sh text eol=lf
+Dockerfile text eol=lf
+*.Dockerfile text eol=lf
+docker-compose*.yml text eol=lf
+*.conf.example text eol=lf
+
+# Бинарники не трогаем.
+*.png binary
+*.jpg binary
+*.ico binary
+*.gif binary
+*.woff binary
+*.woff2 binary
+*.ogg binary
+*.mp3 binary
+*.wav binary
+*.exe binary

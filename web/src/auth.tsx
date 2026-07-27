@@ -1,9 +1,16 @@
 import { createContext, useContext, useEffect, useState, ReactNode } from 'react'
-import { api, setToken, getToken, User, UserStatus } from './api'
-import { loadCachedUser, saveCachedUser, clearCachedUser } from './userCache'
+import {
+  api,
+  setTokens,
+  getToken,
+  setSessionExpiredHandler,
+  Me,
+  UserStatus,
+} from './api'
+import { loadCachedMe, saveCachedMe, clearCachedMe } from './userCache'
 
 interface AuthCtx {
-  user: User | null
+  user: Me | null
   loading: boolean
   login: (username: string, password: string) => Promise<void>
   register: (username: string, password: string) => Promise<void>
@@ -13,15 +20,27 @@ interface AuthCtx {
   updateLocalStatus: (status: UserStatus) => void
   /** Применить обновлённый профиль (ник/аватар) сразу после успешного PATCH
    * /api/auth/me — не дожидаясь эха через gateway (profile_update). */
-  updateLocalUser: (user: User) => void
+  updateLocalUser: (user: Me) => void
 }
 
 const Ctx = createContext<AuthCtx>(null as unknown as AuthCtx)
 export const useAuth = () => useContext(Ctx)
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<User | null>(null)
+  const [user, setUser] = useState<Me | null>(null)
   const [loading, setLoading] = useState(true)
+
+  // Сессия окончательно истекла (обновить токен не удалось). Без этого
+  // истёкший токен приводил к тому, что все экраны молча схлопывались в
+  // пустоту — серверов нет, сообщений нет, друзей нет, — и ничто не
+  // предлагало войти заново.
+  useEffect(() => {
+    setSessionExpiredHandler(() => {
+      setUser(null)
+      clearCachedMe()
+    })
+    return () => setSessionExpiredHandler(null)
+  }, [])
 
   useEffect(() => {
     ;(async () => {
@@ -29,15 +48,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         // Мгновенно показать последний известный профиль (ник/аватар/баннер)
         // из кэша, не дожидаясь сети — см. userCache.ts. Ответ /api/auth/me
         // ниже всё равно приходит следом и остаётся источником истины.
-        const cached = loadCachedUser()
+        const cached = loadCachedMe()
         if (cached) setUser(cached)
         try {
           const fresh = await api.me()
           setUser(fresh)
-          saveCachedUser(fresh)
+          saveCachedMe(fresh)
         } catch {
-          setToken(null)
-          clearCachedUser()
+          setTokens(null, null)
+          clearCachedMe()
         }
       }
       setLoading(false)
@@ -45,18 +64,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const login = async (username: string, password: string) => {
-    const { access } = await api.login(username, password)
-    setToken(access)
+    // refresh раньше просто отбрасывался — из-за этого обновлять сессию было
+    // нечем и она жила ровно столько же, сколько access-токен.
+    const { access, refresh } = await api.login(username, password)
+    setTokens(access, refresh)
     const fresh = await api.me()
     setUser(fresh)
-    saveCachedUser(fresh)
+    saveCachedMe(fresh)
   }
 
   const register = async (username: string, password: string) => {
     const data = await api.register(username, password)
-    setToken(data.access)
+    setTokens(data.access, data.refresh)
     setUser(data.user)
-    saveCachedUser(data.user)
+    saveCachedMe(data.user)
   }
 
   const logout = () => {
@@ -64,22 +85,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // приложения /adminpskordpro/ остался бы залогинен тем же cookie ещё
     // до истечения сессии. Best-effort — локальный выход не ждёт сеть.
     void api.logout().catch(() => {})
-    setToken(null)
+    setTokens(null, null)
     setUser(null)
-    clearCachedUser()
+    clearCachedMe()
   }
 
   const updateLocalStatus = (status: UserStatus) => {
     setUser((u) => {
       const next = u ? { ...u, status } : u
-      if (next) saveCachedUser(next)
+      if (next) saveCachedMe(next)
       return next
     })
   }
 
-  const updateLocalUser = (updated: User) => {
+  const updateLocalUser = (updated: Me) => {
     setUser(updated)
-    saveCachedUser(updated)
+    saveCachedMe(updated)
   }
 
   return (

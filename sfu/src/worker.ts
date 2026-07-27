@@ -14,9 +14,18 @@ export async function initWorkers(): Promise<void> {
       logLevel: 'warn',
     })
     worker.on('died', () => {
-      // Воркер упал — без него медиа не работает, поднимаемся заново процессом.
-      console.error(`[sfu] mediasoup worker ${worker.pid} died, exiting`)
-      process.exit(1)
+      // Раньше здесь был безусловный process.exit(1): смерть ОДНОГО воркера
+      // уносила все комнаты на всех воркерах, хотя пул на то и пул. Теперь
+      // выкидываем только упавший — mediasoup сам закроет его роутеры,
+      // участники тех комнат увидят обрыв и переподключатся (клиент это
+      // умеет, см. web/src/voice.ts), сев уже на живой воркер.
+      console.error(`[sfu] mediasoup worker ${worker.pid} died`)
+      const index = workers.indexOf(worker)
+      if (index !== -1) workers.splice(index, 1)
+      if (workers.length === 0) {
+        console.error('[sfu] не осталось ни одного воркера — выходим')
+        process.exit(1)
+      }
     })
     workers.push(worker)
   }
@@ -25,6 +34,10 @@ export async function initWorkers(): Promise<void> {
 
 /** Round-robin по воркерам — каждая комната садится на следующий воркер. */
 export function pickWorker(): types.Worker {
+  if (workers.length === 0) throw new Error('нет живых mediasoup-воркеров')
+  // Пул мог сократиться после смерти воркера (см. initWorkers) — приводим
+  // курсор к текущей длине, иначе он указывал бы за конец массива.
+  if (nextWorker >= workers.length) nextWorker = 0
   const worker = workers[nextWorker]
   nextWorker = (nextWorker + 1) % workers.length
   return worker

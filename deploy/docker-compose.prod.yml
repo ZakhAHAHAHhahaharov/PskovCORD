@@ -33,7 +33,9 @@ services:
     restart: unless-stopped
 
   coturn:
-    image: coturn/coturn:latest
+    # Тег зафиксирован: с :latest каждая пересборка (то есть каждый push в
+    # main, см. deploy/deploy.sh) могла подтянуть в прод другую версию coturn.
+    image: coturn/coturn:4.15.0
     # host-сеть: relay-порты нужно принимать напрямую на публичном IP,
     # без docker NAT — иначе пришлось бы прокидывать весь диапазон через iptables.
     network_mode: host
@@ -61,8 +63,12 @@ services:
       # Сигналинг слушаем только на localhost — наружу его проксирует nginx (wss).
       SFU_LISTEN_HOST: "127.0.0.1"
       SFU_LISTEN_PORT: "4443"
-      # Один секрет на Django и SFU — берётся из корневого .env.
-      SFU_SECRET: ${SFU_SECRET:-dev-insecure-sfu-secret}
+      # Один секрет на Django и SFU — берётся из корневого .env. Фолбэка нет
+      # намеренно: раньше здесь стоял `:-dev-insecure-sfu-secret`, то есть при
+      # незаданной переменной обе стороны молча сходились на секрете из
+      # .env.example, и кто угодно мог подписать себе токен в любую комнату.
+      # Теперь compose упадёт с внятной ошибкой на старте.
+      SFU_SECRET: ${SFU_SECRET:?SFU_SECRET обязателен — openssl rand -hex 32}
       # IP, который SFU сообщает клиентам в ICE-кандидатах.
       SFU_ANNOUNCED_IP: ${SFU_ANNOUNCED_IP:-94.26.90.101}
       SFU_RTC_MIN_PORT: ${SFU_RTC_MIN_PORT:-40000}
@@ -79,7 +85,13 @@ services:
       # приходилось править файл на сервере руками:
       # клиент ходит на SFU через nginx по тому же домену (wss, без mixed content).
       SFU_PUBLIC_URL: ${SFU_PUBLIC_URL:-wss://pskord.zlgvpn.org/sfu}
-      SFU_SECRET: ${SFU_SECRET:-dev-insecure-sfu-secret}
+      SFU_SECRET: ${SFU_SECRET:?SFU_SECRET обязателен — openssl rand -hex 32}
+      # TURN_SECRET раньше приезжал сюда только из backend/.env (через
+      # env_file), а в coturn — из корневого .env. Стоило файлам разойтись, и
+      # Django подписывал TURN-credentials одним ключом, а coturn проверял
+      # другим: relay тихо переставал работать без внятной причины. Теперь
+      # оба сервиса берут его из одного места — корневого .env.
+      TURN_SECRET: ${TURN_SECRET:?TURN_SECRET обязателен — openssl rand -hex 32}
     depends_on:
       postgres:
         condition: service_healthy

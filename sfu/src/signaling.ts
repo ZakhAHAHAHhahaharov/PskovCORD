@@ -49,6 +49,15 @@ export async function handleRequest(
       if (!transport) throw new Error('transport not found')
       // source отличает микрофон от демонстрации экрана ('mic' | 'screen').
       const source: string = data.source === 'screen' ? 'screen' : 'mic'
+      // Права роли из токена — единственная их проверка на медиа-леге, см.
+      // Peer.canSpeak/canVideo. До этого «Говорить: выкл» и «Показывать
+      // видео: выкл» в редакторе ролей не значили ничего.
+      if (source === 'screen' && !peer.canVideo) {
+        throw new Error('screen share not allowed by server role')
+      }
+      if (source === 'mic' && !peer.canSpeak) {
+        throw new Error('speaking not allowed by server role')
+      }
       const producer = await transport.produce({
         kind: data.kind as types.MediaKind,
         rtpParameters: data.rtpParameters,

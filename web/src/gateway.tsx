@@ -3,6 +3,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useMemo,
   useRef,
   ReactNode,
 } from 'react'
@@ -52,6 +53,20 @@ export const useGateway = () => useContext(Ctx)
 // попыток про запас на случай троттлинга фоновой вкладки браузером.
 const PING_INTERVAL_MS = 60 * 1000
 
+// Реконнект с экспоненциальной задержкой и джиттером. Раньше здесь стоял
+// фиксированный setTimeout(connect, 2000): без потолка, без джиттера и без
+// учёта причины обрыва. Если сервер рвал соединение из-за протухшего токена
+// или просто перезапускался, все вкладки всех клиентов долбились в него раз в
+// две секунды бесконечно и разом. Тот же паттерн уже был реализован в
+// voice.ts для SFU — здесь он просто не был переиспользован.
+const RECONNECT_BASE_MS = 1000
+const RECONNECT_MAX_MS = 30000
+
+// Сообщения, отправленные при закрытом сокете, копятся до реконнекта. Очередь
+// ограничена: при долгом обрыве она иначе растёт неограниченно, а вываливать
+// на сервер тысячу отложенных операций разом всё равно не стоит.
+const MAX_QUEUED_MESSAGES = 100
+
 // Пусто => same-origin (ws/wss от текущего хоста). Для dev задаётся в web/.env.
 const ENV_WS = import.meta.env.VITE_WS_URL
 const WS: string =
@@ -64,6 +79,8 @@ export function GatewayProvider({ children }: { children: ReactNode }) {
   const handlers = useRef<Map<string, Set<Handler>>>(new Map())
   const queue = useRef<string[]>([])
   const closed = useRef(false)
+  const attempt = useRef(0)
+  const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const connect = useCallback(() => {
     const token = getToken()
@@ -73,6 +90,7 @@ export function GatewayProvider({ children }: { children: ReactNode }) {
     wsRef.current = ws
 
     ws.onopen = () => {
+      attempt.current = 0
       queue.current.forEach((m) => ws.send(m))
       queue.current = []
     }
@@ -86,7 +104,19 @@ export function GatewayProvider({ children }: { children: ReactNode }) {
     }
     ws.onclose = () => {
       wsRef.current = null
-      if (!closed.current) setTimeout(connect, 2000)
+      if (closed.current) return
+      // Токена больше нет (разлогинились или сессия окончательно истекла) —
+      // переподключаться некуда и незачем.
+      if (!getToken()) return
+      attempt.current += 1
+      const backoff = Math.min(
+        RECONNECT_BASE_MS * 2 ** (attempt.current - 1),
+        RECONNECT_MAX_MS,
+      )
+      // Джиттер: без него после рестарта сервера все клиенты приходят
+      // ровно одновременно и роняют его повторно.
+      const delay = backoff * (0.5 + Math.random() * 0.5)
+      reconnectTimer.current = setTimeout(connect, delay)
     }
   }, [])
 
@@ -95,6 +125,8 @@ export function GatewayProvider({ children }: { children: ReactNode }) {
     connect()
     return () => {
       closed.current = true
+      if (reconnectTimer.current) clearTimeout(reconnectTimer.current)
+      reconnectTimer.current = null
       wsRef.current?.close()
     }
   }, [connect])
@@ -107,12 +139,16 @@ export function GatewayProvider({ children }: { children: ReactNode }) {
     return () => clearInterval(interval)
   }, [])
 
-  const raw = (obj: unknown) => {
+  const raw = useCallback((obj: unknown) => {
     const msg = JSON.stringify(obj)
     const ws = wsRef.current
-    if (ws && ws.readyState === WebSocket.OPEN) ws.send(msg)
-    else queue.current.push(msg)
-  }
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(msg)
+      return
+    }
+    if (queue.current.length >= MAX_QUEUED_MESSAGES) queue.current.shift()
+    queue.current.push(msg)
+  }, [])
 
   const on = useCallback((op: string, handler: Handler) => {
     if (!handlers.current.has(op)) handlers.current.set(op, new Set())
@@ -122,7 +158,10 @@ export function GatewayProvider({ children }: { children: ReactNode }) {
     }
   }, [])
 
-  const value: GatewayCtx = {
+  // useMemo, а не новый объект на каждый рендер: без него КАЖДЫЙ рендер
+  // провайдера менял значение контекста и заставлял перерисовываться всех
+  // потребителей useGateway().
+  const value: GatewayCtx = useMemo(() => ({
     on,
     sendMessage: (channelId, content, replyTo) =>
       raw({ op: 'send_message', channel_id: channelId, content, reply_to: replyTo ?? null }),
@@ -153,7 +192,7 @@ export function GatewayProvider({ children }: { children: ReactNode }) {
       raw({ op: 'dm_edit_message', message_id: messageId, content }),
     dmVoiceJoin: (conversationId) =>
       raw({ op: 'dm_voice_join', conversation_id: conversationId }),
-  }
+  }), [on, raw])
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>
 }

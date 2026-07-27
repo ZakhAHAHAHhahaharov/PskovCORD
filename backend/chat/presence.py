@@ -104,8 +104,27 @@ def online_user_ids() -> set:
 # (см. gateway.tsx); сервер обновляет этот TTL. Отдельный периодический sweep
 # (см. [[heartbeat_sweep]]) находит тех, у кого TTL истёк, и принудительно
 # считает их отключившимися.
-def heartbeat(uid):
-    _r.set(_heartbeat_key(str(uid)), 1, ex=HEARTBEAT_TTL)
+def heartbeat(uid) -> bool:
+    """Обновляет TTL «жив». Возвращает True, если пользователя пришлось
+    ВЕРНУТЬ в online.
+
+    Так бывает, когда пинг задержался дольше HEARTBEAT_TTL (спящая вкладка,
+    длинный сетевой провал, троттлинг фонового таба) и sweep успел счесть
+    сокет призраком, хотя тот жив. Раньше heartbeat трогал только TTL, и
+    такой пользователь оставался офлайн для всех до самого переподключения —
+    вечно, сколько бы пингов ни пришло. Вызывающий обязан при True заново
+    разослать presence (см. GatewayConsumer, op "ping").
+    """
+    uid = str(uid)
+    _r.set(_heartbeat_key(uid), 1, ex=HEARTBEAT_TTL)
+    if _r.sismember(ONLINE_SET, uid):
+        return False
+    _r.sadd(ONLINE_SET, uid)
+    # Счётчик коннектов sweep обнулил. Восстанавливаем как «один сокет»: если
+    # их на самом деле было несколько, лишние узнают о себе на своём же
+    # следующем пинге (не позже минуты) — самовосстанавливается.
+    _r.setnx(_conn_key(uid), 1)
+    return True
 
 
 def is_heartbeat_alive(uid) -> bool:
@@ -240,6 +259,58 @@ def voice_members_flags(channel_id) -> dict:
     return {uid: voice_flags(uid) for uid in voice_member_ids(channel_id)}
 
 
+def members_snapshot(uids) -> dict:
+    """Онлайн/голос/флаги для пачки пользователей ОДНИМ пайплайном.
+
+    Поштучные is_online + voice_channel + voice_flags давали три
+    последовательных round-trip'а к Redis на каждого участника — то есть
+    O(3N) на один HTTP-запрос списка участников (см. chat.views.ServerMembers).
+    """
+    uids = [str(u) for u in uids]
+    if not uids:
+        return {}
+    pipe = _r.pipeline(transaction=False)
+    for uid in uids:
+        pipe.sismember(ONLINE_SET, uid)
+        pipe.get(_voice_key(uid))
+        pipe.hgetall(_voice_flags_key(uid))
+    raw = pipe.execute()
+    snapshot = {}
+    for index, uid in enumerate(uids):
+        online, voice, flags = raw[index * 3:index * 3 + 3]
+        flags = flags or {}
+        snapshot[uid] = {
+            "online": bool(online),
+            "voice_channel": voice,
+            "muted": flags.get("muted") == "1",
+            "deafened": flags.get("deafened") == "1",
+            "sharing_screen": flags.get("sharing_screen") == "1",
+        }
+    return snapshot
+
+
+def call_states(channel_ids) -> dict:
+    """call_started_at/topic для пачки каналов одним пайплайном — иначе
+    сериализация сервера дёргает Redis дважды на каждый голосовой канал
+    (см. chat.serializers.ChannelSerializer)."""
+    channel_ids = [str(c) for c in channel_ids]
+    if not channel_ids:
+        return {}
+    pipe = _r.pipeline(transaction=False)
+    for channel_id in channel_ids:
+        pipe.get(_call_started_key(channel_id))
+        pipe.get(_call_topic_key(channel_id))
+    raw = pipe.execute()
+    states = {}
+    for index, channel_id in enumerate(channel_ids):
+        started, topic = raw[index * 2:index * 2 + 2]
+        states[channel_id] = {
+            "call_started_at": float(started) if started is not None else None,
+            "topic": topic,
+        }
+    return states
+
+
 # --- call state (длительность разговора + статус канала) --------------------
 def _clear_call_state(channel_id):
     _r.delete(_call_started_key(channel_id))
@@ -357,6 +428,49 @@ def mute_vote_eligible_ids(channel_id, target_uid) -> set:
     ids = voice_member_ids(channel_id)
     ids.discard(str(target_uid))
     return ids
+
+
+# Атомарно забрать голосование вместе с тэлли и стереть его. Резолв дёргают
+# два независимых места — consumers (когда проголосовали все) и vote_sweep (по
+# истечении ends_at, опрос раз в 2с). Раньше между «прочитали» и «удалили» был
+# зазор, и совпадение по времени давало двойную рассылку результата: двойной
+# мут и дубли событий у всех клиентов.
+_CLAIM_MUTE_VOTE_SCRIPT = """
+local vote = redis.call('HGETALL', KEYS[1])
+if #vote == 0 then return nil end
+local votes_for = redis.call('SMEMBERS', KEYS[2])
+local votes_against = redis.call('SMEMBERS', KEYS[3])
+redis.call('DEL', KEYS[1], KEYS[2], KEYS[3])
+redis.call('SREM', KEYS[4], ARGV[1])
+return {vote, votes_for, votes_against}
+"""
+_claim_mute_vote = _r.register_script(_CLAIM_MUTE_VOTE_SCRIPT)
+
+
+def claim_mute_vote(channel_id):
+    """Забрать активное голосование канала — ровно один вызывающий получит
+    данные, все остальные (None, set(), set()). См. скрипт выше."""
+    channel_id = str(channel_id)
+    raw = _claim_mute_vote(
+        keys=[
+            _vote_key(channel_id),
+            _vote_for_key(channel_id),
+            _vote_against_key(channel_id),
+            ACTIVE_VOTES_SET,
+        ],
+        args=[channel_id],
+    )
+    if not raw:
+        return None, set(), set()
+    flat, votes_for, votes_against = raw
+    fields = dict(zip(flat[::2], flat[1::2]))
+    vote = {
+        "target_uid": fields["target_uid"],
+        "initiator_uid": fields["initiator_uid"],
+        "started_at": float(fields["started_at"]),
+        "ends_at": float(fields["ends_at"]),
+    }
+    return vote, set(votes_for), set(votes_against)
 
 
 def clear_mute_vote(channel_id):

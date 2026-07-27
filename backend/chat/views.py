@@ -2,8 +2,8 @@ from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
 from django.conf import settings
 from django.contrib.auth import get_user_model
-from django.db import transaction
-from django.db.models import Q
+from django.db import IntegrityError, transaction
+from django.db.models import Count, Max, Q
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import status
@@ -44,6 +44,34 @@ def _require_permission(request, server, permission):
     return Response({"detail": "Недостаточно прав на сервере."}, status=403)
 
 
+def _require_role_hierarchy(request, server, data, current_position=None):
+    """Проверка иерархии при создании/правке роли. Без неё manage_roles было
+    эскалацией до владельца — см. chat.roles, там же вся механика.
+
+    current_position=None означает создание новой роли (менять пока нечего).
+    """
+    if current_position is not None and not roles.can_manage_role(
+        request.user, server, current_position
+    ):
+        return Response(
+            {"detail": "Нельзя управлять ролью не ниже вашей."}, status=403)
+    # После правки роль тоже должна остаться ниже своей — иначе её можно было
+    # бы «поднять» себе над головой одним PATCH'ем position.
+    target_position = data.get(
+        "position", current_position if current_position is not None else 0)
+    if not roles.can_manage_role(request.user, server, target_position):
+        return Response(
+            {"detail": "Нельзя поставить роль на уровень не ниже вашего."}, status=403)
+    extra = roles.missing_permissions_to_grant(request.user, server, data)
+    if extra:
+        return Response(
+            {"detail": "Нельзя выдать права, которых нет у вас самих: "
+                       + ", ".join(extra) + "."},
+            status=403,
+        )
+    return None
+
+
 def _broadcast_server_update(server, request=None):
     """Разослать участникам обновлённый сервер — иначе изменения из редактора
     (имя, значок, каналы в правах и т.п.) видит только тот, кто их внёс, до
@@ -57,6 +85,113 @@ def _broadcast_server_update(server, request=None):
             # из первоначальной загрузки (см. AppShell: server_update).
             "server": ServerSerializer(server).data,
         }})
+
+
+def _require_channel_access(request, channel, *permissions):
+    """Доступ к каналу: членство + view_channels + перечисленные права.
+
+    view_channels и speak раньше не проверялись нигде — роль могла их снять, а
+    участник всё равно читал канал и получал голосовой токен, то есть
+    «Говорить: выкл» в редакторе ролей ничего не значило.
+    """
+    if not is_member(request.user, channel.server):
+        return Response({"detail": "Нет доступа."}, status=403)
+    perms = roles.permissions_for(request.user, channel.server)
+    for name in ("view_channels", *permissions):
+        if not perms.get(name):
+            return Response({"detail": "Недостаточно прав на сервере."}, status=403)
+    return None
+
+
+# Пагинация истории. До этого ручки жёстко отдавали последние 50 сообщений без
+# курсора — всё, что старше, было недостижимо из приложения в принципе, сколько
+# бы ни копилось в БД.
+DEFAULT_PAGE_SIZE = 50
+MAX_PAGE_SIZE = 100
+
+# Верхняя граница на размер беседы. Раньше её не было вовсе: одним запросом
+# можно было завести группу со всеми пользователями инстанса разом.
+MAX_CONVERSATION_PARTICIPANTS = 25
+
+
+def _int_param(request, name):
+    raw = request.query_params.get(name)
+    if raw in (None, ""):
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def _paginate_messages(request, queryset):
+    """Курсорная пагинация: ?before=<id> — страница строго старше указанного
+    сообщения (скролл вверх), ?after=<id> — то, что появилось после (добор
+    пропущенного, когда WS лежал). Без курсора — последняя страница, как
+    раньше. Всегда возвращает хронологический порядок."""
+    limit = _int_param(request, "limit") or DEFAULT_PAGE_SIZE
+    limit = max(1, min(limit, MAX_PAGE_SIZE))
+
+    after = _int_param(request, "after")
+    if after is not None:
+        # Вперёд берём самые СТАРЫЕ из новых, иначе при большом пропуске в
+        # середине образуется дырка, которую клиенту нечем заметить.
+        return list(queryset.filter(id__gt=after).order_by("created_at", "id")[:limit])
+
+    before = _int_param(request, "before")
+    if before is not None:
+        queryset = queryset.filter(id__lt=before)
+    return list(queryset.order_by("-created_at", "-id")[:limit])[::-1]
+
+
+def server_context(request, servers):
+    """Контекст для ServerSerializer: request (нужен для my_permissions) плюс
+    заранее собранные состояния звонков всех голосовых каналов — одним
+    пайплайном вместо двух обращений к Redis на каждый канал во время
+    сериализации (см. ChannelSerializer._state)."""
+    if isinstance(servers, Server):
+        servers = [servers]
+    voice_channel_ids = [
+        channel.id
+        for server in servers
+        for channel in server.channels.all()
+        if channel.kind == Channel.VOICE
+    ]
+    return {
+        "request": request,
+        "call_states": presence.call_states(voice_channel_ids),
+    }
+
+
+def _last_messages(conversation_ids):
+    """Последнее сообщение каждой беседы за два запроса — раньше сериализатор
+    делал отдельный ORDER BY ... LIMIT 1 на каждую беседу в списке."""
+    if not conversation_ids:
+        return {}
+    latest_ids = list(
+        ConversationMessage.objects.filter(conversation_id__in=conversation_ids)
+        .values("conversation_id")
+        .annotate(last_id=Max("id"))
+        .values_list("last_id", flat=True)
+    )
+    return {
+        m.conversation_id: m
+        for m in ConversationMessage.objects.filter(id__in=latest_ids)
+    }
+
+
+def conversation_context(request, conversations):
+    """Контекст для ConversationSerializer — тем же приёмом, что и
+    server_context: состояния звонков одним пайплайном, последние сообщения
+    одним запросом."""
+    if isinstance(conversations, Conversation):
+        conversations = [conversations]
+    ids = [c.id for c in conversations]
+    return {
+        "request": request,
+        "call_states": presence.call_states([dm_room(cid) for cid in ids]),
+        "last_messages": _last_messages(ids),
+    }
 
 
 def is_participant(user, conversation) -> bool:
@@ -75,11 +210,49 @@ def _notify_user(user_id, payload):
         f"user_{user_id}", {"type": "broadcast", "payload": payload})
 
 
+def _revoke_server_membership(server, user_id):
+    """Отписать живые сокеты пользователя от группы сервера.
+
+    GatewayConsumer собирает список server_-групп ровно один раз, в connect()
+    (иначе неоткуда узнать об изменении членства), поэтому без этой команды
+    выгнанный/забаненный продолжал получать весь чат, presence и voice-state
+    сервера до тех пор, пока сам не закроет вкладку. Писать он уже не мог —
+    проверки при отправке смотрят в Membership, — а читать мог сколько угодно.
+    """
+    _notify_user(user_id, {
+        "op": "server_membership_revoked",
+        "server_id": server.id,
+    })
+
+
+def _grant_server_membership(server, user_id):
+    """Зеркальная операция: подписать сокеты только что вступившего.
+
+    Без неё новый участник грузил историю по REST и дальше сидел в тишине —
+    ни новых сообщений, ни presence, — пока не перезагрузит страницу.
+    """
+    _notify_user(user_id, {
+        "op": "server_membership_granted",
+        "server_id": server.id,
+    })
+
+
 class ServerListCreate(APIView):
     def get(self, request):
-        servers = Server.objects.filter(memberships__user=request.user).distinct()
+        # Фильтр по id, а не join'ом по memberships: с join'ом
+        # annotate(Count("memberships")) считал бы только СВОЁ членство (1),
+        # а не всех участников сервера — классические грабли аннотации по той
+        # же связи, по которой идёт фильтрация.
+        my_server_ids = Membership.objects.filter(user=request.user).values_list(
+            "server_id", flat=True)
+        servers = list(
+            Server.objects.filter(id__in=my_server_ids)
+            .annotate(member_total=Count("memberships", distinct=True))
+            .prefetch_related("channels")
+        )
         return Response(
-            ServerSerializer(servers, many=True, context={"request": request}).data)
+            ServerSerializer(
+                servers, many=True, context=server_context(request, servers)).data)
 
     @transaction.atomic
     def post(self, request):
@@ -97,26 +270,35 @@ class ServerListCreate(APIView):
         Channel.objects.create(server=server, name="General",
                                kind=Channel.VOICE, position=1)
         return Response(
-            ServerSerializer(server, context={"request": request}).data, status=201)
+            ServerSerializer(server, context=server_context(request, server)).data, status=201)
 
 
 class ServerDiscover(APIView):
     """Список всех серверов (дружеский масштаб) — чтобы можно было вступить."""
 
     def get(self, request):
-        servers = Server.objects.all().order_by("-created_at")
+        # Раньше здесь было два N+1 сразу: memberships.count() и is_member() —
+        # по отдельному запросу на каждый сервер в списке. Теперь счётчик
+        # приезжает аннотацией, а членство — одним множеством.
+        servers = Server.objects.annotate(
+            member_total=Count("memberships", distinct=True)
+        ).order_by("-created_at")
         my_requests = set(
             ServerJoinRequest.objects.filter(user=request.user).values_list(
                 "server_id", flat=True)
         )
+        my_server_ids = set(
+            Membership.objects.filter(user=request.user).values_list(
+                "server_id", flat=True)
+        )
         data = []
         for s in servers:
-            member = is_member(request.user, s)
+            member = s.id in my_server_ids
             entry = {
                 "id": s.id,
                 "name": s.name,
                 "icon": s.icon,
-                "member_count": s.memberships.count(),
+                "member_count": s.member_total,
                 "is_member": member,
                 "is_private": s.is_private,
                 "access_mode": s.access_mode,
@@ -139,7 +321,7 @@ class ServerDetail(APIView):
         if not is_member(request.user, server):
             return Response({"detail": "Вы не участник сервера."}, status=403)
         return Response(
-            ServerSerializer(server, context={"request": request}).data)
+            ServerSerializer(server, context=server_context(request, server)).data)
 
     def patch(self, request, server_id):
         """Вкладки «Профиль» и «Доступ» редактора сервера."""
@@ -152,7 +334,7 @@ class ServerDetail(APIView):
         serializer.save()
         _broadcast_server_update(server)
         return Response(
-            ServerSerializer(server, context={"request": request}).data)
+            ServerSerializer(server, context=server_context(request, server)).data)
 
 
 class ServerJoin(APIView):
@@ -164,7 +346,7 @@ class ServerJoin(APIView):
         server = get_object_or_404(Server, id=server_id)
         if is_member(request.user, server):
             return Response(
-                ServerSerializer(server, context={"request": request}).data, status=200)
+                ServerSerializer(server, context=server_context(request, server)).data, status=200)
 
         if ServerBan.objects.filter(server=server, user=request.user).exists():
             return Response({"detail": "Вы забанены на этом сервере."}, status=403)
@@ -190,18 +372,24 @@ class ServerJoin(APIView):
             )
 
         Membership.objects.get_or_create(user=request.user, server=server)
+        _grant_server_membership(server, request.user.id)
         return Response(
-            ServerSerializer(server, context={"request": request}).data, status=200)
+            ServerSerializer(server, context=server_context(request, server)).data, status=200)
 
 
 def _notify_server_managers(server, payload):
     """Уведомление о событии, которое интересно только модерации сервера
-    (новая заявка на вступление). Шлём в общую группу сервера — фронт сам
-    решает, показывать ли (у него уже есть свои my_permissions), потому что
-    персональные группы пришлось бы перебирать по всем участникам."""
-    channel_layer = get_channel_layer()
-    async_to_sync(channel_layer.group_send)(
-        f"server_{server.id}", {"type": "broadcast", "payload": payload})
+    (новая заявка на вступление).
+
+    Раньше слалось в общую группу сервера с расчётом «фронт сам решит,
+    показывать ли» — то есть профиль заявителя и его сопроводительное
+    сообщение (до 2000 символов) получали ВСЕ участники, хотя REST-ручка тех
+    же заявок закрыта правом manage_members. Решение о доступе принимает
+    сервер, а не клиент: перебираем тех, у кого право реально есть, и шлём
+    лично. На дружеском масштабе список модерации короткий.
+    """
+    for user_id in roles.member_ids_with_permission(server, "manage_members"):
+        _notify_user(user_id, payload)
 
 
 class ServerMembers(APIView):
@@ -209,21 +397,24 @@ class ServerMembers(APIView):
         server = get_object_or_404(Server, id=server_id)
         if not is_member(request.user, server):
             return Response({"detail": "Вы не участник сервера."}, status=403)
-        memberships = server.memberships.select_related("user").prefetch_related("roles")
+        memberships = list(
+            server.memberships.select_related("user").prefetch_related("roles"))
+        # Один пайплайн на весь ростер вместо трёх round-trip'ов к Redis на
+        # каждого участника (is_online + voice_channel + voice_flags).
+        snapshot = presence.members_snapshot([m.user_id for m in memberships])
         data = []
         for m in memberships:
             u = m.user
-            is_on = presence.is_online(u.id)
-            eff_status = presence.effective_status(u, is_on)
-            flags = presence.voice_flags(u.id)
+            state = snapshot.get(str(u.id), {})
+            eff_status = presence.effective_status(u, state.get("online", False))
             data.append({
                 **UserSerializer(u).data,
                 "online": eff_status != "offline",
                 "status": eff_status,
-                "voice_channel": presence.voice_channel(u.id),
-                "muted": flags["muted"],
-                "deafened": flags["deafened"],
-                "sharing_screen": flags["sharing_screen"],
+                "voice_channel": state.get("voice_channel"),
+                "muted": state.get("muted", False),
+                "deafened": state.get("deafened", False),
+                "sharing_screen": state.get("sharing_screen", False),
                 "role_ids": [r.id for r in m.roles.all()],
                 "is_owner": u.id == server.owner_id,
             })
@@ -241,14 +432,29 @@ class ServerMemberDetail(APIView):
         denied = _require_permission(request, server, "manage_roles")
         if denied:
             return denied
+        if not roles.can_act_on_member(request.user, server, user_id):
+            return Response(
+                {"detail": "Нельзя менять роли участника не ниже вас."}, status=403)
         membership = get_object_or_404(Membership, server=server, user_id=user_id)
         role_ids = request.data.get("role_ids")
         if not isinstance(role_ids, list):
             return Response({"detail": "role_ids — список id ролей."}, status=400)
         # Роль по умолчанию действует на всех и не выдаётся персонально —
         # молча отбрасываем её, чтобы фронт не мог создать расхождение.
-        valid = Role.objects.filter(
-            server=server, id__in=role_ids, is_default=False)
+        valid = list(Role.objects.filter(
+            server=server, id__in=role_ids, is_default=False))
+        # Выдать можно только роль ниже своей — иначе manage_roles позволяло бы
+        # назначить себе (или подельнику) роль администратора.
+        too_high = [
+            r.name for r in valid
+            if not roles.can_manage_role(request.user, server, r.position)
+        ]
+        if too_high:
+            return Response(
+                {"detail": "Нельзя выдать роль не ниже вашей: "
+                           + ", ".join(too_high) + "."},
+                status=403,
+            )
         membership.roles.set(valid)
         return Response({"user_id": user_id, "role_ids": [r.id for r in valid]})
 
@@ -260,7 +466,11 @@ class ServerMemberDetail(APIView):
             return denied
         if user_id == server.owner_id:
             return Response({"detail": "Нельзя выгнать владельца сервера."}, status=400)
+        if not roles.can_act_on_member(request.user, server, user_id):
+            return Response(
+                {"detail": "Нельзя выгнать участника не ниже вас."}, status=403)
         Membership.objects.filter(server=server, user_id=user_id).delete()
+        _revoke_server_membership(server, user_id)
         return Response(status=204)
 
 
@@ -281,6 +491,9 @@ class ServerRoles(APIView):
             return denied
         serializer = RoleSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+        denied = _require_role_hierarchy(request, server, serializer.validated_data)
+        if denied:
+            return denied
         # Роль по умолчанию на сервере ровно одна и создаётся вместе с ним —
         # через API вторую завести нельзя.
         serializer.save(server=server, is_default=False)
@@ -296,6 +509,10 @@ class ServerRoleDetail(APIView):
         role = get_object_or_404(Role, id=role_id, server=server)
         serializer = RoleSerializer(role, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
+        denied = _require_role_hierarchy(
+            request, server, serializer.validated_data, current_position=role.position)
+        if denied:
+            return denied
         serializer.save(is_default=role.is_default)
         return Response(serializer.data)
 
@@ -308,6 +525,9 @@ class ServerRoleDetail(APIView):
         if role.is_default:
             return Response(
                 {"detail": "Роль по умолчанию удалить нельзя."}, status=400)
+        if not roles.can_manage_role(request.user, server, role.position):
+            return Response(
+                {"detail": "Нельзя удалить роль не ниже вашей."}, status=403)
         role.delete()
         return Response(status=204)
 
@@ -337,6 +557,7 @@ class ServerJoinRequestDecision(APIView):
         Membership.objects.get_or_create(user=join_request.user, server=server)
         user_id = join_request.user_id
         join_request.delete()
+        _grant_server_membership(server, user_id)
         # Заявитель узнаёт об одобрении сразу — он не подписан на группу
         # сервера, пока не стал участником, поэтому личным уведомлением.
         _notify_user(user_id, {
@@ -376,6 +597,9 @@ class ServerBans(APIView):
         target = get_object_or_404(User, id=request.data.get("user_id"))
         if target.id == server.owner_id:
             return Response({"detail": "Нельзя забанить владельца сервера."}, status=400)
+        if not roles.can_act_on_member(request.user, server, target.id):
+            return Response(
+                {"detail": "Нельзя забанить участника не ниже вас."}, status=403)
         ban, _created = ServerBan.objects.get_or_create(
             server=server, user=target,
             defaults={
@@ -385,6 +609,7 @@ class ServerBans(APIView):
         )
         Membership.objects.filter(server=server, user=target).delete()
         ServerJoinRequest.objects.filter(server=server, user=target).delete()
+        _revoke_server_membership(server, target.id)
         return Response(ServerBanSerializer(ban).data, status=201)
 
 
@@ -547,68 +772,199 @@ class KnownPeople(APIView):
         return Response(data)
 
 
+def _can_see_profile(user, target) -> bool:
+    """Видит ли user профиль target: друзья, общий сервер или общая беседа —
+    та же логика видимости, что уже используется для мини-профиля."""
+    if are_friends(user, target):
+        return True
+    my_server_ids = Membership.objects.filter(user=user).values_list(
+        "server_id", flat=True)
+    if Membership.objects.filter(
+        user=target, server_id__in=my_server_ids
+    ).exists():
+        return True
+    my_conversation_ids = ConversationParticipant.objects.filter(
+        user=user).values_list("conversation_id", flat=True)
+    return ConversationParticipant.objects.filter(
+        user=target, conversation_id__in=my_conversation_ids).exists()
+
+
+class UserProfileCard(APIView):
+    """GET /api/users/<id>/profile-card — тяжёлая часть чужого профиля.
+
+    Гифка-баннер (до 4 МБ data-URL'ом) раньше ехала в UserSerializer, то есть
+    в каждом сообщении и в каждой строке ростера. Нужна она ровно в одном
+    месте — когда открыли карточку профиля, — поэтому и отдаётся отдельно и
+    по требованию.
+    """
+
+    def get(self, request, user_id):
+        target = get_object_or_404(User, id=user_id)
+        if target.id != request.user.id and not _can_see_profile(request.user, target):
+            return Response({"detail": "Нет доступа."}, status=403)
+        return Response({
+            "id": target.id,
+            "banner_gradient": target.banner_gradient,
+            "banner_image": target.banner_image,
+        })
+
+
 class ConversationListCreate(APIView):
     def get(self, request):
-        conversations = Conversation.objects.filter(
-            participants=request.user
-        ).order_by("-created_at").distinct()
+        conversations = list(
+            Conversation.objects.filter(participants=request.user)
+            .prefetch_related("participants")
+            .order_by("-created_at")
+            .distinct()
+        )
         return Response(
             ConversationSerializer(
-                conversations, many=True, context={"request": request}).data
+                conversations, many=True,
+                context=conversation_context(request, conversations)).data
         )
 
     @transaction.atomic
     def post(self, request):
         kind = request.data.get("kind")
-        user_ids = request.data.get("user_ids") or []
+        raw_ids = request.data.get("user_ids") or []
         name = (request.data.get("name") or "").strip()
 
         if kind not in (Conversation.DM, Conversation.GROUP):
             return Response({"detail": "kind = dm | group."}, status=400)
+        if not isinstance(raw_ids, list):
+            return Response({"detail": "user_ids — список id."}, status=400)
+        if len(raw_ids) > MAX_CONVERSATION_PARTICIPANTS:
+            return Response(
+                {"detail": f"Не больше {MAX_CONVERSATION_PARTICIPANTS} собеседников."},
+                status=400,
+            )
         try:
-            user_ids = {int(uid) for uid in user_ids if int(uid) != request.user.id}
+            user_ids = {int(uid) for uid in raw_ids if int(uid) != request.user.id}
         except (TypeError, ValueError):
             return Response({"detail": "user_ids должны быть числами."}, status=400)
         if not user_ids:
             return Response({"detail": "Нужен хотя бы один собеседник."}, status=400)
 
+        # Раньше в ветке group список лишь проверялся на непустоту, а в
+        # participant_ids уходили СЫРЫЕ id: несуществующий id ронял bulk_create
+        # в IntegrityError, то есть отдавал 500 вместо внятного 400.
+        targets = list(User.objects.filter(id__in=user_ids))
+        if len(targets) != len(user_ids):
+            return Response(
+                {"detail": "Некоторых указанных пользователей не существует."},
+                status=400)
+
         if kind == Conversation.DM:
             if len(user_ids) != 1:
                 return Response({"detail": "Личка — ровно один собеседник."}, status=400)
-            target = get_object_or_404(User, id=next(iter(user_ids)))
+            return self._create_dm(request, targets[0])
+        return self._create_group(request, targets, name)
 
-            existing = Conversation.objects.filter(
-                kind=Conversation.DM, participants=request.user
-            ).filter(participants=target).first()
-            if existing:
-                return Response(
-                    ConversationSerializer(existing, context={"request": request}).data
-                )
+    def _create_dm(self, request, target):
+        dm_key = Conversation.build_dm_key(request.user.id, target.id)
+        existing = Conversation.objects.filter(
+            kind=Conversation.DM, dm_key=dm_key).first()
+        if existing is None:
+            # Диалоги, заведённые до появления dm_key (см. миграцию 0006),
+            # ключа не имеют — ищем их прежним способом, иначе поверх уже
+            # идущей переписки завёлся бы второй пустой диалог.
+            existing = (
+                Conversation.objects.filter(
+                    kind=Conversation.DM, dm_key="", participants=request.user)
+                .filter(participants=target)
+                .first()
+            )
+        if existing:
+            return Response(
+                ConversationSerializer(
+                    existing,
+                    context=conversation_context(request, existing)).data)
 
-            if not can_dm(request.user, target):
-                return Response(
-                    {"detail": "Этот пользователь не принимает личные сообщения от вас."},
-                    status=403,
-                )
-            conversation = Conversation.objects.create(kind=Conversation.DM)
-            participant_ids = {request.user.id, target.id}
-        else:
-            users = list(User.objects.filter(id__in=user_ids))
-            if not users:
-                return Response({"detail": "Участники не найдены."}, status=400)
-            conversation = Conversation.objects.create(
-                kind=Conversation.GROUP, name=name[:100])
-            participant_ids = {request.user.id, *user_ids}
+        if not can_dm(request.user, target):
+            return Response(
+                {"detail": "Этот пользователь не принимает личные сообщения от вас."},
+                status=403,
+            )
+        try:
+            # Вложенный atomic — это savepoint: без него IntegrityError
+            # сломал бы всю внешнюю транзакцию и откатить его аккуратно было
+            # бы нечем.
+            with transaction.atomic():
+                conversation = Conversation.objects.create(
+                    kind=Conversation.DM, dm_key=dm_key)
+        except IntegrityError:
+            # Параллельный запрос (двойной клик, вторая вкладка) успел создать
+            # тот же диалог — уникальный индекс поймал гонку, отдаём готовое.
+            existing = Conversation.objects.get(kind=Conversation.DM, dm_key=dm_key)
+            return Response(
+                ConversationSerializer(
+                    existing,
+                    context=conversation_context(request, existing)).data)
+        return self._add_participants(
+            request, conversation, {request.user.id, target.id})
 
+    def _create_group(self, request, targets, name):
+        # Раньше в этой ветке не было НИ ОДНОЙ проверки: любой мог создать
+        # группу с любыми user_id и сразу писать туда. Настройка «кто может
+        # начать со мной личку» (dm_privacy) обходилась тривиально — достаточно
+        # было прислать kind=group вместо kind=dm, а группа из двух человек
+        # визуально неотличима от лички.
+        blocked = [u.username for u in targets if not can_dm(request.user, u)]
+        if blocked:
+            return Response(
+                {"detail": "Эти пользователи не принимают сообщения от вас: "
+                           + ", ".join(blocked) + "."},
+                status=403,
+            )
+        conversation = Conversation.objects.create(
+            kind=Conversation.GROUP, name=name[:100])
+        return self._add_participants(
+            request, conversation, {request.user.id, *(u.id for u in targets)})
+
+    def _add_participants(self, request, conversation, participant_ids):
         ConversationParticipant.objects.bulk_create([
             ConversationParticipant(conversation=conversation, user_id=uid)
             for uid in participant_ids
         ])
-
-        data = ConversationSerializer(conversation, context={"request": request}).data
+        data = ConversationSerializer(
+            conversation, context=conversation_context(request, conversation)).data
         for uid in participant_ids:
             _notify_user(uid, {"op": "conversation_create", "conversation": data})
         return Response(data, status=201)
+
+
+class ConversationDetail(APIView):
+    """DELETE /api/conversations/<id> — выйти из беседы.
+
+    Выхода не существовало вовсе: ConversationParticipant создавался в одном
+    месте и не удалялся нигде. То есть из группы, в которую тебя добавили,
+    деться было некуда — вычистить её можно было только через админку.
+    """
+
+    def delete(self, request, conversation_id):
+        conversation = get_object_or_404(Conversation, id=conversation_id)
+        if not is_participant(request.user, conversation):
+            return Response({"detail": "Нет доступа."}, status=403)
+
+        ConversationParticipant.objects.filter(
+            conversation=conversation, user=request.user).delete()
+        # Оставшимся — убрать из ростера; вышедшему — закрыть беседу у себя и
+        # отписаться от группы (см. GatewayConsumer.broadcast).
+        channel_layer = get_channel_layer()
+        async_to_sync(channel_layer.group_send)(
+            f"conversation_{conversation.id}",
+            {"type": "broadcast", "payload": {
+                "op": "conversation_participant_leave",
+                "conversation_id": conversation.id,
+                "user_id": request.user.id,
+            }})
+        _notify_user(request.user.id, {
+            "op": "conversation_left",
+            "conversation_id": conversation.id,
+        })
+        if not conversation.memberships.exists():
+            conversation.delete()
+        return Response(status=204)
 
 
 class ConversationMessages(APIView):
@@ -616,9 +972,8 @@ class ConversationMessages(APIView):
         conversation = get_object_or_404(Conversation, id=conversation_id)
         if not is_participant(request.user, conversation):
             return Response({"detail": "Нет доступа."}, status=403)
-        qs = conversation.messages.select_related(
-            "author", "reply_to__author").order_by("-created_at")[:50]
-        messages = list(reversed(qs))
+        qs = conversation.messages.select_related("author", "reply_to__author")
+        messages = _paginate_messages(request, qs)
         return Response(ConversationMessageSerializer(messages, many=True).data)
 
 
@@ -627,7 +982,9 @@ class ConversationVoiceCredentials(APIView):
         conversation = get_object_or_404(Conversation, id=conversation_id)
         if not is_participant(request.user, conversation):
             return Response({"detail": "Нет доступа."}, status=403)
-        ttl = 3600
+        # В личке/группе ролей нет — говорить и показывать экран может любой
+        # участник беседы.
+        ttl = sfu.DEFAULT_TTL
         room = dm_room(conversation.id)
         token = sfu.access_token(
             request.user.id, room, request.user.username, ttl=ttl)
@@ -672,19 +1029,20 @@ class ChannelCreate(APIView):
 class ChannelMessages(APIView):
     def get(self, request, channel_id):
         channel = get_object_or_404(Channel, id=channel_id)
-        if not is_member(request.user, channel.server):
-            return Response({"detail": "Нет доступа."}, status=403)
-        qs = channel.messages.select_related(
-            "author", "reply_to__author").order_by("-created_at")[:50]
-        messages = list(reversed(qs))
+        denied = _require_channel_access(request, channel)
+        if denied:
+            return denied
+        qs = channel.messages.select_related("author", "reply_to__author")
+        messages = _paginate_messages(request, qs)
         return Response(MessageSerializer(messages, many=True).data)
 
 
 class ChannelVoiceMembers(APIView):
     def get(self, request, channel_id):
         channel = get_object_or_404(Channel, id=channel_id)
-        if not is_member(request.user, channel.server):
-            return Response({"detail": "Нет доступа."}, status=403)
+        denied = _require_channel_access(request, channel)
+        if denied:
+            return denied
         return Response({"user_ids": list(presence.voice_member_ids(channel_id))})
 
 
@@ -693,13 +1051,20 @@ class VoiceCredentials(APIView):
         channel = get_object_or_404(Channel, id=channel_id)
         if channel.kind != Channel.VOICE:
             return Response({"detail": "Не голосовой канал."}, status=400)
-        if not is_member(request.user, channel.server):
-            return Response({"detail": "Нет доступа."}, status=403)
+        # speak проверяем именно здесь: без токена до SFU не дойти, так что
+        # это и есть точка, где право «Говорить» становится настоящим.
+        denied = _require_channel_access(request, channel, "speak")
+        if denied:
+            return denied
         # Медиа идёт через собственный SFU (mediasoup). Клиенту нужен адрес
-        # сигналинга SFU и короткоживущий токен доступа (uid + room в нём).
-        ttl = 3600
+        # сигналинга SFU и короткоживущий токен доступа (uid + room + права).
+        ttl = sfu.DEFAULT_TTL
+        perms = roles.permissions_for(request.user, channel.server)
         token = sfu.access_token(
-            request.user.id, channel_id, request.user.username, ttl=ttl)
+            request.user.id, channel_id, request.user.username, ttl=ttl,
+            can_speak=bool(perms.get("speak")),
+            can_video=bool(perms.get("video")),
+        )
         return Response({
             "sfu_url": settings.SFU_PUBLIC_URL,
             "sfu_token": token,
