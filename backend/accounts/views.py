@@ -6,6 +6,7 @@ from datetime import timedelta
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
 from django.conf import settings
+from django.contrib.auth import get_user_model
 from django.contrib.auth import login as django_login, logout as django_logout
 from django.utils import timezone
 from rest_framework import generics, permissions
@@ -226,6 +227,38 @@ class SessionTokenRefreshView(TokenRefreshView):
                     user_agent=request.META.get("HTTP_USER_AGENT", "")[:300],
                     last_seen_at=timezone.now(),
                 )
+        return response
+
+
+class SwitchAccountView(SessionTokenRefreshView):
+    """Переключение между аккаунтами, уже авторизованными на этом устройстве
+    (см. web/src/accounts.ts) — принимает refresh ЦЕЛЕВОГО аккаунта, обновляет
+    его JWT-пару обычным TokenRefresh-путём (см. SessionTokenRefreshView — та
+    же ротация и бамп LoginSession) и дополнительно переставляет Django-сессию
+    на этого пользователя, тем же приёмом, что LoginView/QR-вход, — иначе
+    /adminpskordpro/ продолжал бы показывать прежний аккаунт после переключения
+    в приложении."""
+
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "auth"
+
+    def post(self, request, *args, **kwargs):
+        try:
+            token = RefreshToken(request.data.get("refresh") or "")
+        except TokenError:
+            return Response(
+                {"detail": "Сессия аккаунта устарела, войдите заново."}, status=401)
+        user = get_user_model().objects.filter(
+            pk=token.payload.get("user_id")).first()
+        if user is None or not user.is_active:
+            return Response({"detail": "Аккаунт недоступен."}, status=401)
+        # Родительский TokenViewBase.post() при невалидном/просроченном/
+        # блэклистнутом refresh бросает InvalidToken, а не возвращает
+        # ответ ≠200, — исключение само долетит до DRF и вернёт 401 раньше,
+        # чем мы успеем дойти до django_login ниже.
+        response = super().post(request, *args, **kwargs)
+        django_login(request, user)
+        response.data["user"] = MeSerializer(user).data
         return response
 
 

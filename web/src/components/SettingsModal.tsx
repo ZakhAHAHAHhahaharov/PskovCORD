@@ -15,12 +15,13 @@ import {
   Trash2,
   Loader2,
   QrCode,
+  MessageCircle,
 } from 'lucide-react'
 import { useSettings, DEFAULT_SETTINGS, ThemeChoice } from '../settings'
 import { useAuth } from '../auth'
 import { useEscToClose } from '../modalStack'
 import { describeUserAgent, isMobileDevice } from '../deviceInfo'
-import { api, Session } from '../api'
+import { api, Session, DmPrivacy } from '../api'
 import QrScannerModal from './QrScannerModal'
 import PasswordInput from './PasswordInput'
 
@@ -69,7 +70,66 @@ const CATEGORIES: Category[] = [
     icon: <AudioWaveform size={16} />,
     subcategories: [{ id: 'voice-devices', label: 'Устройства и звук' }],
   },
+  {
+    id: 'content',
+    label: 'Контент и общение',
+    icon: <MessageCircle size={16} />,
+    subcategories: [{ id: 'content-privacy', label: 'Личные сообщения' }],
+  },
 ]
+
+const DM_PRIVACY_LABELS: Record<DmPrivacy, string> = {
+  friends: 'Только друзья',
+  nobody: 'Никто',
+  everyone: 'Любой зарегистрированный',
+}
+
+/** Кто может НАЧАТЬ со мной личку — переехало сюда из ProfileModal, чтобы не
+ * дублировать смену пароля/ника рядом с настройками, не завязанными на
+ * подтверждение личности. */
+function DmPrivacyField() {
+  const { user, updateLocalUser } = useAuth()
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+
+  if (!user) return null
+
+  const handleChange = async (value: DmPrivacy) => {
+    setError('')
+    setSaving(true)
+    try {
+      const updated = await api.updateProfile({ dm_privacy: value })
+      updateLocalUser(updated)
+    } catch (err) {
+      setError((err as Error).message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="settings-field">
+      <div className="settings-field-header">
+        <span className="settings-field-label">
+          <MessageCircle size={15} /> Кто может мне писать личные сообщения
+        </span>
+      </div>
+      <select
+        className="field-input"
+        value={user.dm_privacy}
+        disabled={saving}
+        onChange={(e) => handleChange(e.target.value as DmPrivacy)}
+      >
+        {(Object.keys(DM_PRIVACY_LABELS) as DmPrivacy[]).map((value) => (
+          <option key={value} value={value}>
+            {DM_PRIVACY_LABELS[value]}
+          </option>
+        ))}
+      </select>
+      {error && <div className="login-error">{error}</div>}
+    </div>
+  )
+}
 
 /** Живой уровень СВОЕГО микрофона — отдельный от голосового канала захват:
  * раньше метр показывал что-то только во время звонка (getMicLevel() из
@@ -940,6 +1000,16 @@ export default function SettingsModal({
                   onChange={setMicThreshold}
                   onReset={() => setMicThreshold(DEFAULT_SETTINGS.micThreshold)}
                 />
+              </SettingsSection>
+            )}
+
+            {!detailView && activeCategory === 'content' && (
+              <SettingsSection
+                id="content-privacy"
+                title="Личные сообщения"
+                sectionRefs={sectionRefs}
+              >
+                <DmPrivacyField />
               </SettingsSection>
             )}
           </div>
