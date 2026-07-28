@@ -645,6 +645,7 @@ export default function AppShell() {
           {
             id: d.user_id,
             username: d.username,
+            display_name: d.display_name ?? '',
             avatar_color: d.avatar_color,
             avatar_image: d.avatar_image ?? '',
             banner_gradient: '',
@@ -752,7 +753,13 @@ export default function AppShell() {
       setMembers((prev) =>
         prev.map((m) =>
           m.id === d.user_id
-            ? { ...m, username: d.username, avatar_color: d.avatar_color, avatar_image: d.avatar_image }
+            ? {
+                ...m,
+                username: d.username,
+                display_name: d.display_name,
+                avatar_color: d.avatar_color,
+                avatar_image: d.avatar_image,
+              }
             : m,
         ),
       )

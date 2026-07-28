@@ -101,6 +101,29 @@ class ProfileUpdateTests(APITestCase):
         self.user.refresh_from_db()
         self.assertNotEqual(self.user.avatar_color, "#000000")
 
+    def test_patch_display_name_and_bio(self):
+        resp = self.client.patch(
+            "/api/auth/me", {"display_name": "Печенька", "bio": "Люблю чай."})
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data["display_name"], "Печенька")
+        self.assertEqual(resp.data["bio"], "Люблю чай.")
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.display_name, "Печенька")
+        self.assertEqual(self.user.bio, "Люблю чай.")
+
+    def test_display_name_and_bio_dont_require_password(self):
+        # В отличие от username — это просто подпись/текст, не идентификатор.
+        resp = self.client.patch("/api/auth/me", {"display_name": "Кто-то"})
+        self.assertEqual(resp.status_code, 200)
+
+    def test_patch_bio_rejects_too_long(self):
+        resp = self.client.patch("/api/auth/me", {"bio": "x" * 301})
+        self.assertEqual(resp.status_code, 400)
+
+    def test_patch_bio_accepts_at_limit(self):
+        resp = self.client.patch("/api/auth/me", {"bio": "x" * 300})
+        self.assertEqual(resp.status_code, 200)
+
     def test_unauthenticated_cannot_patch(self):
         self.client.force_authenticate(None)
         resp = self.client.patch("/api/auth/me", {"username": "hacker"})

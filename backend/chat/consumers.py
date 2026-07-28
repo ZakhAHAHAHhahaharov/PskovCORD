@@ -912,6 +912,7 @@ class GatewayConsumer(AsyncWebsocketConsumer):
             "op": "voice_state_update",
             "user_id": user_id,
             "username": self.user.username,
+            "display_name": self.user.display_name,
             "avatar_color": self.user.avatar_color,
             "avatar_image": self.user.avatar_image,
             "channel_id": channel_id,
