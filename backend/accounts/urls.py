@@ -14,12 +14,14 @@ from .views import (
     SessionListView,
     SessionRevokeAllView,
     SessionTokenRefreshView,
+    SwitchAccountView,
 )
 
 urlpatterns = [
     path("register", RegisterView.as_view(), name="register"),
     path("token", LoginView.as_view(), name="token_obtain_pair"),
     path("token/refresh", SessionTokenRefreshView.as_view(), name="token_refresh"),
+    path("switch", SwitchAccountView.as_view(), name="switch-account"),
     path("logout", LogoutView.as_view(), name="logout"),
     path("me", MeView.as_view(), name="me"),
     path("change-password", ChangePasswordView.as_view(), name="change-password"),

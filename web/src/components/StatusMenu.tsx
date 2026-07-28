@@ -1,13 +1,31 @@
 import { useEffect, useRef, useState } from 'react'
+import { ChevronRight, Copy, Check, Plus, Loader2 } from 'lucide-react'
 import { useAuth } from '../auth'
 import { useGateway } from '../gateway'
 import { UserStatus } from '../api'
+import { MAX_ACCOUNTS } from '../accounts'
 import Avatar from './Avatar'
+import CallTopic from './CallTopic'
+import AddAccountModal from './AddAccountModal'
+import { VoiceState } from './AppShell'
+import { VoiceRosterMember } from './VoiceStage'
 
-const OPTIONS: { value: UserStatus; label: string }[] = [
-  { value: 'online', label: 'В сети' },
-  { value: 'dnd', label: 'Не беспокоить' },
-  { value: 'invisible', label: 'Невидимка' },
+const OPTIONS: { value: UserStatus; label: string; caption: string }[] = [
+  {
+    value: 'online',
+    label: 'В сети',
+    caption: 'Другие видят, что вы активны и на связи.',
+  },
+  {
+    value: 'dnd',
+    label: 'Не беспокоить',
+    caption: 'Другие видят, что сейчас лучше вас не отвлекать.',
+  },
+  {
+    value: 'invisible',
+    label: 'Невидимка',
+    caption: 'Вы выглядите офлайн для всех, оставаясь на связи сами.',
+  },
 ]
 
 export const STATUS_LABELS: Record<UserStatus, string> = {
@@ -16,36 +34,83 @@ export const STATUS_LABELS: Record<UserStatus, string> = {
   invisible: 'Невидимка',
 }
 
-/** Клик по своему аватару/имени в панели — открывает карточку профиля
- * с выбором действия (редактировать профиль / сменить статус). */
+const ROSTER_PREVIEW_LIMIT = 5
+
+/** Клик по своему аватару/имени в панели — открывает карточку профиля из 4
+ * блоков: мини-профиль, (опционально) текущий голосовой звонок, редактирование
+ * профиля/статуса, переключение аккаунтов. */
 export default function StatusMenu({
   speaking = false,
   onOpenProfile,
+  voice,
+  voiceRoster,
+  voiceTopic,
 }: {
   speaking?: boolean
   onOpenProfile: () => void
+  voice: VoiceState | null
+  voiceRoster: VoiceRosterMember[]
+  voiceTopic: string | null
 }) {
-  const { user, updateLocalStatus } = useAuth()
+  const { user, updateLocalStatus, knownAccounts, switchAccount } = useAuth()
   const gateway = useGateway()
   const [open, setOpen] = useState(false)
+  const [statusFlyoutOpen, setStatusFlyoutOpen] = useState(false)
+  const [showAddAccount, setShowAddAccount] = useState(false)
+  const [switchingId, setSwitchingId] = useState<number | null>(null)
+  const [switchError, setSwitchError] = useState('')
+  const [copied, setCopied] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
+  const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
     if (!open) return
     const onClick = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+      if (ref.current && !ref.current.contains(e.target as Node)) {
+        setOpen(false)
+        setStatusFlyoutOpen(false)
+      }
     }
     document.addEventListener('mousedown', onClick)
     return () => document.removeEventListener('mousedown', onClick)
   }, [open])
 
+  useEffect(() => () => {
+    if (copyTimer.current) clearTimeout(copyTimer.current)
+  }, [])
+
   if (!user) return null
 
-  const choose = (status: UserStatus) => {
+  const chooseStatus = (status: UserStatus) => {
     gateway.setStatus(status)
     updateLocalStatus(status)
-    setOpen(false)
+    setStatusFlyoutOpen(false)
   }
+
+  const handleSwitchAccount = async (accountId: number) => {
+    setSwitchError('')
+    setSwitchingId(accountId)
+    try {
+      await switchAccount(accountId)
+      setOpen(false)
+    } catch (err) {
+      setSwitchError((err as Error).message)
+    } finally {
+      setSwitchingId(null)
+    }
+  }
+
+  const copyId = () => {
+    navigator.clipboard.writeText(String(user.id)).then(() => {
+      setCopied(true)
+      if (copyTimer.current) clearTimeout(copyTimer.current)
+      copyTimer.current = setTimeout(() => setCopied(false), 1500)
+    })
+  }
+
+  const canAddAccount = knownAccounts.length < MAX_ACCOUNTS - 1
+  const rosterPreview = voiceRoster.slice(0, ROSTER_PREVIEW_LIMIT)
+  const rosterOverflow = voiceRoster.length - rosterPreview.length
 
   return (
     <div className="status-menu" ref={ref}>
@@ -72,6 +137,7 @@ export default function StatusMenu({
 
       {open && (
         <div className="status-menu-popup profile-popup">
+          {/* Блок 1 — мини-профиль */}
           <div
             className="profile-popup-banner"
             style={{
@@ -91,6 +157,36 @@ export default function StatusMenu({
             <span className="profile-popup-name">{user.username}</span>
           </div>
 
+          {/* Блок 2 (опционально) — текущий голосовой/ЛС-звонок */}
+          {voice && (
+            <div className="profile-popup-voice">
+              <div className="profile-popup-voice-room">
+                <span className="profile-popup-voice-label">В голосовом канале</span>
+                <span className="profile-popup-voice-name">{voice.room.name}</span>
+              </div>
+              <CallTopic topic={voiceTopic} canEdit={voice.room.kind === 'channel'} />
+              {rosterPreview.length > 0 && (
+                <div className="profile-popup-voice-roster">
+                  {rosterPreview.map((m) => (
+                    <Avatar
+                      key={m.id}
+                      name={m.username}
+                      color={m.avatar_color}
+                      image={m.avatar_image}
+                      size={22}
+                    />
+                  ))}
+                  {rosterOverflow > 0 && (
+                    <span className="profile-popup-voice-more">+{rosterOverflow}</span>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
+          <div className="profile-popup-divider" />
+
+          {/* Блок 3 — редактирование профиля + выбор статуса */}
           <div className="profile-popup-menu">
             <button
               type="button"
@@ -103,22 +199,79 @@ export default function StatusMenu({
               Редактировать профиль
             </button>
 
-            <div className="profile-popup-divider" />
-            <div className="profile-popup-label">Статус</div>
-            {OPTIONS.map((o) => (
+            <div className="status-row-wrap">
               <button
-                key={o.value}
                 type="button"
-                className={`status-menu-item ${user.status === o.value ? 'active' : ''}`}
-                onClick={() => choose(o.value)}
+                className="profile-popup-item status-row"
+                onClick={() => setStatusFlyoutOpen((o) => !o)}
               >
-                <span className={`status-menu-dot ${o.value}`} />
-                {o.label}
+                <span className={`status-menu-dot ${user.status}`} />
+                {STATUS_LABELS[user.status]}
+                <ChevronRight size={15} className="status-row-chevron" />
+              </button>
+
+              {statusFlyoutOpen && (
+                <div className="status-flyout">
+                  {OPTIONS.map((o) => (
+                    <button
+                      key={o.value}
+                      type="button"
+                      className={`status-flyout-item ${user.status === o.value ? 'active' : ''}`}
+                      onClick={() => chooseStatus(o.value)}
+                    >
+                      <span className="status-flyout-item-head">
+                        <span className={`status-menu-dot ${o.value}`} />
+                        {o.label}
+                      </span>
+                      <span className="status-flyout-item-caption">{o.caption}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="profile-popup-divider" />
+
+          {/* Блок 4 — переключение аккаунтов + копирование ID */}
+          <div className="profile-popup-menu">
+            {knownAccounts.map((a) => (
+              <button
+                key={a.id}
+                type="button"
+                className="profile-popup-item account-switch-item"
+                onClick={() => handleSwitchAccount(a.id)}
+                disabled={switchingId !== null}
+              >
+                <Avatar name={a.username} color={a.avatar_color} image={a.avatar_image} size={22} />
+                {a.username}
+                {switchingId === a.id && <Loader2 size={14} className="spin account-switch-spinner" />}
               </button>
             ))}
+            {switchError && <div className="status-menu-error">{switchError}</div>}
+
+            {canAddAccount && (
+              <button
+                type="button"
+                className="profile-popup-item"
+                onClick={() => {
+                  setOpen(false)
+                  setShowAddAccount(true)
+                }}
+              >
+                <Plus size={15} /> Добавить аккаунт
+              </button>
+            )}
+
+            <button type="button" className="profile-popup-item" onClick={copyId}>
+              {copied ? <Check size={15} /> : <Copy size={15} />}
+              {copied ? 'Скопировано' : 'Копировать ID'}
+            </button>
           </div>
         </div>
       )}
+
+      {showAddAccount && <AddAccountModal onClose={() => setShowAddAccount(false)} />}
     </div>
   )
 }

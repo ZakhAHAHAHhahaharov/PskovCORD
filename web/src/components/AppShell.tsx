@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, MouseEvent as ReactMouseEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, MouseEvent as ReactMouseEvent } from 'react'
 import { Phone, PhoneOff } from 'lucide-react'
 import {
   api, Channel, ChatMessageBase, Conversation, ConversationMessage, FriendsState, KnownPerson,
@@ -176,6 +176,23 @@ export default function AppShell() {
   }))
   const isInDmCall =
     voice?.room.kind === 'conversation' && activeConversation != null && voice.room.id === activeConversation.id
+
+  // Для Блока 2 в StatusMenu (мини-карточка "сейчас в голосовом") — тот же
+  // ростер, что уже собирается инлайново для VoiceStage по каналу/диалогу,
+  // просто в одном месте и объединённый для обоих видов звонка. У диалогов
+  // топика нет (см. api.ts Conversation) — редактируемый статус звонка есть
+  // только у серверных голосовых каналов.
+  const voiceRoster: VoiceRosterMember[] = useMemo(() => {
+    if (voice?.room.kind === 'channel') {
+      return members.filter((m) => m.voice_channel === String(voice.room.id))
+    }
+    if (voice?.room.kind === 'conversation') return dmRoster
+    return []
+  }, [voice, members, dmRoster])
+  const voiceTopic: string | null = useMemo(() => {
+    if (voice?.room.kind !== 'channel') return null
+    return channels.find((c) => c.id === Number(voice.room.id))?.topic ?? null
+  }, [voice, channels])
 
   const selectServer = useCallback((s: Server) => {
     setServerId(s.id)
@@ -1251,6 +1268,8 @@ export default function AppShell() {
           onAcceptFriendRequest={handleAcceptFriendRequest}
           onDeclineFriendRequest={handleDeclineFriendRequest}
           voice={voice}
+          voiceRoster={voiceRoster}
+          voiceTopic={voiceTopic}
           voiceStatus={voiceStatus}
           user={user!}
           onLeaveVoice={handleLeaveVoice}
@@ -1265,6 +1284,8 @@ export default function AppShell() {
           activeChannelId={channelId}
           members={members}
           voice={voice}
+          voiceRoster={voiceRoster}
+          voiceTopic={voiceTopic}
           voiceStatus={voiceStatus}
           user={user!}
           onSelectText={(c) => setChannelId(c.id)}

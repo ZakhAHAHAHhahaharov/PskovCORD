@@ -22,7 +22,14 @@ function Inner() {
   }
   if (!user) return <LoginScreen />
   return (
-    <GatewayProvider>
+    // key={user.id}: переключение аккаунта (см. auth.tsx switchAccount)
+    // должно пересобрать вообще всё, что привязано к пользователю — смена
+    // key форсирует полный размонт/перемонт этого поддерева вместо попытки
+    // на лету развести десятки хуков/контекстов по новому account id. Заодно
+    // закрывает старый WebSocket (GatewayProvider) и открывает новый уже с
+    // токеном нового аккаунта, а AppShell перезапрашивает servers/
+    // conversations/friends с нуля.
+    <GatewayProvider key={user.id}>
       <AppShell />
     </GatewayProvider>
   )

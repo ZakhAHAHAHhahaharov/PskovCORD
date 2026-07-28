@@ -426,6 +426,60 @@ class LoginSessionTests(APITestCase):
         self.assertEqual(retry.status_code, 401)
 
 
+class SwitchAccountTests(APITestCase):
+    """Переключение между аккаунтами, уже авторизованными на этом устройстве
+    (см. web/src/accounts.ts) — см. accounts.views.SwitchAccountView."""
+
+    def setUp(self):
+        self.user_a = User.objects.create_user(
+            username="switcher_a", password="sufficientlyLong1")
+        self.user_b = User.objects.create_user(
+            username="switcher_b", password="sufficientlyLong1")
+
+    def _login(self, username):
+        resp = self.client.post("/api/auth/token", {
+            "username": username, "password": "sufficientlyLong1",
+        })
+        return resp.data["refresh"]
+
+    def test_switch_to_other_known_account_issues_tokens_and_django_session(self):
+        self._login("switcher_a")
+        refresh_b = self._login("switcher_b")
+
+        resp = self.client.post("/api/auth/switch", {"refresh": refresh_b})
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn("access", resp.data)
+        self.assertIn("refresh", resp.data)
+        self.assertEqual(resp.data["user"]["username"], "switcher_b")
+        # Django-сессия должна указывать на B, а не на A (который логинился
+        # последним обычным логином до этого switch) — см. LoginView.
+        self.assertEqual(int(self.client.session["_auth_user_id"]), self.user_b.pk)
+
+    def test_switch_bumps_target_login_session(self):
+        refresh_b = self._login("switcher_b")
+        before = timezone.now()
+        resp = self.client.post("/api/auth/switch", {"refresh": refresh_b})
+        self.assertEqual(resp.status_code, 200)
+        session = self.user_b.login_sessions.get()
+        self.assertGreaterEqual(session.last_seen_at, before)
+
+    def test_switch_with_garbage_refresh_rejected_without_touching_session(self):
+        self._login("switcher_a")
+        resp = self.client.post("/api/auth/switch", {"refresh": "not-a-real-token"})
+        self.assertEqual(resp.status_code, 401)
+        self.assertEqual(int(self.client.session["_auth_user_id"]), self.user_a.pk)
+
+    def test_switch_to_inactive_user_rejected(self):
+        # Токен получаем, пока аккаунт ещё активен (иначе сам логин уже
+        # откажет), деактивируем ПОСЛЕ — воспроизводит "аккаунт забанили,
+        # пока refresh уже лежал сохранённым на этом устройстве".
+        refresh_b = self._login("switcher_b")
+        self.user_b.is_active = False
+        self.user_b.save(update_fields=["is_active"])
+        resp = self.client.post("/api/auth/switch", {"refresh": refresh_b})
+        self.assertEqual(resp.status_code, 401)
+
+
 class QRLoginTests(APITestCase):
     """Вход по QR: ПК заводит запрос (без авторизации), телефон (уже
     залогиненный) сканирует и подтверждает кодом, ПК получает токены
