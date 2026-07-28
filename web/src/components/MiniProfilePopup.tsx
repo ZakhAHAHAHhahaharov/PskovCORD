@@ -5,7 +5,7 @@ import {
   useState,
   KeyboardEvent as ReactKeyboardEvent,
 } from 'react'
-import { UserPlus, MessageSquare, Smile } from 'lucide-react'
+import { UserPlus, UserCheck, Loader2, MessageSquare, Smile } from 'lucide-react'
 import { api } from '../api'
 import { useEscToClose } from '../modalStack'
 import Avatar from './Avatar'
@@ -47,13 +47,22 @@ export default function MiniProfilePopup({
    * теперь открывается и прямо из списка друзей, см. HomeSidebar). */
   isFriend: boolean
   onClose: () => void
-  onAddFriend: (userId: number) => void
+  /** Возвращает успех — попап сам показывает отклик на кнопке (см. addStatus). */
+  onAddFriend: (userId: number) => Promise<boolean>
   onSendMessage: (userId: number, content: string) => void
 }) {
   const ref = useRef<HTMLDivElement>(null)
   const [composing, setComposing] = useState(false)
   const [message, setMessage] = useState('')
+  const [addStatus, setAddStatus] = useState<'idle' | 'sending' | 'sent'>('idle')
   const { user } = target
+
+  const handleAddFriend = async () => {
+    if (addStatus !== 'idle') return
+    setAddStatus('sending')
+    const ok = await onAddFriend(user.id)
+    setAddStatus(ok ? 'sent' : 'idle')
+  }
   const isSelf = user.id === currentUserId
 
   // Баннер чужого профиля больше не приходит вместе с самим профилем: он
@@ -151,10 +160,24 @@ export default function MiniProfilePopup({
           ) : (
             <button
               type="button"
-              className="profile-popup-item mini-profile-action"
-              onClick={() => onAddFriend(user.id)}
+              className={`profile-popup-item mini-profile-action ${
+                addStatus === 'sent' ? 'mini-profile-action-sent' : ''
+              }`}
+              disabled={addStatus !== 'idle'}
+              onClick={handleAddFriend}
             >
-              <UserPlus size={15} /> Добавить в друзья
+              {addStatus === 'sending' ? (
+                <Loader2 size={15} className="spin" />
+              ) : addStatus === 'sent' ? (
+                <UserCheck size={15} />
+              ) : (
+                <UserPlus size={15} />
+              )}
+              {addStatus === 'sending'
+                ? 'Отправляем…'
+                : addStatus === 'sent'
+                  ? 'Заявка отправлена'
+                  : 'Добавить в друзья'}
             </button>
           )}
           {composing ? (

@@ -17,7 +17,6 @@ import ScreenShareButton from './ScreenShareButton'
 import { ProfilePopupUser } from './MiniProfilePopup'
 import { useSettings } from '../settings'
 import { useVoice } from '../voice'
-import { VoiceStatus } from './VoiceProvider'
 
 /** Один участник комнаты (голосовой канал сервера ИЛИ звонок в личке/группе)
  * — VoiceStage сам не знает, откуда взялся ростер (см. AppShell: для сервера
@@ -202,8 +201,8 @@ export default function VoiceStage({
   onRequestWatch,
   onOpenProfile,
   onParticipantContextMenu,
+  roomKind,
   isConnected,
-  voiceStatus,
   onJoin,
   onLeave,
 }: {
@@ -222,21 +221,24 @@ export default function VoiceStage({
   onConsumedPendingWatch: () => void
   onRequestWatch: (userId: number) => void
   onOpenProfile: (user: ProfilePopupUser, e: ReactMouseEvent) => void
-  /** Правый клик на участнике — контекстное меню (см. AppShell). Только для
-   * голосовых каналов сервера — для звонка в личке/группе AppShell этот
-   * проп просто не передаёт. */
-  onParticipantContextMenu?: (member: VoiceRosterMember, e: ReactMouseEvent) => void
+  /** Правый клик на участнике — контекстное меню (см. AppShell). Открывается
+   * и для сервера, и для звонка в личке/группе — какие пункты внутри
+   * доступны (голосование/демо — только сервер и полное подключение),
+   * решает сам AppShell по roomKind/voiceStatus. */
+  onParticipantContextMenu?: (
+    member: VoiceRosterMember,
+    e: ReactMouseEvent,
+    room: { kind: 'channel' | 'conversation'; id: number | string },
+  ) => void
+  /** Канал сервера или звонок в личке/группе — прокидывается в
+   * onParticipantContextMenu вместе с roomId, чтобы AppShell знал, какую
+   * комнату показывает это конкретное меню. */
+  roomKind: 'channel' | 'conversation'
   /** Подключены ли мы САМИ к этой конкретной комнате прямо сейчас (сравнение
    * с VoiceMesh делает AppShell — VoiceStage сам не знает глобальный voice-
    * стейт). false — канал просто выбран/открыт, но мы не в звонке: вместо
    * сетки участников показываем VoiceLanding с кнопкой "Присоединиться". */
   isConnected: boolean
-  /** Реальное состояние SFU-соединения (см. AppShell.voiceStatus) — в отличие
-   * от isConnected (мы просто в этой комнате) отражает, договорился ли уже
-   * WebRTC-транспорт. Голосование за мут / запрос демонстрации разрешены
-   * только при 'connected' — иначе можно словить состояние гонки в
-   * consume()/produce() ещё не устаканившегося соединения (см. SfuClient). */
-  voiceStatus: VoiceStatus
   onJoin: () => void
   onLeave: () => void
 }) {
@@ -470,8 +472,8 @@ export default function VoiceStage({
               onOpenProfile={onOpenProfile}
               onExpand={() => setExpanded({ userId: m.id, mode: 'participant' })}
               onContextMenu={
-                m.id !== selfUserId && onParticipantContextMenu && voiceStatus === 'connected'
-                  ? (e) => onParticipantContextMenu(m, e)
+                m.id !== selfUserId && onParticipantContextMenu
+                  ? (e) => onParticipantContextMenu(m, e, { kind: roomKind, id: roomId })
                   : undefined
               }
             />

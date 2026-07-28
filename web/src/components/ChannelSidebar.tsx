@@ -46,10 +46,15 @@ export default function ChannelSidebar({
   onWatchScreen: (member: Member) => void
   /** Шестерёнка у названия сервера — редактор сервера поверх всей страницы. */
   onOpenServerSettings: () => void
-  /** Правый клик на участнике голосового канала, В КОТОРОМ МЫ САМИ сейчас
-   * находимся (см. AppShell.contextMenuTarget) — на остальных каналах меню
-   * не открывается, там местная громкость/действия всё равно не применимы. */
-  onParticipantContextMenu?: (member: Member, e: ReactMouseEvent) => void
+  /** Правый клик на участнике голосового канала — открывается для ЛЮБОГО
+   * канала сервера, даже если мы сами сейчас не в голосе вообще (см.
+   * AppShell.contextMenuTarget) — AppShell сам решает, какие пункты внутри
+   * доступны, по тому, подключены ли мы именно к этому каналу. */
+  onParticipantContextMenu?: (
+    member: Member,
+    e: ReactMouseEvent,
+    room: { kind: 'channel'; id: number },
+  ) => void
   /** Левый клик на участнике голосового канала — открыть его мини-профиль
    * (см. MembersList.onOpenProfile — тот же попап, тот же коллбэк из AppShell). */
   onOpenParticipantProfile?: (member: Member, e: ReactMouseEvent) => void
@@ -165,11 +170,7 @@ export default function ChannelSidebar({
                   {inChannel.map((m) => {
                     const speaking = speakingUserIds.has(m.id)
                     const mic = micStateOf(m)
-                    const canOpenMenu =
-                      isMyVoiceChannel &&
-                      voiceStatus === 'connected' &&
-                      m.id !== user.id &&
-                      onParticipantContextMenu
+                    const canOpenMenu = m.id !== user.id && !!onParticipantContextMenu
                     return (
                       <button
                         key={m.id}
@@ -180,7 +181,7 @@ export default function ChannelSidebar({
                           canOpenMenu
                             ? (e) => {
                                 e.preventDefault()
-                                onParticipantContextMenu!(m, e)
+                                onParticipantContextMenu!(m, e, { kind: 'channel', id: c.id })
                               }
                             : undefined
                         }
