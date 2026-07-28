@@ -136,6 +136,12 @@ export default function AppShell() {
   dmMessagesRef.current = dmMessages
   const [dmReplyTarget, setDmReplyTarget] = useState<ChatMessageBase | null>(null)
   const [dmEditTarget, setDmEditTarget] = useState<ChatMessageBase | null>(null)
+  // Диалоги с непрочитанными сообщениями — клиентское состояние (бэкенд не
+  // хранит read-статус), сбрасывается при перезагрузке. Наполняется в
+  // gateway.on('dm_message_create') ниже, чистится при открытии диалога (см.
+  // handleSelectConversation) — используется для общего счётчика уведомлений
+  // на домашней пилюле рельсы (см. ServerRail.notificationCount).
+  const [unreadConversationIds, setUnreadConversationIds] = useState<Set<number>>(new Set())
   const [friends, setFriends] = useState<FriendsState>({ friends: [], incoming: [], outgoing: [] })
   const [showNewConversation, setShowNewConversation] = useState(false)
   const [knownPeople, setKnownPeople] = useState<KnownPerson[]>([])
@@ -471,6 +477,17 @@ export default function AppShell() {
           prev.some((m) => m.id === d.message.id) ? prev : [...prev, d.message],
         )
       }
+      // Непрочитанное — чужое сообщение в диалог, который прямо сейчас не
+      // открыт (домашний экран должен быть виден И это должен быть именно
+      // этот диалог — activeConversationId не сбрасывается при переходе на
+      // сервер, поэтому одной проверки id диалога недостаточно).
+      const isViewingThisConversation =
+        serverId == null && d.message.conversation === activeConversationId
+      if (d.message.author.id !== userRef.current?.id && !isViewingThisConversation) {
+        setUnreadConversationIds((prev) =>
+          prev.has(d.message.conversation) ? prev : new Set(prev).add(d.message.conversation),
+        )
+      }
       // Превью последнего сообщения в списке диалогов — обновляем всегда,
       // даже если сейчас открыт другой диалог.
       setConversations((prev) =>
@@ -705,21 +722,37 @@ export default function AppShell() {
   }, [])
 
   // --- контекстное меню участника голосового канала -----------------------
+  // Открывается для ЛЮБОГО голосового канала/звонка, даже если мы сами сейчас
+  // не подключены к нему вообще — какие пункты внутри доступны, решает уже
+  // сам рендер ParticipantContextMenu ниже (см. voiceActionsEnabled).
   const openParticipantContextMenu = useCallback(
-    (member: ParticipantContextMenuMember, e: ReactMouseEvent) => {
+    (
+      member: ParticipantContextMenuMember,
+      e: ReactMouseEvent,
+      room: { kind: 'channel' | 'conversation'; id: number | string },
+    ) => {
       e.preventDefault()
       e.stopPropagation()
-      setContextMenuTarget({ member, x: e.clientX, y: e.clientY })
+      setContextMenuTarget({ member, x: e.clientX, y: e.clientY, room })
     },
     [],
   )
 
-  // «Упомянуть» — переключаемся на текущий выбранный текстовый канал сервера
-  // (если main сейчас показывает какой-то другой текстовый канал) или на
-  // первый текстовый канал сервера, и подставляем "@Имя " в поле ввода.
+  // «Упомянуть» — для канала сервера переключаемся на текущий выбранный
+  // текстовый канал (или на первый текстовый) и подставляем "@Имя " в поле
+  // ввода; для звонка в личке/группе подставляем в поле ввода ЭТОГО диалога.
   const handleMention = useCallback(
-    (member: ParticipantContextMenuMember) => {
+    (
+      member: ParticipantContextMenuMember,
+      room: { kind: 'channel' | 'conversation'; id: number | string },
+    ) => {
       setContextMenuTarget(null)
+      if (room.kind === 'conversation') {
+        setServerId(null)
+        setActiveConversationId(room.id as number)
+        setMentionPrefill({ token: Date.now(), text: `@${member.username} ` })
+        return
+      }
       const target =
         currentChannel && currentChannel.kind === 'text'
           ? currentChannel
@@ -889,6 +922,12 @@ export default function AppShell() {
 
   const handleSelectConversation = useCallback((c: Conversation) => {
     setActiveConversationId(c.id)
+    setUnreadConversationIds((prev) => {
+      if (!prev.has(c.id)) return prev
+      const next = new Set(prev)
+      next.delete(c.id)
+      return next
+    })
   }, [])
 
   const handleCreateConversation = async (data: {
@@ -1040,13 +1079,17 @@ export default function AppShell() {
   }
 
   // "Добавить в друзья"/"Написать сообщение" из мини-профиля (клик по чужому
-  // аватару/нику где угодно — см. MiniProfilePopup).
-  const handleMiniProfileAddFriend = async (userId: number) => {
+  // аватару/нику где угодно — см. MiniProfilePopup). Возвращает успех, чтобы
+  // сам попап показал отклик на кнопке (галочка/«Отправлено») — раньше клик
+  // никак не подтверждался визуально.
+  const handleMiniProfileAddFriend = async (userId: number): Promise<boolean> => {
     try {
       await api.sendFriendRequest({ userId })
       setFriends(await api.friends())
+      return true
     } catch (e) {
       alert((e as Error).message)
+      return false
     }
   }
 
@@ -1194,6 +1237,7 @@ export default function AppShell() {
         onCreate={handleCreateServer}
         onDiscover={() => setShowDiscover(true)}
         onHome={handleOpenHome}
+        homeNotificationCount={friends.incoming.length + unreadConversationIds.size}
       />
 
       {serverId == null ? (
@@ -1269,12 +1313,13 @@ export default function AppShell() {
                     onConsumedPendingWatch={() => setDmPendingWatchUserId(null)}
                     onRequestWatch={handleDmRequestWatch}
                     onOpenProfile={openProfilePopup}
+                    onParticipantContextMenu={openParticipantContextMenu}
+                    roomKind="conversation"
                     // Этот VoiceStage рендерится только пока isInDmCall — то
                     // есть мы всегда уже подключены, VoiceLanding здесь не
                     // нужен (для звонка в личке/группе нет отдельного "canала"
                     // без входа, только сам звонок).
                     isConnected
-                    voiceStatus={voiceStatus}
                     onJoin={() => handleDmVoiceJoin(activeConversation.id)}
                     onLeave={handleLeaveVoice}
                   />
@@ -1304,6 +1349,7 @@ export default function AppShell() {
                 editTarget={dmEditTarget}
                 onSaveEdit={handleSaveDmEdit}
                 onCancelEdit={() => setDmEditTarget(null)}
+                prefill={mentionPrefill}
               />
             </>
           ) : (
@@ -1323,8 +1369,8 @@ export default function AppShell() {
             onRequestWatch={(userId) => handleWatchScreen(userId, currentChannel.id)}
             onOpenProfile={openProfilePopup}
             onParticipantContextMenu={openParticipantContextMenu}
+            roomKind="channel"
             isConnected={voice?.room.kind === 'channel' && voice.room.id === currentChannel.id}
-            voiceStatus={voiceStatus}
             onJoin={() => handleJoinVoice(currentChannel)}
             onLeave={handleLeaveVoice}
           />
@@ -1426,14 +1472,28 @@ export default function AppShell() {
       {contextMenuTarget && (
         <ParticipantContextMenu
           target={contextMenuTarget}
-          canManageMembers={!!currentServer?.my_permissions?.manage_members}
+          canManageMembers={
+            contextMenuTarget.room.kind === 'channel' &&
+            !!currentServer?.my_permissions?.manage_members
+          }
           voteDisabled={
             activeMuteVoteChannelId != null &&
             voice?.room.kind === 'channel' &&
             voice.room.id === activeMuteVoteChannelId
           }
+          // Голосование за мут / запрос демонстрации / блокировка зрителя
+          // демонстрации требуют, чтобы мы сами были ПОЛНОСТЬЮ подключены
+          // именно к комнате member'а из target — само меню открывается и
+          // без этого (см. ChannelSidebar/VoiceStage), просто эти пункты
+          // будут задизейблены.
+          voiceActionsEnabled={
+            voiceStatus === 'connected' &&
+            !!voice &&
+            voice.room.kind === contextMenuTarget.room.kind &&
+            voice.room.id === contextMenuTarget.room.id
+          }
           onClose={() => setContextMenuTarget(null)}
-          onMention={handleMention}
+          onMention={(member) => handleMention(member, contextMenuTarget.room)}
           onDisconnect={handleDisconnectUser}
           onStartMuteVote={handleStartMuteVote}
           onRequestScreenShare={handleRequestScreenShare}

@@ -14,19 +14,26 @@ export interface ParticipantContextMenuTarget {
   /** Координаты правого клика — меню всплывает рядом с ним (см. MiniProfilePopup). */
   x: number
   y: number
+  /** Голосовая комната, в которой находится member — канал сервера или звонок
+   * в личке/группе. Голосование за мут и запрос демонстрации бэкенд
+   * поддерживает только для серверных каналов (см. chat/consumers.py
+   * _own_voice_channel_server/_handle_voice_request_screen_share), поэтому
+   * для звонков в личке/группе эти пункты вообще не показываются. */
+  room: { kind: 'channel' | 'conversation'; id: number | string }
 }
 
 /**
- * Контекстное меню участника голосового канала (правый клик на строке в
- * ChannelSidebar или на тайле в VoiceStage — см. AppShell.contextMenuTarget).
- * Только для голосовых каналов СЕРВЕРА — звонки в личке/группе этого меню не
- * получают (см. план). Закрывается ТОЛЬКО по клику вне себя, намеренно без
- * Escape — так и задумано в задаче.
+ * Контекстное меню участника голосового канала — правый клик на строке в
+ * ChannelSidebar (работает даже если сам не подключён к этому каналу) или на
+ * тайле в VoiceStage (сервер ИЛИ звонок в личке/группе — см.
+ * AppShell.contextMenuTarget). Закрывается ТОЛЬКО по клику вне себя,
+ * намеренно без Escape — так и задумано в задаче.
  */
 export default function ParticipantContextMenu({
   target,
   canManageMembers,
   voteDisabled,
+  voiceActionsEnabled,
   onClose,
   onMention,
   onDisconnect,
@@ -38,6 +45,11 @@ export default function ParticipantContextMenu({
   canManageMembers: boolean
   /** В этом канале уже идёт какое-то голосование — новое начинать нельзя. */
   voteDisabled: boolean
+  /** Мы сами сейчас ПОЛНОСТЬЮ подключены именно к этой голосовой комнате —
+   * без этого голосование за мут / запрос демонстрации / блокировка
+   * зрителя демонстрации технически не сработают (см. AppShell). Меню
+   * можно открыть и без этого (см. target.room), но сами действия — нет. */
+  voiceActionsEnabled: boolean
   onClose: () => void
   onMention: (member: ParticipantContextMenuMember) => void
   onDisconnect: (userId: number) => void
@@ -48,8 +60,12 @@ export default function ParticipantContextMenu({
   const { getUserVolume, setUserVolume } = useUserVolume()
   const { blockedScreenViewerIds, blockScreenViewer } = useVoice()
   const { member } = target
+  const isServerChannel = target.room.kind === 'channel'
   const volume = getUserVolume(member.id)
   const isBlocked = blockedScreenViewerIds.has(member.id)
+  const disabledTitle = !voiceActionsEnabled
+    ? 'Нужно быть полностью подключённым к этому голосовому каналу'
+    : undefined
 
   useLayoutEffect(() => {
     const el = ref.current
@@ -115,31 +131,43 @@ export default function ParticipantContextMenu({
         <button
           type="button"
           className="profile-popup-item"
+          disabled={!voiceActionsEnabled}
+          title={disabledTitle}
           onClick={() => blockScreenViewer(member.id, !isBlocked)}
         >
           {isBlocked ? <Eye size={15} /> : <EyeOff size={15} />}
           {isBlocked ? 'Разрешить смотреть демонстрацию' : 'Запретить смотреть демонстрацию'}
         </button>
 
-        {!member.sharing_screen && (
+        {isServerChannel && !member.sharing_screen && (
           <button
             type="button"
             className="profile-popup-item"
+            disabled={!voiceActionsEnabled}
+            title={disabledTitle}
             onClick={() => onRequestScreenShare(member.id)}
           >
             <BellRing size={15} /> Запросить демонстрацию
           </button>
         )}
 
-        <button
-          type="button"
-          className="profile-popup-item"
-          disabled={voteDisabled}
-          title={voteDisabled ? 'В этом канале уже идёт голосование' : undefined}
-          onClick={() => onStartMuteVote(member.id)}
-        >
-          <Gavel size={15} /> Голосование за мут
-        </button>
+        {isServerChannel && (
+          <button
+            type="button"
+            className="profile-popup-item"
+            disabled={voteDisabled || !voiceActionsEnabled}
+            title={
+              !voiceActionsEnabled
+                ? disabledTitle
+                : voteDisabled
+                  ? 'В этом канале уже идёт голосование'
+                  : undefined
+            }
+            onClick={() => onStartMuteVote(member.id)}
+          >
+            <Gavel size={15} /> Голосование за мут
+          </button>
+        )}
 
         {canManageMembers && (
           <>

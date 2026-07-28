@@ -515,6 +515,7 @@ input {
 }
 
 .rail-pill {
+  position: relative;
   width: 48px;
   height: 48px;
   border-radius: 24px;
@@ -527,6 +528,25 @@ input {
   justify-content: center;
   transition: border-radius 0.15s, background 0.15s;
   flex-shrink: 0;
+}
+
+.rail-pill-badge {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 4px;
+  border-radius: 9px;
+  background: var(--red);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 3px solid var(--rail-bg);
+  box-sizing: content-box;
 }
 
 .rail-pill:hover {
@@ -992,10 +1012,21 @@ input {
 
 .mini-profile-action {
   background: var(--channel-hover);
+  transition: background 0.15s, color 0.15s;
 }
 
 .mini-profile-action:hover {
   background: var(--channel-active);
+}
+
+.mini-profile-action:disabled {
+  cursor: default;
+  opacity: 0.85;
+}
+
+.mini-profile-action-sent {
+  background: color-mix(in srgb, var(--green) 20%, var(--channel-hover));
+  color: var(--green);
 }
 
 .mini-profile-compose {

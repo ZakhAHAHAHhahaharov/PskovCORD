@@ -26,6 +26,7 @@ export default function ServerRail({
   onCreate,
   onDiscover,
   onHome,
+  homeNotificationCount,
 }: {
   servers: Server[]
   activeId: number | null
@@ -34,6 +35,9 @@ export default function ServerRail({
   onDiscover: () => void
   /** Клик по «домику» — личные сообщения/друзья вместо сервера. */
   onHome: () => void
+  /** Входящие заявки в друзья + диалоги с непрочитанными — общий счётчик
+   * поверх домашней пилюли (см. AppShell). */
+  homeNotificationCount: number
 }) {
   const [hint, setHint] = useState<RailHint | null>(null)
 
@@ -57,6 +61,11 @@ export default function ServerRail({
         onClick={onHome}
       >
         {APP_NAME.charAt(0)}
+        {homeNotificationCount > 0 && (
+          <span className="rail-pill-badge">
+            {homeNotificationCount > 99 ? '99+' : homeNotificationCount}
+          </span>
+        )}
       </button>
       <div className="rail-divider" />
 
