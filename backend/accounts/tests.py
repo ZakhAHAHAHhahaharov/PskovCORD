@@ -517,6 +517,10 @@ class QRLoginTests(APITestCase):
         self.assertEqual(status.data["status"], "confirmed")
         self.assertIn("access", status.data)
         self.assertEqual(status.data["user"]["username"], "qrphone")
+        # ПК должен получить и Django-сессию (тот же приём, что и в обычном
+        # логине/регистрации, см. LoginView) — иначе /adminpskordpro/ на этом
+        # браузере молча остался бы под прежним пользователем.
+        self.assertEqual(int(self.client.session["_auth_user_id"]), self.phone_user.pk)
 
         # Выданный access реально работает.
         self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {status.data['access']}")
