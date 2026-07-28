@@ -10,6 +10,7 @@
     "preview": "vite preview --host"
   },
   "dependencies": {
+    "jsqr": "^1.4.0",
     "lucide-react": "^1.26.0",
     "mediasoup-client": "^3.7.18",
     "qrcode": "^1.5.4",

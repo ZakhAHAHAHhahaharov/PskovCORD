@@ -3,17 +3,10 @@ import { AuthProvider, useAuth } from './auth'
 import { GatewayProvider } from './gateway'
 import { SettingsProvider } from './settings'
 import { handleGlobalEscape } from './modalStack'
+import { parseQrLoginToken } from './qrToken'
 import LoginScreen from './components/LoginScreen'
 import AppShell from './components/AppShell'
 import QrLoginConfirm from './components/QrLoginConfirm'
-
-// Нет react-router — вся "маршрутизация" в приложении это этот один путь
-// (сканируют камерой, а не переходят кликом внутри SPA), точечный разбор
-// pathname проще, чем тащить целый роутер ради одного экрана.
-function parseQrLoginToken(): string | null {
-  const m = window.location.pathname.match(/^\/qr-login\/([^/]+)\/?$/)
-  return m ? decodeURIComponent(m[1]) : null
-}
 
 function Inner() {
   const { user, loading } = useAuth()
