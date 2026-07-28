@@ -36,6 +36,43 @@ export const STATUS_LABELS: Record<UserStatus, string> = {
 
 const ROSTER_PREVIEW_LIMIT = 5
 
+// Закрытие с небольшой задержкой, а не сразу по mouseleave: между строкой-
+// триггером и флаутом есть визуальный зазор (см. .status-flyout — left:
+// calc(100% + 8px)), в котором физически ничего не отрисовано, и курсор,
+// идущий по прямой к флауту, там "выходит" из-под триггера раньше, чем
+// доходит до самого флаута — без задержки он успевал закрыться в процессе.
+const FLYOUT_CLOSE_DELAY_MS = 200
+
+function useHoverFlyout() {
+  const [open, setOpen] = useState(false)
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const clearTimer = () => {
+    if (timer.current) {
+      clearTimeout(timer.current)
+      timer.current = null
+    }
+  }
+
+  useEffect(() => clearTimer, [])
+
+  return {
+    open,
+    onMouseEnter: () => {
+      clearTimer()
+      setOpen(true)
+    },
+    onMouseLeave: () => {
+      clearTimer()
+      timer.current = setTimeout(() => setOpen(false), FLYOUT_CLOSE_DELAY_MS)
+    },
+    close: () => {
+      clearTimer()
+      setOpen(false)
+    },
+  }
+}
+
 /** Клик по своему аватару/имени в панели — открывает карточку профиля из 4
  * блоков: мини-профиль, (опционально) текущий голосовой звонок, редактирование
  * профиля/статуса, переключение аккаунтов. */
@@ -55,8 +92,8 @@ export default function StatusMenu({
   const { user, updateLocalStatus, knownAccounts, switchAccount } = useAuth()
   const gateway = useGateway()
   const [open, setOpen] = useState(false)
-  const [statusFlyoutOpen, setStatusFlyoutOpen] = useState(false)
-  const [accountFlyoutOpen, setAccountFlyoutOpen] = useState(false)
+  const statusFlyout = useHoverFlyout()
+  const accountFlyout = useHoverFlyout()
   const [showAddAccount, setShowAddAccount] = useState(false)
   const [switchingId, setSwitchingId] = useState<number | null>(null)
   const [switchError, setSwitchError] = useState('')
@@ -69,12 +106,17 @@ export default function StatusMenu({
     const onClick = (e: MouseEvent) => {
       if (ref.current && !ref.current.contains(e.target as Node)) {
         setOpen(false)
-        setStatusFlyoutOpen(false)
-        setAccountFlyoutOpen(false)
+        statusFlyout.close()
+        accountFlyout.close()
       }
     }
     document.addEventListener('mousedown', onClick)
     return () => document.removeEventListener('mousedown', onClick)
+    // statusFlyout/accountFlyout — новый объект на каждый рендер, но их
+    // .close() всегда дёргает один и тот же стабильный setState конкретного
+    // useHoverFlyout(), так что включать их в deps незачем — только заставило
+    // бы переподписывать обработчик на каждый рендер.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open])
 
   useEffect(() => () => {
@@ -86,7 +128,7 @@ export default function StatusMenu({
   const chooseStatus = (status: UserStatus) => {
     gateway.setStatus(status)
     updateLocalStatus(status)
-    setStatusFlyoutOpen(false)
+    statusFlyout.close()
   }
 
   const handleSwitchAccount = async (accountId: number) => {
@@ -203,8 +245,8 @@ export default function StatusMenu({
 
             <div
               className="status-row-wrap"
-              onMouseEnter={() => setStatusFlyoutOpen(true)}
-              onMouseLeave={() => setStatusFlyoutOpen(false)}
+              onMouseEnter={statusFlyout.onMouseEnter}
+              onMouseLeave={statusFlyout.onMouseLeave}
             >
               <button type="button" className="profile-popup-item status-row">
                 <span className={`status-menu-dot ${user.status}`} />
@@ -212,7 +254,7 @@ export default function StatusMenu({
                 <ChevronRight size={15} className="status-row-chevron" />
               </button>
 
-              {statusFlyoutOpen && (
+              {statusFlyout.open && (
                 <div className="status-flyout">
                   {OPTIONS.map((o) => (
                     <button
@@ -239,15 +281,15 @@ export default function StatusMenu({
           <div className="profile-popup-menu">
             <div
               className="status-row-wrap"
-              onMouseEnter={() => setAccountFlyoutOpen(true)}
-              onMouseLeave={() => setAccountFlyoutOpen(false)}
+              onMouseEnter={accountFlyout.onMouseEnter}
+              onMouseLeave={accountFlyout.onMouseLeave}
             >
               <button type="button" className="profile-popup-item status-row">
                 <Users size={15} /> Переключение между учётными записями
                 <ChevronRight size={15} className="status-row-chevron" />
               </button>
 
-              {accountFlyoutOpen && (
+              {accountFlyout.open && (
                 <div className="status-flyout account-flyout">
                   {[
                     { ...user, isActive: true },
