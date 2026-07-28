@@ -266,6 +266,162 @@ input {
   text-decoration: underline;
 }
 
+/* ============ QR LOGIN ============ */
+.login-layout {
+  display: flex;
+  align-items: stretch;
+  gap: 16px;
+}
+
+.qr-login-panel {
+  width: 260px;
+  max-width: 92vw;
+  background: var(--sidebar-bg);
+  border-radius: 8px;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+}
+
+/* Если панель с QR не помещается рядом с формой — просто обрезаем её, а не
+   переносим под форму и не сжимаем до нечитаемого состояния. */
+@media (max-width: 860px) {
+  .qr-login-panel {
+    display: none;
+  }
+}
+
+.qr-login-title {
+  margin: 0 0 8px;
+  font-size: 16px;
+  font-weight: 700;
+  color: #fff;
+}
+
+.qr-login-subtitle {
+  margin: 0 0 16px;
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--text-muted);
+}
+
+.qr-login-code-box {
+  position: relative;
+  width: 208px;
+  height: 208px;
+  border-radius: 6px;
+  background: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.qr-login-image {
+  width: 208px;
+  height: 208px;
+  border-radius: 6px;
+  display: block;
+}
+
+.qr-login-scanned-overlay,
+.qr-login-expired {
+  position: absolute;
+  inset: 0;
+  border-radius: 6px;
+  background: rgba(18, 19, 24, 0.92);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 12px;
+  color: #fff;
+  font-size: 13px;
+  text-align: center;
+}
+
+.qr-login-pin {
+  font-size: 30px;
+  font-weight: 800;
+  letter-spacing: 4px;
+  color: #fff;
+}
+
+.qr-confirm-card {
+  align-items: stretch;
+}
+
+.qr-confirm-error {
+  margin-top: 12px;
+}
+
+.qr-confirm-device {
+  margin-top: 16px;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px;
+  border-radius: 6px;
+  background: var(--input-bg);
+  border: 1px solid var(--input-border);
+  color: var(--text-normal);
+}
+
+.qr-confirm-device-title {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.qr-confirm-device-ip {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.qr-confirm-question {
+  margin-top: 16px;
+  margin-bottom: 12px;
+  text-align: center;
+}
+
+.qr-confirm-codes {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 10px;
+}
+
+.qr-confirm-code-btn {
+  padding: 16px;
+  border-radius: 6px;
+  background: var(--input-bg);
+  border: 1px solid var(--input-border);
+  color: var(--text-normal);
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.qr-confirm-code-btn:hover:not(:disabled) {
+  background: var(--blurple);
+  border-color: var(--blurple);
+  color: #fff;
+}
+
+.qr-confirm-code-btn:disabled {
+  opacity: 0.6;
+}
+
+.qr-confirm-done {
+  margin-top: 16px;
+  text-align: center;
+}
+
 /* ============ APP LAYOUT ============ */
 .app {
   height: 100%;

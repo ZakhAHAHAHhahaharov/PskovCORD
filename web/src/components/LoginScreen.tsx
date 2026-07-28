@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useAuth } from '../auth'
+import QrLoginPanel from './QrLoginPanel'
 
 const APP_NAME: string = import.meta.env.VITE_APP_NAME || 'PskovCord'
 
@@ -32,64 +33,68 @@ export default function LoginScreen() {
 
   return (
     <div className="login-bg">
-      <form className="login-card" onSubmit={submit}>
-        <h1 className="login-logo">{APP_NAME}</h1>
-        <p className="login-sub">
-          {mode === 'login' ? 'С возвращением!' : 'Создай аккаунт'}
-        </p>
+      <div className="login-layout">
+        <form className="login-card" onSubmit={submit}>
+          <h1 className="login-logo">{APP_NAME}</h1>
+          <p className="login-sub">
+            {mode === 'login' ? 'С возвращением!' : 'Создай аккаунт'}
+          </p>
 
-        <label className="field-label">Имя пользователя</label>
-        <input
-          className="field-input"
-          value={username}
-          onChange={(e) => setUsername(e.target.value)}
-          autoFocus
-          required
-        />
+          <label className="field-label">Имя пользователя</label>
+          <input
+            className="field-input"
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            autoFocus
+            required
+          />
 
-        <label className="field-label">Пароль</label>
-        <input
-          className="field-input"
-          type="password"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          required
-        />
+          <label className="field-label">Пароль</label>
+          <input
+            className="field-input"
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            required
+          />
 
-        {mode === 'register' && (
-          <>
-            <label className="field-label">Повтори пароль</label>
-            <input
-              className="field-input"
-              type="password"
-              value={confirmPassword}
-              onChange={(e) => setConfirmPassword(e.target.value)}
-              required
-            />
-          </>
-        )}
+          {mode === 'register' && (
+            <>
+              <label className="field-label">Повтори пароль</label>
+              <input
+                className="field-input"
+                type="password"
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+                required
+              />
+            </>
+          )}
 
-        {error && <div className="login-error">{error}</div>}
+          {error && <div className="login-error">{error}</div>}
 
-        <button className="btn-primary" type="submit" disabled={busy}>
-          {busy ? '…' : mode === 'login' ? 'Войти' : 'Зарегистрироваться'}
-        </button>
-
-        <div className="login-switch">
-          {mode === 'login' ? 'Нужен аккаунт? ' : 'Уже есть аккаунт? '}
-          <button
-            type="button"
-            className="link"
-            onClick={() => {
-              setMode(mode === 'login' ? 'register' : 'login')
-              setConfirmPassword('')
-              setError(null)
-            }}
-          >
-            {mode === 'login' ? 'Зарегистрироваться' : 'Войти'}
+          <button className="btn-primary" type="submit" disabled={busy}>
+            {busy ? '…' : mode === 'login' ? 'Войти' : 'Зарегистрироваться'}
           </button>
-        </div>
-      </form>
+
+          <div className="login-switch">
+            {mode === 'login' ? 'Нужен аккаунт? ' : 'Уже есть аккаунт? '}
+            <button
+              type="button"
+              className="link"
+              onClick={() => {
+                setMode(mode === 'login' ? 'register' : 'login')
+                setConfirmPassword('')
+                setError(null)
+              }}
+            >
+              {mode === 'login' ? 'Зарегистрироваться' : 'Войти'}
+            </button>
+          </div>
+        </form>
+
+        <QrLoginPanel />
+      </div>
     </div>
   )
 }

@@ -14,6 +14,10 @@ interface AuthCtx {
   loading: boolean
   login: (username: string, password: string) => Promise<void>
   register: (username: string, password: string) => Promise<void>
+  /** Завершить вход уже готовой парой токенов — тот же финальный шаг, что и
+   * у login()/register() (setTokens + подтянуть /api/auth/me), но токены
+   * приходят не с пароля, а с подтверждённого QR-входа (см. LoginScreen). */
+  loginWithTokens: (access: string, refresh: string) => Promise<void>
   logout: () => void
   /** Оптимистичное обновление своего статуса в локальном состоянии (сама
    * отправка/персист — через gateway.setStatus). */
@@ -73,6 +77,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     saveCachedMe(fresh)
   }
 
+  const loginWithTokens = async (access: string, refresh: string) => {
+    setTokens(access, refresh)
+    const fresh = await api.me()
+    setUser(fresh)
+    saveCachedMe(fresh)
+  }
+
   const register = async (username: string, password: string) => {
     const data = await api.register(username, password)
     setTokens(data.access, data.refresh)
@@ -105,7 +116,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   return (
     <Ctx.Provider
-      value={{ user, loading, login, register, logout, updateLocalStatus, updateLocalUser }}
+      value={{
+        user, loading, login, register, loginWithTokens, logout,
+        updateLocalStatus, updateLocalUser,
+      }}
     >
       {children}
     </Ctx.Provider>

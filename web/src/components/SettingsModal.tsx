@@ -18,6 +18,7 @@ import {
 import { useSettings, DEFAULT_SETTINGS, ThemeChoice } from '../settings'
 import { useAuth } from '../auth'
 import { useEscToClose } from '../modalStack'
+import { describeUserAgent } from '../deviceInfo'
 import { api, Session } from '../api'
 
 const APP_NAME: string = import.meta.env.VITE_APP_NAME || 'PskovCord'
@@ -476,35 +477,6 @@ function TwoFactorRow() {
       </button>
     </div>
   )
-}
-
-/** Грубый парсинг User-Agent для читаемой строки в списке сеансов — без
- * зависимостей, ровно те платформы/браузеры, что реально встретятся. */
-function describeUserAgent(ua: string): string {
-  if (!ua) return 'Неизвестное устройство'
-  const os = /Windows/.test(ua)
-    ? 'Windows'
-    : /Mac OS X/.test(ua)
-      ? 'macOS'
-      : /Android/.test(ua)
-        ? 'Android'
-        : /iPhone|iPad|iPod/.test(ua)
-          ? 'iOS'
-          : /Linux/.test(ua)
-            ? 'Linux'
-            : 'неизвестная ОС'
-  const browser = /Edg\//.test(ua)
-    ? 'Edge'
-    : /OPR\/|Opera/.test(ua)
-      ? 'Opera'
-      : /Chrome\//.test(ua)
-        ? 'Chrome'
-        : /Firefox\//.test(ua)
-          ? 'Firefox'
-          : /Safari\//.test(ua)
-            ? 'Safari'
-            : 'браузер'
-  return `${browser} · ${os}`
 }
 
 function formatSessionDate(iso: string): string {
