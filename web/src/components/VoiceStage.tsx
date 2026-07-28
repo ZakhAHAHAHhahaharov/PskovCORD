@@ -10,6 +10,7 @@ import {
   Video,
   PhoneOff,
   Users,
+  PictureInPicture2,
 } from 'lucide-react'
 import Avatar from './Avatar'
 import MicButton from './MicButton'
@@ -25,6 +26,10 @@ const GRID_GAP = 8
  * большими на широком мониторе один собеседник смотрелся бы нелепо. */
 const MIN_TILE_WIDTH = 220
 const MAX_TILE_WIDTH = 560
+
+/** Ширина миниатюры в ленте под развёрнутой демонстрацией; высота из неё же
+ * по 16:9 — с ней должна совпадать высота .voice-stage-filmstrip в CSS. */
+const FILMSTRIP_TILE_WIDTH = 160
 
 /**
  * Сколько колонок и какой ширины должен быть каждый 16:9-тайл, чтобы:
@@ -78,15 +83,27 @@ export interface VoiceRosterMember {
 
 /** Живой `<video>`, привязанный к MediaStream по ref — не пересоздаётся при
  * смене раскладки (grid ⇄ развёрнуто), поток не прерывается. */
-function StreamVideo({ stream, muted }: { stream: MediaStream; muted: boolean }) {
-  const ref = useRef<HTMLVideoElement>(null)
+function StreamVideo({
+  stream,
+  muted,
+  videoRef,
+}: {
+  stream: MediaStream
+  muted: boolean
+  /** Наружу — только чтобы развёрнутая демонстрация могла отдать этот самый
+   * элемент в Picture-in-Picture (см. handleTogglePip). Внутренняя привязка
+   * потока продолжает работать через тот же ref. */
+  videoRef?: React.RefObject<HTMLVideoElement>
+}) {
+  const localRef = useRef<HTMLVideoElement>(null)
+  const ref = videoRef ?? localRef
   const { outputVolume } = useSettings()
   useEffect(() => {
     if (ref.current) ref.current.srcObject = stream
-  }, [stream])
+  }, [ref, stream])
   useEffect(() => {
     if (ref.current) ref.current.volume = outputVolume
-  }, [outputVolume])
+  }, [ref, outputVolume])
   return <video ref={ref} autoPlay playsInline muted={muted} />
 }
 
@@ -191,7 +208,10 @@ function ScreenPreviewTile({
   onStopWatching: () => void
 }) {
   return (
-    <div className="screen-preview-tile" onClick={stream ? onExpand : undefined}>
+    // Поток уже смотрим — клик разворачивает; ещё нет — начинает просмотр
+    // (в ленте миниатюр под развёрнутой демкой кнопка «Смотреть демку» не
+    // помещается и скрыта, так что клик по тайлу — единственный способ).
+    <div className="screen-preview-tile" onClick={stream ? onExpand : onWatch}>
       {stream ? (
         <StreamVideo stream={stream} muted={own || deafened} />
       ) : (
@@ -344,6 +364,32 @@ export default function VoiceStage({
     }
   }
 
+  // Лента миниатюр под развёрнутой демонстрацией (все участники + все другие
+  // демки) — по умолчанию скрыта, разворачивается кнопкой «Участники»,
+  // сама демка при этом ужимается по высоте (см. .with-filmstrip в CSS).
+  const [filmstripOpen, setFilmstripOpen] = useState(false)
+  // Свернули развёрнутый тайл — лента больше не к чему прилагается.
+  useEffect(() => {
+    if (expanded == null) setFilmstripOpen(false)
+  }, [expanded])
+
+  // Picture-in-Picture — это и есть «отдельное окно» для видео: плавающее
+  // системное окно поверх остальных, переживает уход на другую вкладку.
+  // Собственный popup тут не годится — MediaStream в другое окно так просто
+  // не передать.
+  const pipVideoRef = useRef<HTMLVideoElement>(null)
+  const pipSupported =
+    typeof document !== 'undefined' && document.pictureInPictureEnabled === true
+  const handleTogglePip = () => {
+    const video = pipVideoRef.current
+    if (!video) return
+    if (document.pictureInPictureElement) {
+      void document.exitPictureInPicture().catch(() => {})
+    } else {
+      void video.requestPictureInPicture().catch(() => {})
+    }
+  }
+
   // Плавающая панель мут/камера/демка/сброс — как в полноэкранном
   // видеоплеере: скрыта, пока не двинуть мышью над экраном звонка, и снова
   // прячется (вместе с курсором — см. .voice-stage.controls-hidden), если
@@ -440,6 +486,60 @@ export default function VoiceStage({
 
   const expandedMember = expanded ? roster.find((m) => m.id === expanded.userId) ?? null : null
 
+  /** Все тайлы комнаты: участники, своя демка, чужие демки. Один и тот же
+   * набор рисуется и в обычной сетке, и в ленте миниатюр под развёрнутой
+   * демонстрацией — размер задаётся снаружи через --tile-w, поэтому
+   * компоненты переиспользуются как есть. */
+  const buildTiles = () => [
+    ...roster.map((m) => (
+      <ParticipantTile
+        key={`p-${m.id}`}
+        member={m}
+        speaking={speakingUserIds.has(m.id)}
+        muted={m.id === selfUserId ? selfMuted : m.muted}
+        deafened={m.id === selfUserId ? deafened : m.deafened}
+        onOpenProfile={onOpenProfile}
+        onExpand={() => setExpanded({ userId: m.id, mode: 'participant' })}
+        onContextMenu={
+          m.id !== selfUserId && onParticipantContextMenu
+            ? (e) => onParticipantContextMenu(m, e, { kind: roomKind, id: roomId })
+            : undefined
+        }
+      />
+    )),
+    ...(isSharingScreen
+      ? [
+          <ScreenPreviewTile
+            key="s-own"
+            username="Вы"
+            stream={ownScreenStream}
+            own
+            deafened={deafened}
+            onWatch={() => {}}
+            onExpand={() => setExpanded({ userId: selfUserId, mode: 'screen' })}
+            onStopWatching={() => {}}
+          />,
+        ]
+      : []),
+    ...sharingOthers.map((m) => {
+      const stream = screenShares.get(m.id) ?? null
+      return (
+        <ScreenPreviewTile
+          key={`s-${m.id}`}
+          username={m.username}
+          stream={stream}
+          own={false}
+          deafened={deafened}
+          onWatch={() => onRequestWatch(m.id)}
+          onExpand={() => {
+            if (stream) setExpanded({ userId: m.id, mode: 'screen' })
+          }}
+          onStopWatching={() => unwatchScreen(m.id)}
+        />
+      )
+    }),
+  ]
+
   if (!isConnected) {
     return (
       <div className="voice-stage voice-stage-landing">
@@ -469,36 +569,7 @@ export default function VoiceStage({
       </header>
 
       {expanded != null ? (
-        <div className="voice-stage-expanded">
-          <div className="voice-stage-expanded-bar">
-            <span className="screen-tile-label">
-              {expanded.mode === 'screen' ? (
-                <>
-                  <Monitor size={13} />{' '}
-                  {expanded.userId === selfUserId ? 'Ваша демонстрация' : `Демонстрация — ${nameOf(expanded.userId)}`}
-                </>
-              ) : (
-                nameOf(expanded.userId)
-              )}
-            </span>
-            <div className="voice-stage-expanded-actions">
-              {expanded.mode === 'screen' && expanded.userId !== selfUserId && (
-                <button
-                  className="icon-btn"
-                  title="Перестать смотреть"
-                  onClick={() => {
-                    unwatchScreen(expanded.userId)
-                    setExpanded(null)
-                  }}
-                >
-                  <X size={16} />
-                </button>
-              )}
-              <button className="icon-btn" title="Свернуть" onClick={() => setExpanded(null)}>
-                <Minimize2 size={16} />
-              </button>
-            </div>
-          </div>
+        <div className={`voice-stage-expanded ${filmstripOpen ? 'with-filmstrip' : ''}`}>
           <div
             className="voice-stage-expanded-video"
             title="Свернуть"
@@ -506,7 +577,11 @@ export default function VoiceStage({
           >
             {expanded.mode === 'screen' ? (
               expandedStream ? (
-                <StreamVideo stream={expandedStream} muted={expanded.userId === selfUserId || deafened} />
+                <StreamVideo
+                  stream={expandedStream}
+                  muted={expanded.userId === selfUserId || deafened}
+                  videoRef={pipVideoRef}
+                />
               ) : (
                 <div className="screen-preview-placeholder">
                   <Monitor size={40} />
@@ -522,67 +597,91 @@ export default function VoiceStage({
                   size={200}
                   speaking={speakingUserIds.has(expanded.userId)}
                 />
-                <span className="participant-expanded-name">{nameOf(expanded.userId)}</span>
               </div>
             )}
+
+            {/* Подпись и кнопки — в левом нижнем углу, поверх видео (как и у
+                тайлов в сетке); отдельной «шапки» сверху больше нет.
+                stopPropagation — иначе клик по кнопке свернул бы весь тайл. */}
+            <div
+              className="voice-stage-expanded-overlay"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <span className="screen-tile-label">
+                {expanded.mode === 'screen' ? (
+                  <>
+                    <Monitor size={13} />{' '}
+                    {expanded.userId === selfUserId
+                      ? 'Ваша демонстрация'
+                      : `Демонстрация — ${nameOf(expanded.userId)}`}
+                  </>
+                ) : (
+                  nameOf(expanded.userId)
+                )}
+              </span>
+              <div className="voice-stage-expanded-actions">
+                {expanded.mode === 'screen' && (
+                  <button
+                    className={`icon-btn ${filmstripOpen ? 'active' : ''}`}
+                    title={filmstripOpen ? 'Скрыть участников' : 'Показать участников'}
+                    onClick={() => setFilmstripOpen((v) => !v)}
+                  >
+                    <Users size={16} />
+                  </button>
+                )}
+                {expanded.mode === 'screen' && pipSupported && expandedStream && (
+                  <button
+                    className="icon-btn"
+                    title="Открыть в отдельном окне"
+                    onClick={handleTogglePip}
+                  >
+                    <PictureInPicture2 size={16} />
+                  </button>
+                )}
+                <button
+                  className="icon-btn"
+                  title={isFullscreen ? 'Выйти из полноэкранного режима' : 'На весь экран'}
+                  onClick={toggleFullscreen}
+                >
+                  {isFullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+                </button>
+                {expanded.mode === 'screen' && expanded.userId !== selfUserId && (
+                  <button
+                    className="icon-btn"
+                    title="Перестать смотреть"
+                    onClick={() => {
+                      unwatchScreen(expanded.userId)
+                      setExpanded(null)
+                    }}
+                  >
+                    <X size={16} />
+                  </button>
+                )}
+              </div>
+            </div>
           </div>
+
+          {/* Лента миниатюр под демонстрацией — те же тайлы, что и в сетке,
+              просто мельче (--tile-w). Рендерится всегда, а не только при
+              filmstripOpen: чтобы её появление можно было анимировать
+              высотой, содержимое должно уже существовать в DOM. */}
+          {expanded.mode === 'screen' && (
+            <div
+              className="voice-stage-filmstrip"
+              aria-hidden={!filmstripOpen}
+              style={{ '--tile-w': `${FILMSTRIP_TILE_WIDTH}px` } as React.CSSProperties}
+            >
+              <div className="voice-stage-filmstrip-inner">{buildTiles()}</div>
+            </div>
+          )}
         </div>
       ) : (
         (() => {
-          // Единый список тайлов (участники + своя демка + чужие демки, тот
-          // же порядок, что и раньше) — чтобы разбить его на строки ровно по
-          // gridCols. Строка — отдельный flex-контейнер с justify-content:
-          // center, поэтому неполная последняя строка (например, третий тайл
-          // из трёх) центрируется сама, без ручной раскладки по колонкам.
-          const tiles = [
-            ...roster.map((m) => (
-              <ParticipantTile
-                key={`p-${m.id}`}
-                member={m}
-                speaking={speakingUserIds.has(m.id)}
-                muted={m.id === selfUserId ? selfMuted : m.muted}
-                deafened={m.id === selfUserId ? deafened : m.deafened}
-                onOpenProfile={onOpenProfile}
-                onExpand={() => setExpanded({ userId: m.id, mode: 'participant' })}
-                onContextMenu={
-                  m.id !== selfUserId && onParticipantContextMenu
-                    ? (e) => onParticipantContextMenu(m, e, { kind: roomKind, id: roomId })
-                    : undefined
-                }
-              />
-            )),
-            ...(isSharingScreen
-              ? [
-                  <ScreenPreviewTile
-                    key="s-own"
-                    username="Вы"
-                    stream={ownScreenStream}
-                    own
-                    deafened={deafened}
-                    onWatch={() => {}}
-                    onExpand={() => setExpanded({ userId: selfUserId, mode: 'screen' })}
-                    onStopWatching={() => {}}
-                  />,
-                ]
-              : []),
-            ...sharingOthers.map((m) => {
-              const stream = screenShares.get(m.id) ?? null
-              return (
-                <ScreenPreviewTile
-                  key={`s-${m.id}`}
-                  username={m.username}
-                  stream={stream}
-                  own={false}
-                  deafened={deafened}
-                  onWatch={() => onRequestWatch(m.id)}
-                  onExpand={() => {
-                    if (stream) setExpanded({ userId: m.id, mode: 'screen' })
-                  }}
-                  onStopWatching={() => unwatchScreen(m.id)}
-                />
-              )
-            }),
-          ]
+          // Тайлы разбиваем на строки ровно по gridCols. Строка — отдельный
+          // flex-контейнер с justify-content: center, поэтому неполная
+          // последняя строка (например, третий тайл из трёх) центрируется
+          // сама, без ручной раскладки по колонкам.
+          const tiles = buildTiles()
           const rows: (typeof tiles)[] = []
           for (let i = 0; i < tiles.length; i += gridCols) rows.push(tiles.slice(i, i + gridCols))
           const rowStyle = { '--tile-w': `${tileWidth}px` } as React.CSSProperties

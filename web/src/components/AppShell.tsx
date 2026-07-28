@@ -902,6 +902,12 @@ export default function AppShell() {
     playLeaveSound()
     gateway.voiceLeave()
     setVoice(null)
+    // Ростер звонка в личке/группе — чисто клиентский стейт, который никто не
+    // чистит при выходе: dm_voice_state_update про чужие выходы после нашего
+    // уже не придёт (мы вышли из комнаты), а dm_voice_peers при следующем
+    // входе только ДОБАВЛЯЕТ пиров к прежнему объекту. Без сброса следующий
+    // звонок открывался со всеми, кто был в комнате на момент нашего выхода.
+    setDmCallParticipants({})
   }, [gateway])
 
   // Единая точка входа для просмотра демонстрации экрана — используется и
@@ -995,6 +1001,10 @@ export default function AppShell() {
         const { sfu_url, sfu_token } = await api.conversationVoiceCredentials(conversationId)
         const conv = conversations.find((c) => c.id === conversationId)
         setVoiceStatus('connecting')
+        // Начинаем звонок с пустого ростера: настоящий состав приедет в
+        // dm_voice_peers сразу после входа (см. handleLeaveVoice — там же
+        // про то, почему на один сброс при выходе полагаться нельзя).
+        setDmCallParticipants({})
         gateway.dmVoiceJoin(conversationId)
         setVoice({
           room: {
@@ -1155,6 +1165,22 @@ export default function AppShell() {
   // (как в Discord), иначе просто название приложения.
   useEffect(() => {
     document.title = voice ? `${voice.room.name} - ${APP_NAME}` : APP_NAME
+  }, [voice])
+
+  // Пока мы в голосе — браузер спрашивает подтверждение на закрытие вкладки/
+  // перезагрузку. Закрыть страницу случайно, сидя в звонке, слишком легко, а
+  // выход из голоса необратим: переподключение — это новый вход в канал со
+  // звуком для всех. Текст диалога задаёт сам браузер (свой показать нельзя —
+  // спецификация это запрещает), от нас нужен только preventDefault.
+  useEffect(() => {
+    if (!voice) return
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault()
+      // Старые браузеры смотрят на returnValue, а не на preventDefault.
+      e.returnValue = ''
+    }
+    window.addEventListener('beforeunload', onBeforeUnload)
+    return () => window.removeEventListener('beforeunload', onBeforeUnload)
   }, [voice])
 
   // Ростер участников ТЕКУЩЕГО голосового канала СЕРВЕРА — с чистого листа
