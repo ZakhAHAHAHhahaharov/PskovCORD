@@ -1264,6 +1264,13 @@ export default function AppShell() {
                     onConsumedPendingWatch={() => setDmPendingWatchUserId(null)}
                     onRequestWatch={handleDmRequestWatch}
                     onOpenProfile={openProfilePopup}
+                    // Этот VoiceStage рендерится только пока isInDmCall — то
+                    // есть мы всегда уже подключены, VoiceLanding здесь не
+                    // нужен (для звонка в личке/группе нет отдельного "canала"
+                    // без входа, только сам звонок).
+                    isConnected
+                    onJoin={() => handleDmVoiceJoin(activeConversation.id)}
+                    onLeave={handleLeaveVoice}
                   />
                   <div
                     className="dm-voicestage-resize"
@@ -1310,6 +1317,9 @@ export default function AppShell() {
             onRequestWatch={(userId) => handleWatchScreen(userId, currentChannel.id)}
             onOpenProfile={openProfilePopup}
             onParticipantContextMenu={openParticipantContextMenu}
+            isConnected={voice?.room.kind === 'channel' && voice.room.id === currentChannel.id}
+            onJoin={() => handleJoinVoice(currentChannel)}
+            onLeave={handleLeaveVoice}
           />
         ) : currentChannel && currentChannel.kind === 'text' ? (
           <>

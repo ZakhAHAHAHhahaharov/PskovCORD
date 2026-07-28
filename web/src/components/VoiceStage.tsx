@@ -1,6 +1,19 @@
-import { useEffect, useRef, useState, MouseEvent as ReactMouseEvent } from 'react'
-import { Maximize2, Minimize2, Monitor, MicOff, HeadphoneOff, X, Eye } from 'lucide-react'
+import { useCallback, useEffect, useRef, useState, MouseEvent as ReactMouseEvent } from 'react'
+import {
+  Maximize2,
+  Minimize2,
+  Monitor,
+  MicOff,
+  HeadphoneOff,
+  X,
+  Eye,
+  Video,
+  PhoneOff,
+  Users,
+} from 'lucide-react'
 import Avatar from './Avatar'
+import MicButton from './MicButton'
+import ScreenShareButton from './ScreenShareButton'
 import { ProfilePopupUser } from './MiniProfilePopup'
 import { useSettings } from '../settings'
 import { useVoice } from '../voice'
@@ -188,6 +201,9 @@ export default function VoiceStage({
   onRequestWatch,
   onOpenProfile,
   onParticipantContextMenu,
+  isConnected,
+  onJoin,
+  onLeave,
 }: {
   /** Опаque id комнаты — Channel.id для сервера, Conversation.id для
    * личного/группового звонка (см. AppShell.VoiceRoom). Используется только
@@ -208,6 +224,13 @@ export default function VoiceStage({
    * голосовых каналов сервера — для звонка в личке/группе AppShell этот
    * проп просто не передаёт. */
   onParticipantContextMenu?: (member: VoiceRosterMember, e: ReactMouseEvent) => void
+  /** Подключены ли мы САМИ к этой конкретной комнате прямо сейчас (сравнение
+   * с VoiceMesh делает AppShell — VoiceStage сам не знает глобальный voice-
+   * стейт). false — канал просто выбран/открыт, но мы не в звонке: вместо
+   * сетки участников показываем VoiceLanding с кнопкой "Присоединиться". */
+  isConnected: boolean
+  onJoin: () => void
+  onLeave: () => void
 }) {
   const {
     speakingUserIds,
@@ -245,6 +268,37 @@ export default function VoiceStage({
       containerRef.current?.requestFullscreen().catch(() => {})
     }
   }
+
+  // Плавающая панель мут/камера/демка/сброс — как в полноэкранном
+  // видеоплеере: скрыта, пока не двинуть мышью над экраном звонка, и снова
+  // прячется (вместе с курсором — см. .voice-stage.controls-hidden), если
+  // подержать мышь неподвижно. Мышь ушла с экрана — прячем сразу, ждать
+  // таймер незачем.
+  const CONTROLS_HIDE_DELAY_MS = 2500
+  const [showControls, setShowControls] = useState(false)
+  const hideControlsTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const scheduleHideControls = useCallback(() => {
+    if (hideControlsTimer.current) clearTimeout(hideControlsTimer.current)
+    hideControlsTimer.current = setTimeout(() => setShowControls(false), CONTROLS_HIDE_DELAY_MS)
+  }, [])
+
+  const handleStageMouseMove = useCallback(() => {
+    if (!isConnected) return
+    setShowControls(true)
+    scheduleHideControls()
+  }, [isConnected, scheduleHideControls])
+
+  const handleStageMouseLeave = useCallback(() => {
+    if (hideControlsTimer.current) clearTimeout(hideControlsTimer.current)
+    setShowControls(false)
+  }, [])
+
+  useEffect(() => {
+    return () => {
+      if (hideControlsTimer.current) clearTimeout(hideControlsTimer.current)
+    }
+  }, [])
 
   // Автопросмотр по внешнему запросу (бейдж «демка» или клик по чужому
   // превью) — как только демонстрация реально доступна в этой SFU-комнате.
@@ -306,8 +360,21 @@ export default function VoiceStage({
 
   const expandedMember = expanded ? roster.find((m) => m.id === expanded.userId) ?? null : null
 
+  if (!isConnected) {
+    return (
+      <div className="voice-stage voice-stage-landing">
+        <VoiceLanding roomName={roomName} roster={roster} onJoin={onJoin} onOpenProfile={onOpenProfile} />
+      </div>
+    )
+  }
+
   return (
-    <div ref={containerRef} className={`voice-stage ${isFullscreen ? 'is-fullscreen' : ''}`}>
+    <div
+      ref={containerRef}
+      className={`voice-stage ${isFullscreen ? 'is-fullscreen' : ''} ${!showControls ? 'controls-hidden' : ''}`}
+      onMouseMove={handleStageMouseMove}
+      onMouseLeave={handleStageMouseLeave}
+    >
       <header className="voice-stage-header">
         <span className="voice-stage-title">
           <Monitor size={16} /> {roomName}
@@ -431,6 +498,68 @@ export default function VoiceStage({
           })}
         </div>
       )}
+
+      <div className={`voice-controls-bar ${showControls ? 'visible' : ''}`}>
+        <div className="voice-controls-group">
+          <MicButton />
+          <button
+            className="icon-btn"
+            title="Включить камеру"
+            onClick={() => window.alert('Видеокамера скоро появится здесь — пока не реализована.')}
+          >
+            <Video size={17} />
+          </button>
+          <ScreenShareButton />
+        </div>
+        <button className="voice-controls-hangup" title="Завершить звонок" onClick={onLeave}>
+          <PhoneOff size={18} />
+        </button>
+      </div>
+    </div>
+  )
+}
+
+/** Голосовой канал выбран, но мы сами в него не зашли — вместо сетки
+ * участников большой "экран приглашения" (градиентный фон, название канала,
+ * кто уже внутри) с кнопкой входа. Тот же паттерн, что у Discord: канал
+ * можно разглядывать, не подключаясь. */
+function VoiceLanding({
+  roomName,
+  roster,
+  onJoin,
+  onOpenProfile,
+}: {
+  roomName: string
+  roster: VoiceRosterMember[]
+  onJoin: () => void
+  onOpenProfile: (user: ProfilePopupUser, e: ReactMouseEvent) => void
+}) {
+  return (
+    <div className="voice-landing">
+      <div className="voice-landing-icon">
+        <Users size={36} />
+      </div>
+      <h2 className="voice-landing-title">{roomName}</h2>
+      {roster.length > 0 ? (
+        <div className="voice-landing-members">
+          {roster.map((m) => (
+            <button
+              key={m.id}
+              type="button"
+              className="voice-landing-member"
+              title={m.username}
+              onClick={(e) => onOpenProfile(m, e)}
+            >
+              <Avatar name={m.username} color={m.avatar_color} image={m.avatar_image} size={40} />
+            </button>
+          ))}
+        </div>
+      ) : (
+        <p className="voice-landing-empty">Сейчас в голосовом канале никого нет</p>
+      )}
+      <button className="voice-landing-join" onClick={onJoin}>
+        Присоединиться к голосовому каналу
+      </button>
     </div>
   )
 }
