@@ -2,10 +2,11 @@ import { useCallback, useEffect, useMemo, useRef, useState, MouseEvent as ReactM
 import { Phone, PhoneOff } from 'lucide-react'
 import {
   api, Channel, ChatMessageBase, Conversation, ConversationMessage, FriendsState, KnownPerson,
-  Member, Message, Server,
+  Member, Message, NotificationLevel, Role, Server, ServerInviteEntry, ServerMemberSettings,
 } from '../api'
 import { useAuth } from '../auth'
 import { useGateway } from '../gateway'
+import { isMentioned } from '../mentions'
 import {
   outbox, pendingAsMessage, usePendingMessages, OutboxTarget,
 } from '../outbox'
@@ -36,6 +37,9 @@ import ParticipantContextMenu, {
   ParticipantContextMenuTarget,
 } from './ParticipantContextMenu'
 import MuteVoteModal from './MuteVoteModal'
+import ServerContextMenu from './ServerContextMenu'
+import ServerPrivacyModal from './ServerPrivacyModal'
+import ServerInviteModal from './ServerInviteModal'
 
 const APP_NAME: string = import.meta.env.VITE_APP_NAME || 'PskovCord'
 
@@ -167,6 +171,49 @@ export default function AppShell() {
     null,
   )
 
+  // --- уведомления серверов: роли/ростеры всех серверов, непрочитанные ---
+  // Роли и полные ростеры (с role_ids) ВСЕХ серверов, где мы состоим — нужны
+  // для подсчёта упоминаний (см. mentions.ts) в ФОНОВЫХ серверах: `members`
+  // выше — только ростер сейчас ВЫБРАННОГО сервера. Дружеский масштаб
+  // проекта (см. комментарии по всему бэку) делает такую загрузку разумной.
+  const [serverRoles, setServerRoles] = useState<Record<number, Role[]>>({})
+  const [serverMembersCache, setServerMembersCache] = useState<Record<number, Member[]>>({})
+  const fetchedServerDataIds = useRef<Set<number>>(new Set())
+  const serversRef = useRef<Server[]>([])
+  serversRef.current = servers
+
+  // Непрочитанные текстовые каналы — тот же приём, что и unreadConversationIds
+  // выше: чисто клиентское, эфемерное состояние (сбрасывается при перезагрузке
+  // страницы), наполняется в message_create ниже, чистится при открытии
+  // канала/«Отметить как прочитанное» (см. handleSelectChannel/handleMarkServerRead).
+  const [unreadChannelIds, setUnreadChannelIds] = useState<Set<number>>(new Set())
+
+  // Раз в 30с — форсирует пересчёт "заглушено ли ПРЯМО СЕЙЧАС": muted_until
+  // может истечь без единого нового события, и без этого тика бейдж/пункт
+  // меню молча оставались бы "заглушено" ещё сколько-то после истечения.
+  const [muteTick, setMuteTick] = useState(0)
+  useEffect(() => {
+    const id = setInterval(() => setMuteTick((t) => t + 1), 30000)
+    return () => clearInterval(id)
+  }, [])
+
+  // --- контекстное меню сервера (правый клик в ServerRail) и его модалки ---
+  // Держим только id, не сам объект: настройки в серверном меню (мьют,
+  // уровень уведомлений) меняются кликом ВНУТРИ этого же меню — со снимком
+  // сервера, захваченным в момент правого клика, чекбоксы после клика не
+  // обновились бы, потому что patchServerSettings меняет `servers`, а не
+  // этот снимок. Резолвим актуальный объект из `servers` при каждом рендере.
+  const [serverContextMenuServerId, setServerContextMenuServerId] = useState<{
+    id: number
+    x: number
+    y: number
+  } | null>(null)
+  const [showServerInviteId, setShowServerInviteId] = useState<number | null>(null)
+  const [showServerPrivacyId, setShowServerPrivacyId] = useState<number | null>(null)
+
+  // Приглашения на сервера, адресованные МНЕ (см. HomeSidebar «Приглашения»).
+  const [serverInvites, setServerInvites] = useState<ServerInviteEntry[]>([])
+
   const currentServer = servers.find((s) => s.id === serverId) || null
   const channels = currentServer?.channels || []
   const currentChannel = channels.find((c) => c.id === channelId) || null
@@ -226,10 +273,105 @@ export default function AppShell() {
     return channels.find((c) => c.id === Number(voice.room.id))?.topic ?? null
   }, [voice, channels])
 
+  // --- уведомления серверов: производные значения --------------------------
+  const isServerMutedNow = useCallback((s: Server): boolean => {
+    const settings = s.my_settings
+    if (!settings) return false
+    if (settings.muted_forever) return true
+    if (!settings.muted_until) return false
+    return new Date(settings.muted_until).getTime() > Date.now()
+  }, [])
+
+  // muteTick форсирует пересчёт по таймеру (см. выше) — сам он в теле не
+  // используется (isServerMutedNow сверяется с Date.now() напрямую), только
+  // как повод для React пересчитать useMemo; поэтому линтер и не видит его
+  // "нужным" — но без него пересчёт не произойдёт вовсе, пока не изменится
+  // сам список серверов.
+  const mutedServerIds = useMemo(
+    () => new Set(servers.filter((s) => isServerMutedNow(s)).map((s) => s.id)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [servers, isServerMutedNow, muteTick],
+  )
+
+  const unreadServerIds = useMemo(() => {
+    const ids = new Set<number>()
+    for (const s of servers) {
+      if (s.channels.some((c) => unreadChannelIds.has(c.id))) ids.add(s.id)
+    }
+    return ids
+  }, [servers, unreadChannelIds])
+
+  // channel_id -> server_id, для message_create по ФОНОВОМУ каналу (там
+  // приходит только id канала, не сервера).
+  const channelServerId = useMemo(() => {
+    const map: Record<number, number> = {}
+    for (const s of servers) {
+      for (const c of s.channels) map[c.id] = s.id
+    }
+    return map
+  }, [servers])
+
+  // Полный ростер сервера: для СЕЙЧАС открытого — свежий `members`, для
+  // фоновых — кэш (см. serverMembersCache выше, чуть менее свежий).
+  const membersForServer = useCallback(
+    (id: number): Member[] => (id === serverId ? members : serverMembersCache[id] ?? []),
+    [serverId, members, serverMembersCache],
+  )
+  const rolesForServer = useCallback(
+    (id: number): Role[] => serverRoles[id] ?? [],
+    [serverRoles],
+  )
+
+  // Поднимать ли непрочитанное на сообщение из чужого канала — с учётом
+  // мьюта, уровня уведомлений и (при notification_level='mentions')
+  // упоминания — личного, @all/@here или ролевого (см. mentions.ts).
+  const shouldNotifyForChannel = useCallback(
+    (ownerServerId: number, authorId: number, content: string): boolean => {
+      if (authorId === userRef.current?.id) return false
+      const server = serversRef.current.find((s) => s.id === ownerServerId)
+      const settings = server?.my_settings
+      if (!server || !settings) return true
+      if (isServerMutedNow(server)) return false
+      if (settings.notification_level === 'none') return false
+      if (settings.notification_level === 'all') return true
+      const roster = membersForServer(ownerServerId)
+      const me = roster.find((m) => m.id === userRef.current?.id)
+      const author = roster.find((m) => m.id === authorId)
+      return isMentioned(content, {
+        myUsername: userRef.current?.username ?? '',
+        myRoleIds: me?.role_ids ?? [],
+        authorRoleIds: author?.role_ids ?? [],
+        roles: rolesForServer(ownerServerId),
+        ignoreAtHere: settings.ignore_at_here,
+        suppressRoleMentions: settings.suppress_role_mentions,
+      })
+    },
+    [isServerMutedNow, membersForServer, rolesForServer],
+  )
+  // Читается ИЗ большого gateway-эффекта через ref — тот, как и voiceRef/
+  // conversationsRef рядом, намеренно не держит быстро меняющиеся значения в
+  // зависимостях (иначе каждое новое сообщение фонового сервера
+  // пересоздавало бы все ~30 обработчиков подряд).
+  const shouldNotifyRef = useRef(shouldNotifyForChannel)
+  shouldNotifyRef.current = shouldNotifyForChannel
+  const channelServerIdRef = useRef<Record<number, number>>({})
+  channelServerIdRef.current = channelServerId
+
   const selectServer = useCallback((s: Server) => {
     setServerId(s.id)
     const firstText = s.channels.find((c) => c.kind === 'text')
-    setChannelId(firstText ? firstText.id : s.channels[0]?.id ?? null)
+    const target = firstText ? firstText.id : (s.channels[0]?.id ?? null)
+    setChannelId(target)
+    // Заодно гасим непрочитанное у канала, в который переключаемся — иначе
+    // клик по серверу открывал бы канал, у которого пилюля всё ещё "непрочитан".
+    if (target != null) {
+      setUnreadChannelIds((prev) => {
+        if (!prev.has(target)) return prev
+        const next = new Set(prev)
+        next.delete(target)
+        return next
+      })
+    }
   }, [])
 
   // Начальная загрузка серверов.
@@ -256,8 +398,45 @@ export default function AppShell() {
     void reloadMembers()
   }, [reloadMembers])
 
-  // Диалоги/группы и друзья — не завязаны на выбранный сервер, нужны сразу
-  // (бейдж входящих заявок, доступность домашнего экрана в любой момент).
+  // Роли + полный ростер КАЖДОГО сервера, где мы состоим — один раз на
+  // сервер (см. serverRoles/serverMembersCache выше). Список серверов меняется
+  // редко (вступил/вышел), поэтому дозагружаем только НОВЫЕ id.
+  useEffect(() => {
+    const toFetch = servers.filter((s) => !fetchedServerDataIds.current.has(s.id))
+    if (toFetch.length === 0) return
+    toFetch.forEach((s) => fetchedServerDataIds.current.add(s.id))
+    void (async () => {
+      for (const s of toFetch) {
+        try {
+          const [roleList, memberList] = await Promise.all([api.roles(s.id), api.members(s.id)])
+          setServerRoles((prev) => ({ ...prev, [s.id]: roleList }))
+          setServerMembersCache((prev) => ({ ...prev, [s.id]: memberList }))
+        } catch {
+          // Не удалось — попробуем снова при следующем изменении списка
+          // серверов (вступление/выход куда угодно перезапускает этот эффект).
+          fetchedServerDataIds.current.delete(s.id)
+        }
+      }
+    })()
+  }, [servers])
+
+  // Роли ИМЕННО открытого сейчас сервера освежаем при каждом переключении —
+  // используются и для подсчёта упоминаний, и потенциально устарели в общем
+  // кэше выше (кто-то мог поправить mentionable_by, пока сервер был фоновым).
+  useEffect(() => {
+    if (serverId == null) return
+    void (async () => {
+      try {
+        const list = await api.roles(serverId)
+        setServerRoles((prev) => ({ ...prev, [serverId]: list }))
+      } catch {
+        /* используем то, что уже в кэше */
+      }
+    })()
+  }, [serverId])
+
+  // Диалоги/группы, друзья и приглашения на сервера — не завязаны на
+  // выбранный сервер, нужны сразу (бейджи, домашний экран в любой момент).
   useEffect(() => {
     ;(async () => {
       try {
@@ -270,8 +449,34 @@ export default function AppShell() {
       } catch {
         setFriends({ friends: [], incoming: [], outgoing: [] })
       }
+      try {
+        setServerInvites(await api.myServerInvites())
+      } catch {
+        setServerInvites([])
+      }
     })()
   }, [])
+
+  // Ссылка-приглашение (?invite=<код>) — редимпшен один раз при загрузке.
+  // Параметр убирается из URL сразу: ссылка многоразовая, но повторно дёргать
+  // API на каждый ре-рендер/перезагрузку той же вкладки незачем.
+  useEffect(() => {
+    const params = new URLSearchParams(location.search)
+    const code = params.get('invite')
+    if (!code) return
+    const url = new URL(location.href)
+    url.searchParams.delete('invite')
+    window.history.replaceState({}, '', url.toString())
+    void (async () => {
+      try {
+        const server = await api.redeemServerInvite(code)
+        setServers((prev) => (prev.some((s) => s.id === server.id) ? prev : [...prev, server]))
+        selectServer(server)
+      } catch (e) {
+        alert('Не удалось войти по ссылке-приглашению: ' + (e as Error).message)
+      }
+    })()
+  }, [selectServer])
 
   // История сообщений выбранного диалога/группы.
   useEffect(() => {
@@ -290,10 +495,11 @@ export default function AppShell() {
     })()
   }, [activeConversationId])
 
-  // Список людей для пикера «новый диалог/группа» — обновляем при каждом
-  // открытии модалки (мог появиться новый общий сервер/друг с прошлого раза).
+  // Список людей для пикера «новый диалог/группа» И «Пригласить на сервер» —
+  // обновляем при каждом открытии любой из двух модалок (мог появиться новый
+  // общий сервер/друг с прошлого раза).
   useEffect(() => {
-    if (!showNewConversation) return
+    if (!showNewConversation && showServerInviteId == null) return
     ;(async () => {
       try {
         setKnownPeople(await api.knownPeople())
@@ -301,7 +507,7 @@ export default function AppShell() {
         setKnownPeople([])
       }
     })()
-  }, [showNewConversation])
+  }, [showNewConversation, showServerInviteId])
 
   // История сообщений при смене текстового канала.
   useEffect(() => {
@@ -332,7 +538,26 @@ export default function AppShell() {
         setMessages((prev) =>
           prev.some((m) => m.id === d.message.id) ? prev : [...prev, d.message],
         )
+        return
       }
+      // Не открытый прямо сейчас канал — решаем, поднимать ли непрочитанное
+      // (мьют/уровень уведомлений/упоминание, см. shouldNotifyForChannel).
+      const ownerServerId = channelServerIdRef.current[d.message.channel]
+      if (
+        ownerServerId != null &&
+        shouldNotifyRef.current(ownerServerId, d.message.author.id, d.message.content)
+      ) {
+        setUnreadChannelIds((prev) =>
+          prev.has(d.message.channel) ? prev : new Set(prev).add(d.message.channel),
+        )
+      }
+    })
+    // Кто-то из участников сервера пригласил меня — сразу видно во вкладке
+    // «Приглашения» на домашнем экране (см. HomeSidebar).
+    const offServerInviteCreate = gateway.on('server_invite_create', (d) => {
+      setServerInvites((prev) =>
+        prev.some((i) => i.id === d.invite.id) ? prev : [...prev, d.invite],
+      )
     })
     // Подтверждение ПОВТОРНОЙ попытки: сообщение создала прошлая, эхо до нас
     // не дошло. Само сообщение доберётся обычным путём (перечитыванием
@@ -726,6 +951,32 @@ export default function AppShell() {
     })
     const offMembershipRevoked = gateway.on('server_membership_revoked', (d) => {
       setServers((prev) => prev.filter((s) => s.id !== d.server_id))
+      // Чистим и всё, что было насчитано/закэшировано для этого сервера —
+      // иначе кэши ролей/ростеров/непрочитанного растут по серверам, из
+      // которых давно вышли.
+      const leaving = serversRef.current.find((s) => s.id === d.server_id)
+      if (leaving) {
+        const leavingChannelIds = new Set(leaving.channels.map((c) => c.id))
+        setUnreadChannelIds((prev) => {
+          if (![...leavingChannelIds].some((id) => prev.has(id))) return prev
+          const next = new Set(prev)
+          leavingChannelIds.forEach((id) => next.delete(id))
+          return next
+        })
+      }
+      fetchedServerDataIds.current.delete(d.server_id)
+      setServerRoles((prev) => {
+        if (!(d.server_id in prev)) return prev
+        const next = { ...prev }
+        delete next[d.server_id]
+        return next
+      })
+      setServerMembersCache((prev) => {
+        if (!(d.server_id in prev)) return prev
+        const next = { ...prev }
+        delete next[d.server_id]
+        return next
+      })
       if (serverId === d.server_id) {
         setServerId(null)
         setChannelId(null)
@@ -756,6 +1007,7 @@ export default function AppShell() {
 
     return () => {
       offMsg()
+      offServerInviteCreate()
       offMsgAck()
       offMsgNack()
       offReactions()
@@ -901,6 +1153,150 @@ export default function AppShell() {
   // со всеми полями и правами, остальным он уедет через server_update.
   const handleServerUpdated = useCallback((updated: Server) => {
     setServers((prev) => prev.map((s) => (s.id === updated.id ? updated : s)))
+  }, [])
+
+  // --- уведомления/мьют/приватность/приглашения/выход сервера -------------
+  const handleSelectChannel = useCallback((c: Channel) => {
+    setChannelId(c.id)
+    setUnreadChannelIds((prev) => {
+      if (!prev.has(c.id)) return prev
+      const next = new Set(prev)
+      next.delete(c.id)
+      return next
+    })
+  }, [])
+
+  const handleMarkServerRead = useCallback((s: Server) => {
+    const ids = new Set(s.channels.map((c) => c.id))
+    setUnreadChannelIds((prev) => {
+      let changed = false
+      const next = new Set(prev)
+      for (const id of ids) {
+        if (next.delete(id)) changed = true
+      }
+      return changed ? next : prev
+    })
+  }, [])
+
+  // Оптимистичный патч my_settings конкретного сервера — используется и для
+  // мгновенного отклика на клик (до ответа сервера), и чтобы применить сам
+  // ответ (полный актуальный payload с сервера).
+  const patchServerSettings = useCallback(
+    (serverIdValue: number, patch: Partial<ServerMemberSettings>) => {
+      setServers((prev) =>
+        prev.map((s) =>
+          s.id === serverIdValue
+            ? { ...s, my_settings: { ...s.my_settings, ...patch } }
+            : s,
+        ),
+      )
+    },
+    [],
+  )
+
+  const handleMuteServer = useCallback(
+    async (s: Server, minutes: number | 'forever') => {
+      patchServerSettings(s.id, {
+        muted: true,
+        muted_forever: minutes === 'forever',
+        muted_until: minutes === 'forever' ? null : s.my_settings.muted_until,
+      })
+      try {
+        const updated = await api.updateServerSettings(
+          s.id,
+          minutes === 'forever' ? { mute_forever: true } : { mute_minutes: minutes },
+        )
+        patchServerSettings(s.id, updated)
+      } catch (e) {
+        alert('Не удалось заглушить сервер: ' + (e as Error).message)
+      }
+    },
+    [patchServerSettings],
+  )
+
+  const handleUnmuteServer = useCallback(
+    async (s: Server) => {
+      patchServerSettings(s.id, { muted: false, muted_forever: false, muted_until: null })
+      try {
+        const updated = await api.updateServerSettings(s.id, { unmute: true })
+        patchServerSettings(s.id, updated)
+      } catch (e) {
+        alert('Не удалось снять заглушение: ' + (e as Error).message)
+      }
+    },
+    [patchServerSettings],
+  )
+
+  const handleSetNotificationLevel = useCallback(
+    async (s: Server, level: NotificationLevel) => {
+      patchServerSettings(s.id, { notification_level: level })
+      try {
+        await api.updateServerSettings(s.id, { notification_level: level })
+      } catch (e) {
+        alert('Не удалось изменить параметры уведомлений: ' + (e as Error).message)
+      }
+    },
+    [patchServerSettings],
+  )
+
+  const handleToggleIgnoreAtHere = useCallback(
+    async (s: Server, value: boolean) => {
+      patchServerSettings(s.id, { ignore_at_here: value })
+      try {
+        await api.updateServerSettings(s.id, { ignore_at_here: value })
+      } catch (e) {
+        alert((e as Error).message)
+      }
+    },
+    [patchServerSettings],
+  )
+
+  const handleToggleSuppressRoleMentions = useCallback(
+    async (s: Server, value: boolean) => {
+      patchServerSettings(s.id, { suppress_role_mentions: value })
+      try {
+        await api.updateServerSettings(s.id, { suppress_role_mentions: value })
+      } catch (e) {
+        alert((e as Error).message)
+      }
+    },
+    [patchServerSettings],
+  )
+
+  const handleLeaveServer = useCallback(
+    async (s: Server) => {
+      if (!window.confirm(`Покинуть сервер «${s.name}»?`)) return
+      try {
+        await api.leaveServer(s.id)
+        setServers((prev) => prev.filter((x) => x.id !== s.id))
+        if (serverId === s.id) {
+          setServerId(null)
+          setChannelId(null)
+        }
+      } catch (e) {
+        alert('Не удалось покинуть сервер: ' + (e as Error).message)
+      }
+    },
+    [serverId],
+  )
+
+  const handleAcceptServerInvite = useCallback(async (invite: ServerInviteEntry) => {
+    try {
+      const server = await api.acceptServerInvite(invite.id)
+      setServers((prev) => (prev.some((s) => s.id === server.id) ? prev : [...prev, server]))
+      setServerInvites((prev) => prev.filter((i) => i.id !== invite.id))
+    } catch (e) {
+      alert((e as Error).message)
+    }
+  }, [])
+
+  const handleDeclineServerInvite = useCallback(async (invite: ServerInviteEntry) => {
+    try {
+      await api.declineServerInvite(invite.id)
+      setServerInvites((prev) => prev.filter((i) => i.id !== invite.id))
+    } catch (e) {
+      alert((e as Error).message)
+    }
   }, [])
 
   const handleCreateChannel = async (kind: 'text' | 'voice') => {
@@ -1382,7 +1778,12 @@ export default function AppShell() {
         onCreate={handleCreateServer}
         onDiscover={() => setShowDiscover(true)}
         onHome={handleOpenHome}
-        homeNotificationCount={friends.incoming.length + unreadConversationIds.size}
+        homeNotificationCount={
+          friends.incoming.length + unreadConversationIds.size + serverInvites.length
+        }
+        unreadServerIds={unreadServerIds}
+        mutedServerIds={mutedServerIds}
+        onContextMenu={(s, e) => setServerContextMenuServerId({ id: s.id, x: e.clientX, y: e.clientY })}
       />
 
       {serverId == null ? (
@@ -1404,6 +1805,9 @@ export default function AppShell() {
           onOpenSettings={() => setShowSettings(true)}
           onOpenProfile={() => setShowProfile(true)}
           onOpenUserProfile={openProfilePopup}
+          serverInvites={serverInvites}
+          onAcceptServerInvite={handleAcceptServerInvite}
+          onDeclineServerInvite={handleDeclineServerInvite}
         />
       ) : (
         <ChannelSidebar
@@ -1416,7 +1820,7 @@ export default function AppShell() {
           voiceTopic={voiceTopic}
           voiceStatus={voiceStatus}
           user={user!}
-          onSelectText={(c) => setChannelId(c.id)}
+          onSelectText={handleSelectChannel}
           onJoinVoice={handleJoinVoice}
           onLeaveVoice={handleLeaveVoice}
           onCreateChannel={handleCreateChannel}
@@ -1576,7 +1980,13 @@ export default function AppShell() {
       {serverId == null ? (
         <aside className="members-list" />
       ) : (
-        <MembersList members={members} channels={channels} onOpenProfile={openProfilePopup} />
+        <MembersList
+          members={members}
+          channels={channels}
+          roles={serverId != null ? rolesForServer(serverId) : []}
+          ownerId={currentServer?.owner ?? -1}
+          onOpenProfile={openProfilePopup}
+        />
       )}
 
       {showNewConversation && (
@@ -1675,6 +2085,62 @@ export default function AppShell() {
           onCastVote={handleCastMuteVote}
         />
       )}
+      {serverContextMenuServerId && (() => {
+        const menuServer = servers.find((s) => s.id === serverContextMenuServerId.id)
+        // Сервер мог исчезнуть из списка (вышли/выгнали) прямо пока меню
+        // открыто — тогда просто не рендерим его вместо падения на undefined.
+        if (!menuServer) return null
+        return (
+          <ServerContextMenu
+            server={menuServer}
+            x={serverContextMenuServerId.x}
+            y={serverContextMenuServerId.y}
+            canManageServer={
+              !!menuServer.my_permissions &&
+              (menuServer.my_permissions.manage_server ||
+                menuServer.my_permissions.manage_roles ||
+                menuServer.my_permissions.manage_members)
+            }
+            isOwner={menuServer.owner === user!.id}
+            onClose={() => setServerContextMenuServerId(null)}
+            onMarkRead={() => handleMarkServerRead(menuServer)}
+            onInvite={() => setShowServerInviteId(menuServer.id)}
+            onMute={(minutes) => handleMuteServer(menuServer, minutes)}
+            onUnmute={() => handleUnmuteServer(menuServer)}
+            onNotificationLevel={(level) => handleSetNotificationLevel(menuServer, level)}
+            onToggleIgnoreAtHere={(v) => handleToggleIgnoreAtHere(menuServer, v)}
+            onToggleSuppressRoleMentions={(v) => handleToggleSuppressRoleMentions(menuServer, v)}
+            onOpenServerSettings={() => {
+              selectServer(menuServer)
+              setShowServerSettings(true)
+            }}
+            onOpenPrivacy={() => setShowServerPrivacyId(menuServer.id)}
+            onLeave={() => handleLeaveServer(menuServer)}
+          />
+        )
+      })()}
+      {showServerInviteId != null && (() => {
+        const inviteServer = servers.find((s) => s.id === showServerInviteId)
+        if (!inviteServer) return null
+        return (
+          <ServerInviteModal
+            server={inviteServer}
+            people={knownPeople}
+            onClose={() => setShowServerInviteId(null)}
+          />
+        )
+      })()}
+      {showServerPrivacyId != null && (() => {
+        const privacyServer = servers.find((s) => s.id === showServerPrivacyId)
+        if (!privacyServer) return null
+        return (
+          <ServerPrivacyModal
+            server={privacyServer}
+            onClose={() => setShowServerPrivacyId(null)}
+            onSettingsUpdated={patchServerSettings}
+          />
+        )
+      })()}
     </div>
     </VoiceProvider>
   )

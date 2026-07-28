@@ -43,7 +43,10 @@ const ROSTER_PREVIEW_LIMIT = 5
 // доходит до самого флаута — без задержки он успевал закрыться в процессе.
 const FLYOUT_CLOSE_DELAY_MS = 200
 
-function useHoverFlyout() {
+/** Экспортирован — переиспользуется и в ServerContextMenu.tsx (заглушение/
+ * параметры уведомлений открываются тем же наведением, тем же таймером
+ * закрытия). */
+export function useHoverFlyout() {
   const [open, setOpen] = useState(false)
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
 

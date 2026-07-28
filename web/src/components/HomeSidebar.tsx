@@ -1,6 +1,6 @@
 import { useState, MouseEvent as ReactMouseEvent } from 'react'
-import { MessageCircle, Users, UserPlus, Check, X } from 'lucide-react'
-import { Conversation, FriendsState, User } from '../api'
+import { MessageCircle, Users, UserPlus, Check, X, Mail } from 'lucide-react'
+import { Conversation, FriendsState, ServerInviteEntry, User } from '../api'
 import Avatar from './Avatar'
 import SidebarBottomBar from './SidebarBottomBar'
 import { VoiceState } from './AppShell'
@@ -46,6 +46,9 @@ export default function HomeSidebar({
   onOpenSettings,
   onOpenProfile,
   onOpenUserProfile,
+  serverInvites,
+  onAcceptServerInvite,
+  onDeclineServerInvite,
 }: {
   conversations: Conversation[]
   activeConversationId: number | null
@@ -69,8 +72,12 @@ export default function HomeSidebar({
   /** Клик по строке друга/заявки — мини-профиль у курсора, как в списке
    * участников сервера (см. MembersList). */
   onOpenUserProfile: (user: ProfilePopupUser, e: ReactMouseEvent) => void
+  /** Приглашения на сервера, адресованные мне — см. AppShell. */
+  serverInvites: ServerInviteEntry[]
+  onAcceptServerInvite: (invite: ServerInviteEntry) => void
+  onDeclineServerInvite: (invite: ServerInviteEntry) => void
 }) {
-  const [tab, setTab] = useState<'conversations' | 'friends'>('conversations')
+  const [tab, setTab] = useState<'conversations' | 'friends' | 'invites'>('conversations')
   const [addUsername, setAddUsername] = useState('')
 
   const submitFriendRequest = () => {
@@ -104,6 +111,16 @@ export default function HomeSidebar({
             <span className="home-tab-badge">{friends.incoming.length}</span>
           )}
         </button>
+        <button
+          type="button"
+          className={`home-tab ${tab === 'invites' ? 'active' : ''}`}
+          onClick={() => setTab('invites')}
+        >
+          <Mail size={15} /> Приглашения
+          {serverInvites.length > 0 && (
+            <span className="home-tab-badge">{serverInvites.length}</span>
+          )}
+        </button>
       </div>
 
       {tab === 'conversations' ? (
@@ -133,6 +150,41 @@ export default function HomeSidebar({
               </button>
             )
           })}
+        </div>
+      ) : tab === 'invites' ? (
+        <div className="home-scroll" style={{ paddingBottom: voice ? 116 : 60 }}>
+          {serverInvites.length === 0 && (
+            <div className="home-empty">Пока нет приглашений на сервера.</div>
+          )}
+          {serverInvites.map((invite) => (
+            <div key={invite.id} className="friend-row">
+              <div className="member-row invite-row">
+                <Avatar name={invite.server.name} color="#5865f2" image={invite.server.icon} size={28} />
+                <div className="member-info">
+                  <span className="member-name">{invite.server.name}</span>
+                  <span className="member-voice">от {invite.created_by.username}</span>
+                </div>
+              </div>
+              <div className="friend-row-actions">
+                <button
+                  type="button"
+                  className="icon-btn"
+                  title="Принять"
+                  onClick={() => onAcceptServerInvite(invite)}
+                >
+                  <Check size={15} />
+                </button>
+                <button
+                  type="button"
+                  className="icon-btn"
+                  title="Отклонить"
+                  onClick={() => onDeclineServerInvite(invite)}
+                >
+                  <X size={15} />
+                </button>
+              </div>
+            </div>
+          ))}
         </div>
       ) : (
         <div className="home-scroll" style={{ paddingBottom: voice ? 116 : 60 }}>

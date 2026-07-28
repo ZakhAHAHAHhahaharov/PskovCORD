@@ -1,9 +1,11 @@
+import secrets
 import uuid
 
 from django.conf import settings
 from django.db import models
 from django.db.models.signals import post_delete
 from django.dispatch import receiver
+from django.utils import timezone
 from django.utils.text import get_valid_filename
 
 
@@ -96,6 +98,27 @@ class Role(models.Model):
     speak = models.BooleanField(default=True)
     video = models.BooleanField(default=True)
 
+    # --- кто может упоминать ЭТУ роль (@RoleName) ---------------------------
+    # Не путать с manage_roles (управление ролью) — это про то, чьё сообщение
+    # с "@ИмяРоли" в тексте вообще СЧИТАЕТСЯ пингом её участников, а не просто
+    # текстом. Проверяется на клиенте при подсчёте непрочитанного/уведомлений
+    # (см. web/src/mentions.ts) — сама отправка сообщения этим не режется:
+    # "@ИмяРоли" от того, кому нельзя её пинговать, долетает как обычный
+    # текст, просто не поднимает уведомление участникам роли.
+    MENTION_EVERYONE = "everyone"
+    MENTION_ROLES = "roles"
+    MENTION_PERMISSION_CHOICES = [
+        (MENTION_EVERYONE, "Все участники сервера"),
+        (MENTION_ROLES, "Только выбранные роли"),
+    ]
+    mention_permission = models.CharField(
+        max_length=10, choices=MENTION_PERMISSION_CHOICES, default=MENTION_EVERYONE)
+    # Имеет смысл только при mention_permission=MENTION_ROLES — набор ролей,
+    # УЧАСТНИКИ которых вправе пинговать эту роль. self-M2M несимметричный:
+    # «роль A разрешает роли B пинговать себя» не означает обратного.
+    mentionable_by = models.ManyToManyField(
+        "self", blank=True, symmetrical=False, related_name="can_mention")
+
     class Meta:
         ordering = ["-position", "id"]
 
@@ -104,6 +127,15 @@ class Role(models.Model):
 
 
 class Membership(models.Model):
+    NOTIFY_ALL = "all"
+    NOTIFY_MENTIONS = "mentions"
+    NOTIFY_NONE = "none"
+    NOTIFY_CHOICES = [
+        (NOTIFY_ALL, "Все сообщения"),
+        (NOTIFY_MENTIONS, "Только упоминания"),
+        (NOTIFY_NONE, "Ничего"),
+    ]
+
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
@@ -119,11 +151,42 @@ class Membership(models.Model):
     # на всех участников, см. chat.roles.permissions_for.
     roles = models.ManyToManyField(Role, blank=True, related_name="members")
 
+    # --- личные настройки уведомлений/приватности для ЭТОГО сервера --------
+    # Ничего из этого не влияет на доставку сообщений (WS как и раньше шлёт
+    # всё всем участникам группы сервера) — это чисто клиентский фильтр
+    # "показывать ли непрочитанное/бейдж", см. AppShell.computeChannelNotice.
+    notification_level = models.CharField(
+        max_length=10, choices=NOTIFY_CHOICES, default=NOTIFY_ALL)
+    # Заглушение на срок — muted_until в будущем; "навсегда" — отдельный флаг,
+    # а не сигнальная дата (null=NaN-в-будущем неотличим от "забыли поставить").
+    muted_until = models.DateTimeField(null=True, blank=True)
+    muted_forever = models.BooleanField(default=False)
+    # Не поднимать уведомление на буквальные "@all"/"@here" в сообщении.
+    ignore_at_here = models.BooleanField(default=False)
+    # Не поднимать уведомление на упоминание ролей, которые у меня есть —
+    # личный отказ, независимый от Role.mention_permission (тот решает, чьё
+    # "@ИмяРоли" вообще считается пингом; этот — хочу ли я его видеть).
+    suppress_role_mentions = models.BooleanField(default=False)
+    # Разрешить ЛС от других участников ЭТОГО сервера — работает как
+    # дополнительное разрешение поверх accounts.User.dm_privacy, а не замена:
+    # при dm_privacy=FRIENDS не-друг всё равно сможет написать, если делит с
+    # адресатом сервер, где у адресата этот флаг включён (см. chat.permissions
+    # .can_dm). При dm_privacy=NOBODY это исключение не действует — «никто»
+    # значит никто, даже через сервер.
+    allow_dms_from_server = models.BooleanField(default=True)
+
     class Meta:
         unique_together = ("user", "server")
 
     def __str__(self) -> str:
         return f"{self.user} @ {self.server}"
+
+    def is_muted(self, now=None) -> bool:
+        if self.muted_forever:
+            return True
+        if self.muted_until is None:
+            return False
+        return self.muted_until > (now or timezone.now())
 
 
 class ServerJoinRequest(models.Model):
@@ -168,6 +231,70 @@ class ServerBan(models.Model):
 
     def __str__(self) -> str:
         return f"{self.user} banned @ {self.server}"
+
+
+def _invite_code() -> str:
+    return secrets.token_urlsafe(6)
+
+
+class ServerInvite(models.Model):
+    """Приглашение на сервер — двух видов, отличаются семантикой погашения.
+
+    DIRECT — адресное приглашение конкретному человеку (см.
+    chat.views.ServerInvites): одна строка на пару (сервер, приглашённый),
+    исчезает по принятию/отклонению — как ServerJoinRequest, только
+    инициатор не владелец/модератор, а любой участник, и одобрения не
+    требуется (сам факт приглашения от участника — уже разрешение).
+
+    LINK — постоянная многоразовая ссылка сервера (chat.views.ServerInviteLink/
+    ServerInviteRedeem): не привязана к конкретному человеку, строка не
+    удаляется при использовании (иначе ссылка работала бы один раз).
+
+    Оба вида бьют мимо Server.access_mode — обладание приглашением/ссылкой
+    и есть авторизация, независимо от того, «только по приглашению» сервер,
+    «по заявке» или публичный. Бан по-прежнему блокирует (см. вьюхи).
+    """
+
+    DIRECT = "direct"
+    LINK = "link"
+    KIND_CHOICES = [(DIRECT, "Личное приглашение"), (LINK, "Ссылка")]
+
+    server = models.ForeignKey(
+        Server, on_delete=models.CASCADE, related_name="invites")
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+        related_name="created_server_invites")
+    kind = models.CharField(max_length=10, choices=KIND_CHOICES)
+    # Только для DIRECT.
+    invited_user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, null=True,
+        blank=True, related_name="received_server_invites")
+    # Только для LINK — короткий непредсказуемый токен в самой ссылке.
+    code = models.CharField(max_length=16, blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at", "id"]
+        constraints = [
+            # Не больше одного ЛИЧНОГО приглашения от сервера этому человеку
+            # разом — иначе повторные "Пригласить" плодили бы дубли в списке.
+            models.UniqueConstraint(
+                fields=["server", "invited_user"],
+                condition=models.Q(kind="direct"),
+                name="unique_direct_server_invite",
+            ),
+            # Код ссылки уникален глобально (это и есть весь секрет ссылки).
+            models.UniqueConstraint(
+                fields=["code"],
+                condition=models.Q(kind="link"),
+                name="unique_server_invite_link_code",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        if self.kind == self.LINK:
+            return f"link:{self.code} -> {self.server}"
+        return f"{self.invited_user} -> {self.server}"
 
 
 class Channel(models.Model):

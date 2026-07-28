@@ -76,8 +76,20 @@ export default function MessageInput({
   const [staged, setStaged] = useState<StagedFile[]>([])
   const [emojiAnchor, setEmojiAnchor] = useState<EmojiPickerAnchor | null>(null)
   const [dragging, setDragging] = useState(false)
-  const inputRef = useRef<HTMLInputElement>(null)
+  const inputRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+
+  // Высота textarea растёт вместе с текстом (до предела в CSS max-height,
+  // дальше — собственный скролл). height:auto сначала — иначе браузер меряет
+  // scrollHeight от уже растянутой высоты и никогда не даёт полю сжаться
+  // обратно после удаления строк.
+  const autoGrow = useCallback(() => {
+    const el = inputRef.current
+    if (!el) return
+    el.style.height = 'auto'
+    el.style.height = `${el.scrollHeight}px`
+  }, [])
+  useEffect(autoGrow, [value, autoGrow])
   // Глубина вложенности dragenter/dragleave: события приходят и от дочерних
   // элементов, и по одному dragleave подсветка гасла бы, стоило курсору
   // проехать над кнопкой внутри зоны.
@@ -185,8 +197,8 @@ export default function MessageInput({
     .map((f) => f.uploaded)
     .filter((a): a is Attachment => a !== null)
 
-  const submit = (e: React.FormEvent) => {
-    e.preventDefault()
+  const submit = (e?: React.FormEvent) => {
+    e?.preventDefault()
     const content = value.trim()
     if (editTarget) {
       // Редактируется только текст: менять состав вложений задним числом
@@ -206,10 +218,19 @@ export default function MessageInput({
     clearStaged()
   }
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Escape' && editTarget) {
       onCancelEdit()
       setValue('')
+      return
+    }
+    // Enter отправляет, Shift+Enter — перенос строки (стандартный textarea
+    // ничего не отправляет по Enter сам по себе, так что перехватываем явно).
+    // isComposing — чтобы Enter, подтверждающий раскладку ввода (IME, для
+    // китайского/японского/корейского текста), не улетал отправкой сообщения.
+    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+      e.preventDefault()
+      submit()
     }
   }
 
@@ -362,8 +383,9 @@ export default function MessageInput({
             e.target.value = ''
           }}
         />
-        <input
+        <textarea
           ref={inputRef}
+          rows={1}
           value={value}
           onChange={(e) => setValue(e.target.value)}
           onKeyDown={handleKeyDown}

@@ -5,6 +5,7 @@ mesh-сигналинга offer/answer/ice в gateway больше нет.
 """
 import asyncio
 import base64
+from datetime import timedelta
 import hashlib
 import hmac
 import io
@@ -22,6 +23,7 @@ from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import IntegrityError
 from django.test import TestCase, TransactionTestCase
+from django.utils import timezone
 from PIL import Image as PILImage
 from rest_framework.test import APIClient, APITestCase
 from rest_framework_simplejwt.tokens import AccessToken
@@ -32,8 +34,10 @@ from .middleware import JWTAuthMiddleware
 from .models import (
     Attachment, Channel, Conversation, ConversationParticipant,
     MAX_ATTACHMENT_BYTES, MAX_REACTIONS_PER_MESSAGE, Membership, Message,
-    Reaction, Role, Server, ServerJoinRequest, dm_room,
+    Reaction, Role, Server, ServerBan, ServerInvite, ServerJoinRequest,
+    dm_room,
 )
+from .permissions import can_dm
 
 User = get_user_model()
 
@@ -2230,3 +2234,355 @@ class ReactionAndDeliveryTests(TransactionTestCase):
             Reaction.objects.filter(message_id=message_id).count)()
         self.assertEqual(left, 0)
         await ws.disconnect()
+
+
+class ServerNotificationSettingsTests(APITestCase):
+    """Личные настройки уведомлений/заглушения — GET/PATCH
+    /api/servers/<id>/settings. Не требуют никакого права сверх членства."""
+
+    def setUp(self):
+        self.owner = User.objects.create_user(username="ns_owner", password="pw12345")
+        self.member = User.objects.create_user(username="ns_member", password="pw12345")
+        self.outsider = User.objects.create_user(username="ns_out", password="pw12345")
+        self.server = Server.objects.create(name="s", owner=self.owner)
+        Membership.objects.create(user=self.owner, server=self.server)
+        Membership.objects.create(user=self.member, server=self.server)
+
+    def test_default_settings(self):
+        self.client.force_authenticate(self.member)
+        resp = self.client.get(f"/api/servers/{self.server.id}/settings")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data["notification_level"], "all")
+        self.assertFalse(resp.data["muted"])
+        self.assertTrue(resp.data["allow_dms_from_server"])
+
+    def test_non_member_cannot_read_or_write_settings(self):
+        self.client.force_authenticate(self.outsider)
+        self.assertEqual(
+            self.client.get(f"/api/servers/{self.server.id}/settings").status_code, 404)
+        self.assertEqual(
+            self.client.patch(
+                f"/api/servers/{self.server.id}/settings",
+                {"notification_level": "none"}, format="json").status_code,
+            404,
+        )
+
+    def test_change_notification_level(self):
+        self.client.force_authenticate(self.member)
+        resp = self.client.patch(
+            f"/api/servers/{self.server.id}/settings",
+            {"notification_level": "mentions"}, format="json")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data["notification_level"], "mentions")
+        membership = Membership.objects.get(user=self.member, server=self.server)
+        self.assertEqual(membership.notification_level, Membership.NOTIFY_MENTIONS)
+
+    def test_mute_for_duration(self):
+        self.client.force_authenticate(self.member)
+        resp = self.client.patch(
+            f"/api/servers/{self.server.id}/settings",
+            {"mute_minutes": 30}, format="json")
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(resp.data["muted"])
+        self.assertFalse(resp.data["muted_forever"])
+        membership = Membership.objects.get(user=self.member, server=self.server)
+        self.assertTrue(membership.is_muted())
+        self.assertLess(
+            membership.muted_until, timezone.now() + timedelta(minutes=31))
+
+    def test_mute_forever_then_unmute(self):
+        self.client.force_authenticate(self.member)
+        resp = self.client.patch(
+            f"/api/servers/{self.server.id}/settings",
+            {"mute_forever": True}, format="json")
+        self.assertTrue(resp.data["muted"])
+        self.assertTrue(resp.data["muted_forever"])
+
+        resp = self.client.patch(
+            f"/api/servers/{self.server.id}/settings",
+            {"unmute": True}, format="json")
+        self.assertFalse(resp.data["muted"])
+        self.assertFalse(resp.data["muted_forever"])
+        self.assertIsNone(resp.data["muted_until"])
+
+    def test_invalid_mute_minutes_rejected(self):
+        self.client.force_authenticate(self.member)
+        for bad in (0, -5, 60 * 24 * 31):
+            resp = self.client.patch(
+                f"/api/servers/{self.server.id}/settings",
+                {"mute_minutes": bad}, format="json")
+            self.assertEqual(resp.status_code, 400, msg=f"mute_minutes={bad}")
+
+    def test_conflicting_mute_ops_rejected(self):
+        self.client.force_authenticate(self.member)
+        resp = self.client.patch(
+            f"/api/servers/{self.server.id}/settings",
+            {"mute_minutes": 30, "mute_forever": True}, format="json")
+        self.assertEqual(resp.status_code, 400)
+
+    def test_settings_surface_on_server_list(self):
+        """my_settings приезжает вместе со списком серверов — без отдельного
+        похода за каждым, см. ServerSerializer.get_my_settings."""
+        Membership.objects.filter(user=self.member, server=self.server).update(
+            notification_level=Membership.NOTIFY_NONE, muted_forever=True)
+        self.client.force_authenticate(self.member)
+        resp = self.client.get("/api/servers")
+        entry = next(s for s in resp.data if s["id"] == self.server.id)
+        self.assertEqual(entry["my_settings"]["notification_level"], "none")
+        self.assertTrue(entry["my_settings"]["muted"])
+
+
+class RoleMentionPermissionTests(APITestCase):
+    """Кто может пинговать роль (Role.mention_permission/mentionable_by)."""
+
+    def setUp(self):
+        self.owner = User.objects.create_user(username="rm_owner", password="pw12345")
+        self.mod = User.objects.create_user(username="rm_mod", password="pw12345")
+        self.member = User.objects.create_user(username="rm_member", password="pw12345")
+        self.server = Server.objects.create(name="s", owner=self.owner)
+        for u in (self.owner, self.mod, self.member):
+            Membership.objects.create(user=u, server=self.server)
+        self.default_role = roles.create_default_role(self.server)
+        self.mod_role = Role.objects.create(
+            server=self.server, name="Модератор", position=10, manage_roles=True)
+        Membership.objects.get(user=self.mod, server=self.server).roles.add(self.mod_role)
+
+    def test_role_defaults_to_mentionable_by_everyone(self):
+        self.client.force_authenticate(self.owner)
+        resp = self.client.get(f"/api/servers/{self.server.id}/roles")
+        target = next(r for r in resp.data if r["id"] == self.mod_role.id)
+        self.assertEqual(target["mention_permission"], "everyone")
+        self.assertEqual(target["mentionable_by"], [])
+
+    def test_restrict_mention_to_selected_roles(self):
+        # Заводим отдельную роль "Пинговать модеров" и разрешаем именно ей.
+        self.client.force_authenticate(self.owner)
+        pinger_role = self.client.post(
+            f"/api/servers/{self.server.id}/roles",
+            {"name": "Может звать модеров", "position": 1}, format="json").data
+
+        resp = self.client.patch(
+            f"/api/servers/{self.server.id}/roles/{self.mod_role.id}",
+            {"mention_permission": "roles", "mentionable_by": [pinger_role["id"]]},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data["mention_permission"], "roles")
+        self.assertEqual(resp.data["mentionable_by"], [pinger_role["id"]])
+
+    def test_mentionable_by_rejects_role_from_another_server(self):
+        other_server = Server.objects.create(name="other", owner=self.owner)
+        foreign_role = Role.objects.create(
+            server=other_server, name="Чужая", position=1)
+        self.client.force_authenticate(self.owner)
+        resp = self.client.patch(
+            f"/api/servers/{self.server.id}/roles/{self.mod_role.id}",
+            {"mention_permission": "roles", "mentionable_by": [foreign_role.id]},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 400)
+
+    def test_editing_mentionable_by_still_requires_manage_roles(self):
+        self.client.force_authenticate(self.member)
+        resp = self.client.patch(
+            f"/api/servers/{self.server.id}/roles/{self.mod_role.id}",
+            {"mentionable_by": []}, format="json")
+        self.assertEqual(resp.status_code, 403)
+
+
+class ServerInviteTests(APITestCase):
+    """Приглашения — личные (direct) и по ссылке (link). Оба обходят
+    access_mode целиком; бан по-прежнему блокирует вход."""
+
+    def setUp(self):
+        self.owner = User.objects.create_user(username="inv_owner", password="pw12345")
+        self.member = User.objects.create_user(username="inv_member", password="pw12345")
+        self.friend = User.objects.create_user(username="inv_friend", password="pw12345")
+        self.server = Server.objects.create(
+            name="s", owner=self.owner, access_mode=Server.ACCESS_INVITE)
+        Membership.objects.create(user=self.owner, server=self.server)
+        Membership.objects.create(user=self.member, server=self.server)
+
+    def test_member_can_invite_to_invite_only_server(self):
+        self.client.force_authenticate(self.member)
+        resp = self.client.post(
+            f"/api/servers/{self.server.id}/invites",
+            {"user_id": self.friend.id}, format="json")
+        self.assertEqual(resp.status_code, 201)
+
+        self.client.force_authenticate(self.friend)
+        mine = self.client.get("/api/invites").data
+        self.assertEqual(len(mine), 1)
+        invite_id = mine[0]["id"]
+
+        # Обычный join по-прежнему отказал бы — access_mode=invite.
+        self.assertEqual(
+            self.client.post(f"/api/servers/{self.server.id}/join").status_code, 403)
+
+        accept = self.client.post(f"/api/invites/{invite_id}")
+        self.assertEqual(accept.status_code, 200)
+        self.assertTrue(
+            Membership.objects.filter(user=self.friend, server=self.server).exists())
+        self.assertFalse(ServerInvite.objects.filter(id=invite_id).exists())
+
+    def test_invite_duplicate_is_idempotent(self):
+        self.client.force_authenticate(self.member)
+        first = self.client.post(
+            f"/api/servers/{self.server.id}/invites",
+            {"user_id": self.friend.id}, format="json")
+        second = self.client.post(
+            f"/api/servers/{self.server.id}/invites",
+            {"user_id": self.friend.id}, format="json")
+        self.assertEqual(first.data["id"], second.data["id"])
+        self.assertEqual(ServerInvite.objects.count(), 1)
+
+    def test_cannot_invite_existing_member(self):
+        self.client.force_authenticate(self.member)
+        resp = self.client.post(
+            f"/api/servers/{self.server.id}/invites",
+            {"user_id": self.owner.id}, format="json")
+        self.assertEqual(resp.status_code, 400)
+
+    def test_banned_user_cannot_be_invited(self):
+        ServerBan.objects.create(server=self.server, user=self.friend)
+        self.client.force_authenticate(self.member)
+        resp = self.client.post(
+            f"/api/servers/{self.server.id}/invites",
+            {"user_id": self.friend.id}, format="json")
+        self.assertEqual(resp.status_code, 400)
+
+    def test_banned_invitee_cannot_accept(self):
+        self.client.force_authenticate(self.member)
+        invite = self.client.post(
+            f"/api/servers/{self.server.id}/invites",
+            {"user_id": self.friend.id}, format="json").data
+
+        ServerBan.objects.create(server=self.server, user=self.friend)
+        self.client.force_authenticate(self.friend)
+        resp = self.client.post(f"/api/invites/{invite['id']}")
+        self.assertEqual(resp.status_code, 403)
+        self.assertFalse(
+            Membership.objects.filter(user=self.friend, server=self.server).exists())
+
+    def test_decline_invite(self):
+        self.client.force_authenticate(self.member)
+        invite = self.client.post(
+            f"/api/servers/{self.server.id}/invites",
+            {"user_id": self.friend.id}, format="json").data
+
+        self.client.force_authenticate(self.friend)
+        resp = self.client.delete(f"/api/invites/{invite['id']}")
+        self.assertEqual(resp.status_code, 204)
+        self.assertFalse(ServerInvite.objects.filter(id=invite["id"]).exists())
+
+    def test_link_is_stable_across_requests(self):
+        self.client.force_authenticate(self.owner)
+        first = self.client.get(f"/api/servers/{self.server.id}/invite-link").data
+        second = self.client.get(f"/api/servers/{self.server.id}/invite-link").data
+        self.assertEqual(first["code"], second["code"])
+        self.assertEqual(
+            ServerInvite.objects.filter(server=self.server, kind=ServerInvite.LINK).count(), 1)
+
+    def test_redeem_link_joins_invite_only_server(self):
+        self.client.force_authenticate(self.owner)
+        code = self.client.get(f"/api/servers/{self.server.id}/invite-link").data["code"]
+
+        self.client.force_authenticate(self.friend)
+        resp = self.client.post("/api/invites/redeem", {"code": code}, format="json")
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(
+            Membership.objects.filter(user=self.friend, server=self.server).exists())
+
+        # Ссылка многоразовая — второй редимпшен той же ссылки другим тоже
+        # проходит и не портит уже созданное членство.
+        another = User.objects.create_user(username="inv_another", password="pw12345")
+        self.client.force_authenticate(another)
+        resp2 = self.client.post("/api/invites/redeem", {"code": code}, format="json")
+        self.assertEqual(resp2.status_code, 200)
+        self.assertTrue(
+            Membership.objects.filter(user=another, server=self.server).exists())
+
+    def test_redeem_unknown_code(self):
+        self.client.force_authenticate(self.friend)
+        resp = self.client.post(
+            "/api/invites/redeem", {"code": "not-a-real-code"}, format="json")
+        self.assertEqual(resp.status_code, 404)
+
+    def test_banned_user_cannot_redeem_link(self):
+        self.client.force_authenticate(self.owner)
+        code = self.client.get(f"/api/servers/{self.server.id}/invite-link").data["code"]
+        ServerBan.objects.create(server=self.server, user=self.friend)
+
+        self.client.force_authenticate(self.friend)
+        resp = self.client.post("/api/invites/redeem", {"code": code}, format="json")
+        self.assertEqual(resp.status_code, 403)
+
+
+class ServerLeaveTests(APITestCase):
+    def setUp(self):
+        self.owner = User.objects.create_user(username="lv_owner", password="pw12345")
+        self.member = User.objects.create_user(username="lv_member", password="pw12345")
+        self.server = Server.objects.create(name="s", owner=self.owner)
+        Membership.objects.create(user=self.owner, server=self.server)
+        Membership.objects.create(user=self.member, server=self.server)
+
+    def test_member_can_leave(self):
+        self.client.force_authenticate(self.member)
+        resp = self.client.delete(f"/api/servers/{self.server.id}/leave")
+        self.assertEqual(resp.status_code, 204)
+        self.assertFalse(
+            Membership.objects.filter(user=self.member, server=self.server).exists())
+
+    def test_owner_cannot_leave(self):
+        self.client.force_authenticate(self.owner)
+        resp = self.client.delete(f"/api/servers/{self.server.id}/leave")
+        self.assertEqual(resp.status_code, 400)
+        self.assertTrue(
+            Membership.objects.filter(user=self.owner, server=self.server).exists())
+
+    def test_non_member_cannot_leave(self):
+        outsider = User.objects.create_user(username="lv_out", password="pw12345")
+        self.client.force_authenticate(outsider)
+        resp = self.client.delete(f"/api/servers/{self.server.id}/leave")
+        self.assertEqual(resp.status_code, 403)
+
+
+class CrossServerDmPrivacyTests(APITestCase):
+    """can_dm: общий сервер с allow_dms_from_server=True даёт исключение из
+    dm_privacy=FRIENDS, но не из dm_privacy=NOBODY."""
+
+    def setUp(self):
+        self.a = User.objects.create_user(username="dm_a", password="pw12345")
+        self.b = User.objects.create_user(username="dm_b", password="pw12345")
+        self.server = Server.objects.create(name="s", owner=self.b)
+        Membership.objects.create(user=self.a, server=self.server)
+        Membership.objects.create(user=self.b, server=self.server)
+
+    def test_friends_only_blocks_stranger_without_shared_server_opt_in(self):
+        self.b.dm_privacy = self.b.DM_FRIENDS
+        self.b.save(update_fields=["dm_privacy"])
+        Membership.objects.filter(user=self.b, server=self.server).update(
+            allow_dms_from_server=False)
+        self.assertFalse(can_dm(self.a, self.b))
+
+    def test_friends_only_allows_via_shared_server_opt_in(self):
+        self.b.dm_privacy = self.b.DM_FRIENDS
+        self.b.save(update_fields=["dm_privacy"])
+        # allow_dms_from_server=True — дефолт, не трогаем.
+        self.assertTrue(can_dm(self.a, self.b))
+
+    def test_nobody_blocks_even_with_shared_server_opt_in(self):
+        self.b.dm_privacy = self.b.DM_NOBODY
+        self.b.save(update_fields=["dm_privacy"])
+        self.assertFalse(can_dm(self.a, self.b))
+
+    def test_dm_creation_endpoint_honors_shared_server_exception(self):
+        self.b.dm_privacy = self.b.DM_FRIENDS
+        self.b.save(update_fields=["dm_privacy"])
+        self.client.force_authenticate(self.a)
+        resp = self.client.post(
+            "/api/conversations",
+            {"kind": "dm", "user_ids": [self.b.id]}, format="json")
+        # 201 — новый диалог создан (первый между этой парой); can_dm() уже
+        # пройден внутри _create_dm, до создания Conversation.
+        self.assertEqual(resp.status_code, 201)
