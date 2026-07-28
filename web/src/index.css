@@ -4848,51 +4848,66 @@ button.settings-row-clickable:hover .settings-row-label {
    МОБИЛЬНЫЙ АДАПТИВ — брейкпоинт синхронизирован с useIsMobile()
    (web/src/hooks/useIsMobile.ts, по умолчанию тоже 768px).
    =================================================================== */
+/* .mobile-nav-pane (обёртка ServerRail+сайдбар, см. AppShell.tsx) — на ПК
+   должна быть невидима для layout'а: display:contents убирает у неё
+   собственный box, ServerRail/сайдбар остаются прямыми grid-items .app,
+   как будто обёртки нет вовсе. Вне @media — действует всегда, кроме
+   случаев ниже, где мобильный брейкпоинт явно её включает как flex. */
+.mobile-nav-pane {
+  display: contents;
+}
+
 @media (max-width: 768px) {
-  /* ---- layout: nav-экран (рельса+сайдбар каналов) vs content-экран
-     (main.chat — текстовый чат или VoiceStage) на весь экран, между ними
-     slide-переход. Класс is-mobile/screen-* — на .app, см. AppShell.tsx. --- */
+  /* ---- layout: nav-экран (.mobile-nav-pane — рельса+сайдбар каналов
+     единым блоком) vs content-экран (main.chat — текстовый чат или
+     VoiceStage) на весь экран, между ними slide-переход. Класс
+     is-mobile/screen-* — на .app, см. AppShell.tsx. ----
+     Оба "экрана" — честные 100%-ширины блоки (не inset:0 вперемешку с
+     одиночным left/right — это даёт width:0, а не 100%, и ломает раскладку
+     целиком), сдвигаются через transform, а не left/right, — так их ширина
+     всегда 100% контейнера независимо от текущего смещения. */
   .app.is-mobile {
     position: relative;
     display: block;
     overflow: hidden;
   }
 
-  .app.is-mobile .server-rail,
-  .app.is-mobile .channel-sidebar {
+  .app.is-mobile .mobile-nav-pane {
+    display: flex;
     position: absolute;
-    top: 0;
-    bottom: 0;
-    transform: translateX(0);
+    inset: 0;
     transition: transform 0.25s ease;
   }
 
   .app.is-mobile .server-rail {
-    left: 0;
     width: 72px;
+    flex-shrink: 0;
   }
 
   /* .channel-sidebar — общий класс и у ChannelSidebar, и у HomeSidebar (см.
      HomeSidebar.tsx корневой className="channel-sidebar home-sidebar"). */
   .app.is-mobile .channel-sidebar {
-    left: 72px;
-    right: 0;
+    flex: 1;
+    min-width: 0;
   }
 
   .app.is-mobile main.chat {
     position: absolute;
-    inset: 0;
-    left: 100%;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    width: 100%;
+    transform: translateX(100%);
     transition: transform 0.25s ease;
   }
 
-  .app.is-mobile.screen-content .server-rail,
-  .app.is-mobile.screen-content .channel-sidebar {
+  .app.is-mobile.screen-content .mobile-nav-pane {
     transform: translateX(-100%);
   }
 
   .app.is-mobile.screen-content main.chat {
-    transform: translateX(-100%);
+    transform: translateX(0);
   }
 
   /* Список участников сервера (4-я колонка на ПК) на мобилке не показываем
@@ -4902,12 +4917,16 @@ button.settings-row-clickable:hover .settings-row-label {
     display: none;
   }
 
-  /* .sidebar-bottom на ПК намеренно 312px = 72px рельсы + 240px сайдбара
-     (см. комментарий у .channel-sidebar выше в файле) — на мобилке сайдбар
-     занимает не 240px, а (100vw - 72px), поэтому вместо фиксированной
-     ширины растягиваем от правого края рельсы до правого края экрана. */
+  /* .sidebar-bottom живёт внутри .channel-sidebar (position:relative — см.
+     правило этого класса выше в файле), а тот на мобилке занимает не всю
+     ширину экрана, а только то, что осталось после 72px рельсы (см.
+     .app.is-mobile .channel-sidebar выше). Чтобы панель пользователя
+     реально была на всю ширину экрана (как просили) — растягиваем её
+     влево ЗА пределы собственного контейнера ровно на ширину рельсы,
+     тот же приём, что и на ПК (там .sidebar-bottom 312px = 72+240 по той
+     же причине, см. комментарий у .channel-sidebar). */
   .sidebar-bottom {
-    left: 72px;
+    left: -72px;
     right: 0;
     width: auto;
   }

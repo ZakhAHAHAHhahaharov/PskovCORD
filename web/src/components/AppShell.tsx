@@ -1792,6 +1792,12 @@ export default function AppShell() {
   return (
     <VoiceProvider voice={voice} onStatus={handleVoiceStatus}>
     <div className={isMobile ? `app is-mobile screen-${mobileScreen}` : 'app'}>
+      {/* На ПК — display:contents (см. index.css), обёртка "исчезает" из
+          layout'а: ServerRail и сайдбар остаются прямыми grid-items .app,
+          как раньше. На мобилке становится реальным flex-контейнером —
+          единая "nav-панель" (рельса+сайдбар), которая двигается как один
+          блок при слайд-переходе в content-экран (см. .mobile-nav-pane). */}
+      <div className="mobile-nav-pane">
       <ServerRail
         servers={servers}
         activeId={serverId}
@@ -1859,6 +1865,7 @@ export default function AppShell() {
           onOpenParticipantProfile={openProfilePopup}
         />
       )}
+      </div>
 
       <main className={`chat ${currentChannel?.kind === 'voice' ? 'chat-voice' : ''}`}>
         {serverId == null ? (
