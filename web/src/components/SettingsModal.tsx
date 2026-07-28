@@ -5,19 +5,22 @@ import {
   Mic,
   AudioWaveform,
   X,
-  Check,
   User as UserIcon,
   Image as ImageIcon,
   Palette,
   Monitor,
   Heart,
   ChevronRight,
+  ChevronLeft,
   Trash2,
   Loader2,
 } from 'lucide-react'
 import { useSettings, DEFAULT_SETTINGS, ThemeChoice } from '../settings'
 import { useAuth } from '../auth'
+import { useEscToClose } from '../modalStack'
 import { api, Session } from '../api'
+
+const APP_NAME: string = import.meta.env.VITE_APP_NAME || 'PskovCord'
 
 // RMS, соответствующий 100% ширины шкалы чувствительности — обычная громкая
 // речь в микрофон редко превышает это значение. Порог живёт в её левой
@@ -278,44 +281,64 @@ function ThemePicker() {
 }
 
 /** Строка "лейбл + текущее значение + квадратная кнопка" — общий вид для
- * простых полей учётной записи (ник, пароль, 2FA). */
-function UsernameRow() {
+ * простых полей учётной записи (ник, пароль, 2FA). Действие открывает
+ * отдельное модальное окно (см. UsernameChangeModal/PasswordChangeModal) —
+ * не редактируется инлайн. */
+function UsernameRow({ onOpen }: { onOpen: () => void }) {
+  const { user } = useAuth()
+  if (!user) return null
+  return (
+    <div className="settings-row">
+      <div className="settings-row-info">
+        <div className="settings-row-label">Имя пользователя</div>
+        <div className="settings-row-value">{user.username}</div>
+      </div>
+      <button className="settings-row-edit" onClick={onOpen}>
+        Изменить
+      </button>
+    </div>
+  )
+}
+
+function PasswordRow({ onOpen }: { onOpen: () => void }) {
+  return (
+    <div className="settings-row">
+      <div className="settings-row-info">
+        <div className="settings-row-label">Пароль</div>
+        <div className="settings-row-value">••••••••</div>
+      </div>
+      <button className="settings-row-edit" onClick={onOpen}>
+        Изменить
+      </button>
+    </div>
+  )
+}
+
+/** Смена ника — требует текущий пароль (см. backend
+ * ProfileUpdateSerializer.validate): ник виден всем и первое, что видит
+ * владелец при угоне сессии, — проверка пароля ловит момент, когда кто-то с
+ * чужим access-токеном пытается тихо переименовать аккаунт себе. */
+function UsernameChangeModal({ onClose }: { onClose: () => void }) {
+  useEscToClose(onClose)
   const { user, updateLocalUser } = useAuth()
-  const [editing, setEditing] = useState(false)
-  const [value, setValue] = useState(user?.username ?? '')
+  const [password, setPassword] = useState('')
+  const [username, setUsername] = useState(user?.username ?? '')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
 
   if (!user) return null
 
-  const startEdit = () => {
-    setValue(user.username)
-    setError('')
-    setEditing(true)
-  }
-  const cancel = () => {
-    setEditing(false)
-    setError('')
-  }
+  const trimmed = username.trim()
+  const canSubmit = password.length > 0 && trimmed.length > 0 && trimmed !== user.username
+
   const save = async () => {
-    const trimmed = value.trim()
-    if (!trimmed) {
-      setError('Ник не может быть пустым.')
-      return
-    }
-    if (trimmed === user.username) {
-      setEditing(false)
-      return
-    }
+    if (!canSubmit) return
     setSaving(true)
     setError('')
     try {
-      // Смена ника — обычный PATCH /api/auth/me, никак не трогает
-      // access/refresh — в отличие от смены пароля, здесь НЕ должно
-      // разлогинивать.
-      const updated = await api.updateProfile({ username: trimmed })
+      const updated = await api.updateProfile({ username: trimmed, current_password: password })
       updateLocalUser(updated)
-      setEditing(false)
+      onClose()
     } catch (err) {
       setError((err as Error).message)
     } finally {
@@ -324,65 +347,49 @@ function UsernameRow() {
   }
 
   return (
-    <>
-      <div className="settings-row">
-        <div className="settings-row-info">
-          <div className="settings-row-label">Имя пользователя</div>
-          {editing ? (
-            <input
-              className="settings-row-input"
-              value={value}
-              onChange={(e) => setValue(e.target.value)}
-              maxLength={150}
-              autoFocus
-              onKeyDown={(e) => e.key === 'Enter' && save()}
-            />
-          ) : (
-            <div className="settings-row-value">{user.username}</div>
-          )}
-        </div>
-        {editing ? (
-          <div className="settings-row-actions">
-            <button className="settings-row-icon-btn" title="Отмена" onClick={cancel} disabled={saving}>
-              <X size={15} />
-            </button>
-            <button
-              className="settings-row-icon-btn primary"
-              title="Сохранить"
-              onClick={save}
-              disabled={saving}
-            >
-              {saving ? <Loader2 size={15} className="spin" /> : <Check size={15} />}
-            </button>
-          </div>
-        ) : (
-          <button className="settings-row-edit" onClick={startEdit}>
-            Изменить
-          </button>
-        )}
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <h2 className="modal-title">Изменить имя пользователя</h2>
+
+        <div className="field-label">Текущий пароль</div>
+        <input
+          className="field-input"
+          type="password"
+          autoComplete="current-password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          autoFocus
+        />
+
+        <div className="field-label">Новое имя пользователя</div>
+        <input
+          className="field-input"
+          value={username}
+          onChange={(e) => setUsername(e.target.value)}
+          maxLength={150}
+          onKeyDown={(e) => e.key === 'Enter' && save()}
+        />
+
+        {error && <div className="login-error">{error}</div>}
+
+        <button className="btn-primary" onClick={save} disabled={saving || !canSubmit}>
+          {saving ? <Loader2 size={15} className="spin" /> : 'Сохранить'}
+        </button>
+        <button className="modal-close" onClick={onClose}>
+          Отмена
+        </button>
       </div>
-      {error && <div className="login-error settings-row-error">{error}</div>}
-    </>
+    </div>
   )
 }
 
-function PasswordRow() {
-  const [editing, setEditing] = useState(false)
+function PasswordChangeModal({ onClose }: { onClose: () => void }) {
+  useEscToClose(onClose)
   const [current, setCurrent] = useState('')
   const [next, setNext] = useState('')
   const [next2, setNext2] = useState('')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
-  const [done, setDone] = useState(false)
-
-  const toggle = () => {
-    setEditing((v) => !v)
-    setCurrent('')
-    setNext('')
-    setNext2('')
-    setError('')
-    setDone(false)
-  }
 
   const save = async () => {
     setError('')
@@ -397,11 +404,7 @@ function PasswordRow() {
     setSaving(true)
     try {
       await api.changePassword(current, next)
-      setEditing(false)
-      setCurrent('')
-      setNext('')
-      setNext2('')
-      setDone(true)
+      onClose()
     } catch (err) {
       setError((err as Error).message)
     } finally {
@@ -410,55 +413,47 @@ function PasswordRow() {
   }
 
   return (
-    <>
-      <div className="settings-row">
-        <div className="settings-row-info">
-          <div className="settings-row-label">Пароль</div>
-          <div className="settings-row-value">••••••••</div>
-        </div>
-        <button className="settings-row-edit" onClick={toggle}>
-          {editing ? 'Отмена' : 'Изменить'}
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <h2 className="modal-title">Смена пароля</h2>
+
+        <div className="field-label">Текущий пароль</div>
+        <input
+          className="field-input"
+          type="password"
+          autoComplete="current-password"
+          value={current}
+          onChange={(e) => setCurrent(e.target.value)}
+          autoFocus
+        />
+        <div className="field-label">Новый пароль</div>
+        <input
+          className="field-input"
+          type="password"
+          autoComplete="new-password"
+          value={next}
+          onChange={(e) => setNext(e.target.value)}
+        />
+        <div className="field-label">Повторите новый пароль</div>
+        <input
+          className="field-input"
+          type="password"
+          autoComplete="new-password"
+          value={next2}
+          onChange={(e) => setNext2(e.target.value)}
+          onKeyDown={(e) => e.key === 'Enter' && save()}
+        />
+
+        {error && <div className="login-error">{error}</div>}
+
+        <button className="btn-primary" onClick={save} disabled={saving || !current || !next}>
+          {saving ? <Loader2 size={15} className="spin" /> : 'Сохранить'}
+        </button>
+        <button className="modal-close" onClick={onClose}>
+          Отмена
         </button>
       </div>
-      {editing && (
-        <div className="settings-row-form">
-          <input
-            className="field-input"
-            type="password"
-            placeholder="Текущий пароль"
-            autoComplete="current-password"
-            value={current}
-            onChange={(e) => setCurrent(e.target.value)}
-            autoFocus
-          />
-          <input
-            className="field-input"
-            type="password"
-            placeholder="Новый пароль"
-            autoComplete="new-password"
-            value={next}
-            onChange={(e) => setNext(e.target.value)}
-          />
-          <input
-            className="field-input"
-            type="password"
-            placeholder="Повторите новый пароль"
-            autoComplete="new-password"
-            value={next2}
-            onChange={(e) => setNext2(e.target.value)}
-          />
-          {error && <div className="login-error">{error}</div>}
-          <button
-            className="btn-primary settings-row-form-submit"
-            onClick={save}
-            disabled={saving || !current || !next}
-          >
-            {saving ? <Loader2 size={15} className="spin" /> : 'Сменить пароль'}
-          </button>
-        </div>
-      )}
-      {done && !editing && <div className="profile-success">Пароль изменён.</div>}
-    </>
+    </div>
   )
 }
 
@@ -521,7 +516,17 @@ function formatSessionDate(iso: string): string {
   })
 }
 
-function SessionRow({ session }: { session: Session }) {
+function SessionRow({
+  session,
+  onRevoke,
+  revoking,
+}: {
+  session: Session
+  /** Есть только у "других устройств" — свой текущий сеанс так не отзывают,
+   * для него обычный выход (см. backend SessionDetailView.delete — 400). */
+  onRevoke?: () => void
+  revoking?: boolean
+}) {
   return (
     <div className="session-row">
       <Monitor size={18} className="session-row-icon" />
@@ -535,54 +540,153 @@ function SessionRow({ session }: { session: Session }) {
           {formatSessionDate(session.last_seen_at)}
         </div>
       </div>
+      {onRevoke && (
+        <button
+          className="session-row-revoke"
+          title="Завершить сеанс"
+          onClick={onRevoke}
+          disabled={revoking}
+        >
+          {revoking ? <Loader2 size={13} className="spin" /> : <X size={15} />}
+        </button>
+      )}
     </div>
   )
 }
 
-function SessionsRow() {
-  const [expanded, setExpanded] = useState(false)
-  const [sessions, setSessions] = useState<Session[] | null>(null)
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState('')
+/** Строка-триггер "Активные сеансы — Посмотреть >" — открывает detail-view
+ * (см. SettingsModal.detailView), а не аккордеон на месте. */
+function SessionsSummaryRow({ onOpen }: { onOpen: () => void }) {
+  return (
+    <button className="settings-row settings-row-clickable" onClick={onOpen}>
+      <div className="settings-row-info">
+        <div className="settings-row-label">Активные сеансы</div>
+      </div>
+      <span className="settings-row-summary">
+        Посмотреть
+        <ChevronRight size={15} className="settings-chevron" />
+      </span>
+    </button>
+  )
+}
 
-  const toggle = async () => {
-    const next = !expanded
-    setExpanded(next)
-    if (next && sessions === null) {
-      setLoading(true)
-      setError('')
-      try {
-        setSessions(await api.getSessions())
-      } catch (err) {
-        setError((err as Error).message)
-      } finally {
-        setLoading(false)
-      }
+/** Detail-view "Активные сеансы" — подменяет собой весь settings-content
+ * (см. SettingsModal), пока подкатегория в сайдбаре по-прежнему подсвечивает
+ * "Пароль и безопасность", которой этот экран принадлежит. */
+function SessionsDetailView({ onBack }: { onBack: () => void }) {
+  const [sessions, setSessions] = useState<Session[] | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [revokingId, setRevokingId] = useState<number | null>(null)
+  const [revokingAll, setRevokingAll] = useState(false)
+
+  const load = async () => {
+    setLoading(true)
+    setError('')
+    try {
+      setSessions(await api.getSessions())
+    } catch (err) {
+      setError((err as Error).message)
+    } finally {
+      setLoading(false)
     }
   }
 
+  useEffect(() => {
+    void load()
+  }, [])
+
+  const revoke = async (id: number) => {
+    setRevokingId(id)
+    try {
+      await api.revokeSession(id)
+      setSessions((prev) => prev?.filter((s) => s.id !== id) ?? null)
+    } catch (err) {
+      window.alert((err as Error).message)
+    } finally {
+      setRevokingId(null)
+    }
+  }
+
+  const revokeAll = async () => {
+    if (
+      !window.confirm(
+        'Выйти на всех известных устройствах? Придётся войти заново на каждом из них, включая это.',
+      )
+    ) {
+      return
+    }
+    setRevokingAll(true)
+    try {
+      await api.revokeAllSessions()
+      await load()
+    } catch (err) {
+      window.alert((err as Error).message)
+    } finally {
+      setRevokingAll(false)
+    }
+  }
+
+  const current = sessions?.find((s) => s.is_current) ?? null
+  const others = sessions?.filter((s) => !s.is_current) ?? []
+
   return (
-    <>
-      <button className="settings-row settings-row-clickable" onClick={toggle}>
-        <div className="settings-row-info">
-          <div className="settings-row-label">Активные сеансы</div>
-        </div>
-        <span className="settings-row-summary">
-          {sessions ? `${sessions.length} устройств` : 'Посмотреть'}
-          <ChevronRight size={15} className={expanded ? 'settings-chevron open' : 'settings-chevron'} />
-        </span>
+    <div className="settings-detail">
+      <button className="settings-detail-back" onClick={onBack}>
+        <ChevronLeft size={16} /> Пароль и безопасность
       </button>
-      {expanded && (
-        <div className="sessions-list">
-          {loading && <div className="settings-hint">Загрузка…</div>}
-          {error && <div className="login-error">{error}</div>}
-          {sessions?.length === 0 && <div className="settings-hint">Нет активных сеансов.</div>}
-          {sessions?.map((s) => (
-            <SessionRow key={s.id} session={s} />
-          ))}
-        </div>
+      <h3 className="settings-section-title">Активные сеансы</h3>
+      <p className="settings-hint">
+        Все устройства, на которых осуществлён вход в учётную запись {APP_NAME}. Выйдите из
+        учётной записи на устройствах, которые вы не узнаёте.
+      </p>
+
+      {loading && <div className="settings-hint">Загрузка…</div>}
+      {error && <div className="login-error">{error}</div>}
+      {/* Едва ли не единственный случай — если этот же сеанс только что сам
+          отозвал все сеансы (смена пароля/«выйти на всех устройствах») и
+          список ещё не наполнился заново. */}
+      {!loading && !error && sessions?.length === 0 && (
+        <div className="settings-hint">Нет активных сеансов.</div>
       )}
-    </>
+
+      {current && (
+        <>
+          <h4 className="settings-detail-subhead">Текущее устройство</h4>
+          <div className="sessions-list">
+            <SessionRow session={current} />
+          </div>
+        </>
+      )}
+
+      {others.length > 0 && (
+        <>
+          <h4 className="settings-detail-subhead">Другие устройства</h4>
+          <div className="sessions-list">
+            {others.map((s) => (
+              <SessionRow
+                key={s.id}
+                session={s}
+                onRevoke={() => revoke(s.id)}
+                revoking={revokingId === s.id}
+              />
+            ))}
+          </div>
+        </>
+      )}
+
+      <div className="settings-danger-zone">
+        <div className="settings-row-label">Выйти на всех известных устройствах</div>
+        <p className="settings-hint">
+          Вам придётся повторно войти в учётную запись на всех устройствах, где вы выполнили
+          вход.
+        </p>
+        <button className="settings-danger-btn" onClick={revokeAll} disabled={revokingAll}>
+          {revokingAll ? <Loader2 size={15} className="spin" /> : <LogOut size={15} />} Выйти на
+          всех известных устройствах
+        </button>
+      </div>
+    </div>
   )
 }
 
@@ -624,8 +728,16 @@ export default function SettingsModal({
     setMicThreshold,
   } = useSettings()
 
+  useEscToClose(onClose)
+
   const [activeCategory, setActiveCategory] = useState(CATEGORIES[0].id)
   const [activeSubcategory, setActiveSubcategory] = useState(CATEGORIES[0].subcategories[0].id)
+  // "Посмотреть >" (например, Активные сеансы) подменяет собой весь
+  // settings-content вместо аккордеона на месте — сайдбар при этом не
+  // трогаем, подкатегория-владелец (см. каждый detailView) остаётся
+  // подсвеченной, как и была.
+  const [detailView, setDetailView] = useState<null | 'sessions'>(null)
+  const [activeModal, setActiveModal] = useState<null | 'username' | 'password'>(null)
   const contentRef = useRef<HTMLDivElement>(null)
   const sectionRefs = useRef<Record<string, HTMLDivElement | null>>({})
 
@@ -659,6 +771,7 @@ export default function SettingsModal({
   }, [currentCategory])
 
   const handleCategoryClick = (category: Category) => {
+    setDetailView(null)
     if (category.id === activeCategory) return
     setActiveCategory(category.id)
     setActiveSubcategory(category.subcategories[0].id)
@@ -670,10 +783,18 @@ export default function SettingsModal({
   }
 
   const scrollToSubcategory = (id: string) => {
+    setDetailView(null)
+    // Не полагаемся только на IntersectionObserver — если все секции
+    // категории умещаются на экране без скролла (например, "Учётная
+    // запись" после переезда смены ника/пароля в модалки стала короче),
+    // scrollIntoView() физически ничего не сдвинет и observer никогда не
+    // сработает, а клик по подкатегории обязан подсветить её сразу.
+    setActiveSubcategory(id)
     sectionRefs.current[id]?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   }
 
   return (
+    <>
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal settings-modal" onClick={(e) => e.stopPropagation()}>
         <h2 className="modal-title">Настройки</h2>
@@ -727,14 +848,16 @@ export default function SettingsModal({
           </nav>
 
           <div className="settings-content" ref={contentRef}>
-            {activeCategory === 'account' && (
+            {detailView === 'sessions' ? (
+              <SessionsDetailView onBack={() => setDetailView(null)} />
+            ) : activeCategory === 'account' ? (
               <>
                 <SettingsSection
                   id="account-info"
                   title="Информация об учётной записи"
                   sectionRefs={sectionRefs}
                 >
-                  <UsernameRow />
+                  <UsernameRow onOpen={() => setActiveModal('username')} />
                 </SettingsSection>
 
                 <SettingsSection
@@ -742,9 +865,17 @@ export default function SettingsModal({
                   title="Пароль и безопасность"
                   sectionRefs={sectionRefs}
                 >
-                  <PasswordRow />
+                  <PasswordRow onOpen={() => setActiveModal('password')} />
                   <TwoFactorRow />
-                  <SessionsRow />
+                  <SessionsSummaryRow
+                    onOpen={() => {
+                      // На случай если сессии открыли, пока в сайдбаре ещё
+                      // подсвечена "Информация об учётной записи" — этот
+                      // detail-view принадлежит именно "Пароль и безопасность".
+                      setActiveSubcategory('account-security')
+                      setDetailView('sessions')
+                    }}
+                  />
                   <div className="settings-danger-zone">
                     <button
                       className="settings-danger-btn"
@@ -761,9 +892,9 @@ export default function SettingsModal({
                   </div>
                 </SettingsSection>
               </>
-            )}
+            ) : null}
 
-            {activeCategory === 'appearance' && (
+            {!detailView && activeCategory === 'appearance' && (
               <SettingsSection
                 id="appearance-theme"
                 title="Тема оформления"
@@ -784,7 +915,7 @@ export default function SettingsModal({
               </SettingsSection>
             )}
 
-            {activeCategory === 'voice' && (
+            {!detailView && activeCategory === 'voice' && (
               <SettingsSection
                 id="voice-devices"
                 title="Устройства и звук"
@@ -829,5 +960,12 @@ export default function SettingsModal({
         </button>
       </div>
     </div>
+
+    {/* Не вложены в .modal-overlay настроек выше — иначе клик мимо этой
+        под-модалки (но всё ещё внутри overlay настроек) всплыл бы до его
+        onClick и закрыл заодно и Настройки целиком. */}
+    {activeModal === 'username' && <UsernameChangeModal onClose={() => setActiveModal(null)} />}
+    {activeModal === 'password' && <PasswordChangeModal onClose={() => setActiveModal(null)} />}
+    </>
   )
 }

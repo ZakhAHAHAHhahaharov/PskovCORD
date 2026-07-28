@@ -7,6 +7,7 @@ import {
 } from 'react'
 import { UserPlus, MessageSquare, Smile } from 'lucide-react'
 import { api } from '../api'
+import { useEscToClose } from '../modalStack'
 import Avatar from './Avatar'
 
 export interface ProfilePopupUser {
@@ -98,19 +99,14 @@ export default function MiniProfilePopup({
     el.style.top = `${top}px`
   }, [target.x, target.y])
 
+  useEscToClose(onClose)
+
   useLayoutEffect(() => {
     const onMouseDown = (e: MouseEvent) => {
       if (ref.current && !ref.current.contains(e.target as Node)) onClose()
     }
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose()
-    }
     document.addEventListener('mousedown', onMouseDown)
-    document.addEventListener('keydown', onKeyDown)
-    return () => {
-      document.removeEventListener('mousedown', onMouseDown)
-      document.removeEventListener('keydown', onKeyDown)
-    }
+    return () => document.removeEventListener('mousedown', onMouseDown)
   }, [onClose])
 
   const handleComposeKeyDown = (e: ReactKeyboardEvent<HTMLInputElement>) => {

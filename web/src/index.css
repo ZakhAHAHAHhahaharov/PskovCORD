@@ -2316,23 +2316,6 @@ input {
   color: var(--text-muted);
 }
 
-.settings-row-input {
-  margin-top: 4px;
-  width: 100%;
-  max-width: 280px;
-  background: var(--input-bg);
-  border: 1px solid var(--input-border);
-  border-radius: 4px;
-  padding: 6px 8px;
-  color: var(--text-normal);
-  font-size: 14px;
-  outline: none;
-}
-
-.settings-row-input:focus {
-  border-color: var(--blurple);
-}
-
 .settings-row-edit {
   flex-shrink: 0;
   padding: 7px 14px;
@@ -2347,62 +2330,8 @@ input {
   background: var(--channel-active);
 }
 
-.settings-row-actions {
-  flex-shrink: 0;
-  display: flex;
-  gap: 4px;
-}
-
-.settings-row-icon-btn {
-  width: 30px;
-  height: 30px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 4px;
-  background: var(--channel-hover);
-  color: var(--text-normal);
-}
-
-.settings-row-icon-btn:hover {
-  background: var(--channel-active);
-}
-
-.settings-row-icon-btn.primary {
-  background: var(--blurple);
-  color: #fff;
-}
-
-.settings-row-icon-btn.primary:hover {
-  background: var(--blurple-hover);
-}
-
-.settings-row-icon-btn:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
-
-.settings-row-error {
-  margin-top: -4px;
-  margin-bottom: 8px;
-}
-
-.settings-row-form {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 4px 0 14px;
-}
-
-.settings-row-form-submit {
-  align-self: flex-start;
-  margin-top: 4px;
-  width: auto;
-  padding: 9px 18px;
-}
-
-/* Сама строка "Активные сеансы — N устройств >" — тоже .settings-row, но
-   это <button> целиком (раскрывает список), а не строка с отдельной
+/* Сама строка "Активные сеансы — Посмотреть >" — тоже .settings-row, но
+   это <button> целиком (открывает detail-view), а не строка с отдельной
    кнопкой сбоку. */
 button.settings-row-clickable {
   cursor: pointer;
@@ -2425,8 +2354,51 @@ button.settings-row-clickable:hover .settings-row-label {
   transition: transform 0.15s;
 }
 
-.settings-chevron.open {
-  transform: rotate(90deg);
+/* ---- detail-view внутри settings-content (например, «Активные сеансы») —
+   см. SettingsModal.detailView: подменяет собой всю правую панель, сайдбар
+   при этом не трогается, подкатегория-владелец остаётся подсвеченной. ---- */
+.settings-detail-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 12px;
+  color: var(--text-muted);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.settings-detail-back:hover {
+  color: var(--heading-text);
+}
+
+.settings-detail-subhead {
+  margin: 18px 0 8px;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  color: var(--text-muted);
+}
+
+.session-row-revoke {
+  flex-shrink: 0;
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  color: var(--text-faint);
+}
+
+.session-row-revoke:hover {
+  color: var(--red);
+  background: rgba(242, 63, 67, 0.12);
+}
+
+.session-row-revoke:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 
 .sessions-list {
@@ -2451,6 +2423,7 @@ button.settings-row-clickable:hover .settings-row-label {
 }
 
 .session-row-info {
+  flex: 1;
   min-width: 0;
 }
 

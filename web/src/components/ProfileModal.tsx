@@ -2,6 +2,7 @@ import { useRef, useState, ChangeEvent } from 'react'
 import { Camera, Trash2, Loader2 } from 'lucide-react'
 import { useAuth } from '../auth'
 import { api, DmPrivacy } from '../api'
+import { useEscToClose } from '../modalStack'
 import {
   AVATAR_SIZE, BANNER_MAX_BYTES, BANNER_MAX_H, BANNER_MAX_W, GRADIENT_PRESETS,
   buildGradient, fileToBannerDataUrl, fileToSquareDataUrl, parseGradient,
@@ -21,11 +22,17 @@ const DM_PRIVACY_LABELS: Record<DmPrivacy, string> = {
  * текущего). Открывается из ChannelSidebar (иконка в user-panel-actions).
  */
 export default function ProfileModal({ onClose }: { onClose: () => void }) {
+  useEscToClose(onClose)
   const { user, updateLocalUser } = useAuth()
   const fileRef = useRef<HTMLInputElement>(null)
   const bannerFileRef = useRef<HTMLInputElement>(null)
 
   const [username, setUsername] = useState(user?.username ?? '')
+  // Отдельно от полей "Смена пароля" ниже — это подтверждение личности для
+  // смены НИКА (см. backend ProfileUpdateSerializer.validate), не смена
+  // самого пароля. Общее поле легко перепутать: ввёл пароль в одном месте —
+  // решил, что он же годится и для другого.
+  const [usernameConfirmPassword, setUsernameConfirmPassword] = useState('')
   const [avatarImage, setAvatarImage] = useState(user?.avatar_image ?? '')
   const [savingProfile, setSavingProfile] = useState(false)
   const [profileError, setProfileError] = useState('')
@@ -92,10 +99,16 @@ export default function ProfileModal({ onClose }: { onClose: () => void }) {
     }
   }
 
+  const usernameDirty = username.trim() !== user.username
+
   const handleSaveProfile = async () => {
     const trimmed = username.trim()
     if (!trimmed) {
       setProfileError('Ник не может быть пустым.')
+      return
+    }
+    if (usernameDirty && !usernameConfirmPassword) {
+      setProfileError('Для смены имени пользователя введите текущий пароль.')
       return
     }
     setSavingProfile(true)
@@ -104,12 +117,16 @@ export default function ProfileModal({ onClose }: { onClose: () => void }) {
     try {
       const patch: {
         username?: string
+        current_password?: string
         avatar_image?: string
         banner_gradient?: string
         banner_image?: string
         dm_privacy?: DmPrivacy
       } = {}
-      if (trimmed !== user.username) patch.username = trimmed
+      if (usernameDirty) {
+        patch.username = trimmed
+        patch.current_password = usernameConfirmPassword
+      }
       if (avatarImage !== user.avatar_image) patch.avatar_image = avatarImage
       if (bannerDirty) {
         patch.banner_gradient = desiredGradient
@@ -119,6 +136,7 @@ export default function ProfileModal({ onClose }: { onClose: () => void }) {
       const updated = await api.updateProfile(patch)
       updateLocalUser(updated)
       setProfileSaved(true)
+      setUsernameConfirmPassword('')
     } catch (err) {
       setProfileError((err as Error).message)
     } finally {
@@ -323,6 +341,21 @@ export default function ProfileModal({ onClose }: { onClose: () => void }) {
           }}
           maxLength={150}
         />
+        {usernameDirty && (
+          <>
+            <div className="field-label">Текущий пароль — подтвердите смену имени</div>
+            <input
+              className="field-input"
+              type="password"
+              autoComplete="current-password"
+              value={usernameConfirmPassword}
+              onChange={(e) => {
+                setUsernameConfirmPassword(e.target.value)
+                setProfileSaved(false)
+              }}
+            />
+          </>
+        )}
 
         <div className="field-label">Кто может мне писать личные сообщения</div>
         <select
@@ -346,7 +379,9 @@ export default function ProfileModal({ onClose }: { onClose: () => void }) {
         <button
           className="btn-primary"
           onClick={handleSaveProfile}
-          disabled={savingProfile || !profileDirty}
+          disabled={
+            savingProfile || !profileDirty || (usernameDirty && !usernameConfirmPassword)
+          }
         >
           {savingProfile ? <Loader2 size={15} className="spin" /> : 'Сохранить'}
         </button>
