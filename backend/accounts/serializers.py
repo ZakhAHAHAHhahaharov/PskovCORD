@@ -7,6 +7,8 @@ from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import serializers
 
+from .avatar_color import compute_avatar_color
+
 User = get_user_model()
 
 
@@ -175,6 +177,21 @@ class ProfileUpdateSerializer(serializers.ModelSerializer):
     def validate_avatar_image(self, value):
         return validate_data_url(
             value, ALLOWED_AVATAR_MIME, MAX_AVATAR_BYTES, "аватар")
+
+    def update(self, instance, validated_data):
+        # Новый аватар — сразу же пересчитываем avatar_color как средний
+        # цвет картинки (см. accounts.avatar_color.compute_avatar_color):
+        # используется и фоном буквы-заглушки, когда аватара нет, и акцентом
+        # тайла участника в голосовом канале, когда есть. avatar_color не
+        # выставлен полем на этом сериализаторе намеренно — это не то, что
+        # клиент присылает сам, только производное от avatar_image. Аватар
+        # УДАЛИЛИ (avatar_image == "") — цвет намеренно не трогаем: он
+        # остаётся фоном буквы-заглушки, как и был.
+        if validated_data.get("avatar_image"):
+            color = compute_avatar_color(validated_data["avatar_image"])
+            if color:
+                validated_data["avatar_color"] = color
+        return super().update(instance, validated_data)
 
     def validate_banner_gradient(self, value):
         if not value:
