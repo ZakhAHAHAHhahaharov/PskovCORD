@@ -1553,52 +1553,69 @@ input {
 
 .voice-stage-grid {
   flex: 1;
-  display: grid;
-  /* grid-template-columns выставляется инлайн из VoiceStage (число колонок
-     зависит от количества тайлов) — мало тайлов -> они большие и заполняют
-     весь main, как в Discord. */
-  grid-auto-rows: 1fr;
-  gap: 16px;
+  display: flex;
+  flex-direction: column;
+  /* Число строк и ширина тайлов (--tile-w) считаются в VoiceStage
+     (computeGridLayout) по количеству тайлов и реальному размеру этого
+     контейнера. justify-content тут — по вертикали: мало строк -> блок
+     тайлов по центру доступной высоты, как и один тайл по центру ширины
+     строки (см. .voice-stage-row). */
+  justify-content: center;
+  /* Совпадает с GRID_GAP в VoiceStage.tsx — оба места обязаны совпадать. */
+  gap: 8px;
   padding: 20px;
   overflow-y: auto;
-  align-content: stretch;
+}
+
+.voice-stage-row {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
 }
 
 .participant-tile {
   position: relative;
   display: flex;
-  flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 8px;
-  height: 100%;
-  min-height: 140px;
-  padding: 20px 12px;
-  background: var(--sidebar-bg);
+  /* Фикс 16:9 — ширина приходит инлайном от родительской .voice-stage-row
+     (--tile-w, см. VoiceStage.computeGridLayout), высота считается из неё.
+     Аватар по центру + плашка с ником снизу (см. .participant-tile-name) —
+     а не колонка "аватар/ник/иконки" в потоке, как раньше: при невысоком
+     16:9-тайле такой стек просто не влезал по высоте. */
+  width: var(--tile-w, 240px);
+  aspect-ratio: 16 / 9;
+  flex: 0 0 auto;
+  /* --tile-accent — средний цвет аватарки участника (см. VoiceStage.
+     ParticipantTile, backend accounts.avatar_color) — лёгкий тонированный
+     фон вместо плоского var(--sidebar-bg), у каждого участника свой. */
+  background: color-mix(in srgb, var(--tile-accent, var(--sidebar-bg)) 20%, var(--sidebar-bg));
   border-radius: 8px;
   cursor: pointer;
+  overflow: hidden;
 }
 
 .participant-tile:hover {
-  background: var(--channel-hover);
+  background: color-mix(in srgb, var(--tile-accent, var(--channel-hover)) 28%, var(--channel-hover));
 }
 
-
 .participant-tile-name {
-  color: var(--text-normal);
-  font-size: 14px;
+  position: absolute;
+  left: 8px;
+  bottom: 8px;
+  max-width: calc(100% - 16px);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 12px;
   font-weight: 600;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.6);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 100%;
-}
-
-.participant-tile-icons {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  color: var(--text-muted);
 }
 
 .participant-tile-badge {
@@ -1609,8 +1626,9 @@ input {
 
 .screen-preview-tile {
   position: relative;
-  height: 100%;
-  min-height: 140px;
+  width: var(--tile-w, 240px);
+  aspect-ratio: 16 / 9;
+  flex: 0 0 auto;
   background: #000;
   border-radius: 8px;
   overflow: hidden;
@@ -1619,13 +1637,12 @@ input {
 
 /* position:absolute вместо width/height:100% в потоке — на Linux было видно,
    как тайл через ~1с после старта потока (когда браузер узнаёт intrinsic-
-   размер видео, loadedmetadata) внезапно "распухал" по высоте: проценты от
-   родителя внутри грид-ячейки с неопределённой высотой (grid-auto-rows: 1fr)
-   в этот момент трактуются как auto и тянут высоту строки под соотношение
-   сторон видео. Абсолютное позиционирование убирает видео из потока
-   полностью — оно больше не может повлиять на размер .screen-preview-tile,
-   только вписывается в него через object-fit (тот же приём, что и в
-   .voice-stage-expanded-video video ниже). */
+   размер видео, loadedmetadata) внезапно "распухал" по высоте: видео в потоке
+   тянуло размер родителя под своё соотношение сторон. Абсолютное
+   позиционирование убирает видео из потока полностью — оно больше не может
+   повлиять на размер .screen-preview-tile (у него и так фиксированные 16:9,
+   см. выше), только вписывается в него через object-fit (тот же приём, что и
+   в .voice-stage-expanded-video video ниже). */
 .screen-preview-tile video {
   position: absolute;
   inset: 0;

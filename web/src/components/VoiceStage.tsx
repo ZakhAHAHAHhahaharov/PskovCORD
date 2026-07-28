@@ -18,6 +18,50 @@ import { ProfilePopupUser } from './MiniProfilePopup'
 import { useSettings } from '../settings'
 import { useVoice } from '../voice'
 
+/** Зазор между тайлами сетки — используется и в CSS (.voice-stage-grid gap),
+ * и здесь при расчёте ширины тайла, оба места обязаны совпадать. */
+const GRID_GAP = 8
+/** Тайлы не мельче и не крупнее этого — совсем маленькими нечитаемо, совсем
+ * большими на широком мониторе один собеседник смотрелся бы нелепо. */
+const MIN_TILE_WIDTH = 220
+const MAX_TILE_WIDTH = 560
+
+/**
+ * Сколько колонок и какой ширины должен быть каждый 16:9-тайл, чтобы:
+ *  - при малом числе тайлов раскладка была "квадратной" (1 — по центру,
+ *    2 — делят ширину пополам, 3 — двое сверху и один по центру снизу и т.д.
+ *    — обычная ceil(sqrt(n)) раскладка, как в Discord/Zoom);
+ *  - на узком контейнере колонок было меньше, чем требует квадратная
+ *    раскладка, — иначе тайлы просто мельчают до нечитаемости вместо того,
+ *    чтобы перенестись на новую строку;
+ *  - высота 16:9-тайла не вылезала за пределы доступной высоты (актуально
+ *    для одного собеседника на невысоком окне).
+ * Центрирование неполной последней строки — уже не здесь, а в CSS
+ * (display:flex; flex-wrap; justify-content:center — см. .voice-stage-grid).
+ */
+function computeGridLayout(
+  count: number,
+  containerWidth: number,
+  containerHeight: number,
+): { cols: number; tileWidth: number } {
+  if (count <= 0) return { cols: 1, tileWidth: MIN_TILE_WIDTH }
+  const idealCols = Math.ceil(Math.sqrt(count))
+  const maxColsByWidth =
+    containerWidth > 0
+      ? Math.max(1, Math.floor((containerWidth + GRID_GAP) / (MIN_TILE_WIDTH + GRID_GAP)))
+      : idealCols
+  const cols = Math.min(idealCols, maxColsByWidth, count)
+  let tileWidth =
+    containerWidth > 0 ? (containerWidth - GRID_GAP * (cols - 1)) / cols : MAX_TILE_WIDTH
+  if (containerHeight > 0) {
+    const rows = Math.ceil(count / cols)
+    const maxTileHeight = (containerHeight - GRID_GAP * (rows - 1)) / rows
+    tileWidth = Math.min(tileWidth, maxTileHeight * (16 / 9))
+  }
+  tileWidth = Math.min(Math.max(tileWidth, MIN_TILE_WIDTH), MAX_TILE_WIDTH)
+  return { cols, tileWidth }
+}
+
 /** Один участник комнаты (голосовой канал сервера ИЛИ звонок в личке/группе)
  * — VoiceStage сам не знает, откуда взялся ростер (см. AppShell: для сервера
  * это members.filter(...), для диалога/группы — dmCallParticipants), только
@@ -70,6 +114,11 @@ function ParticipantTile({
   return (
     <div
       className="participant-tile"
+      // avatar_color — теперь средний цвет самой аватарки (см. backend
+      // accounts.avatar_color.compute_avatar_color), а не просто фон буквы-
+      // заглушки, поэтому используем его и как акцент фона тайла — см.
+      // .participant-tile в index.css (color-mix c --tile-accent).
+      style={{ '--tile-accent': member.avatar_color } as React.CSSProperties}
       onClick={onExpand}
       onContextMenu={
         onContextMenu
@@ -92,7 +141,7 @@ function ParticipantTile({
           name={member.username}
           color={member.avatar_color}
           image={member.avatar_image}
-          size={64}
+          size={72}
           speaking={speaking}
         />
       </button>
@@ -104,16 +153,14 @@ function ParticipantTile({
         }}
       >
         {member.username}
-      </span>
-      <span className="participant-tile-icons">
         {muted && (
           <span title="Микрофон выключен">
-            <MicOff size={13} />
+            <MicOff size={12} />
           </span>
         )}
         {deafened && (
           <span title="Не слышит участников">
-            <HeadphoneOff size={13} />
+            <HeadphoneOff size={12} />
           </span>
         )}
       </span>
@@ -265,6 +312,24 @@ export default function VoiceStage({
   const containerRef = useRef<HTMLDivElement>(null)
   const [isFullscreen, setIsFullscreen] = useState(false)
 
+  // Размер .voice-stage-grid — от него зависит, сколько колонок и какой
+  // ширины тайлы (см. computeGridLayout). Меряем именно этот элемент, а не
+  // .voice-stage целиком — у него ещё есть header, а paddings/gap уже внутри
+  // самого grid-контейнера.
+  const gridRef = useRef<HTMLDivElement>(null)
+  const [gridSize, setGridSize] = useState({ width: 0, height: 0 })
+  useEffect(() => {
+    const el = gridRef.current
+    if (!el) return
+    const ro = new ResizeObserver((entries) => {
+      const { width, height } = entries[0].contentRect
+      setGridSize({ width, height })
+    })
+    ro.observe(el)
+    return () => ro.disconnect()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [expanded == null])
+
   useEffect(() => {
     const onChange = () => setIsFullscreen(document.fullscreenElement === containerRef.current)
     document.addEventListener('fullscreenchange', onChange)
@@ -356,10 +421,15 @@ export default function VoiceStage({
   const nameOf = (uid: number) => roster.find((m) => m.id === uid)?.username ?? `Участник ${uid}`
 
   // Сколько всего тайлов в сетке (участники + свой показ + чужие демки) —
-  // от этого зависит число колонок: мало тайлов -> они большие и заполняют
-  // всё пространство main (как в Discord), много -> сетка мельче.
+  // от этого и от размера контейнера зависят число колонок и ширина тайлов
+  // (см. computeGridLayout) — мало тайлов -> они большие и заполняют main
+  // (как в Discord), много -> сетка мельче.
   const tileCount = roster.length + (isSharingScreen ? 1 : 0) + sharingOthers.length
-  const gridCols = Math.max(1, Math.ceil(Math.sqrt(tileCount || 1)))
+  const { cols: gridCols, tileWidth } = computeGridLayout(
+    tileCount,
+    gridSize.width,
+    gridSize.height,
+  )
 
   const expandedStream =
     expanded?.mode !== 'screen'
@@ -458,55 +528,74 @@ export default function VoiceStage({
           </div>
         </div>
       ) : (
-        <div
-          className="voice-stage-grid"
-          style={{ gridTemplateColumns: `repeat(${gridCols}, 1fr)` }}
-        >
-          {roster.map((m) => (
-            <ParticipantTile
-              key={m.id}
-              member={m}
-              speaking={speakingUserIds.has(m.id)}
-              muted={m.id === selfUserId ? selfMuted : m.muted}
-              deafened={m.id === selfUserId ? deafened : m.deafened}
-              onOpenProfile={onOpenProfile}
-              onExpand={() => setExpanded({ userId: m.id, mode: 'participant' })}
-              onContextMenu={
-                m.id !== selfUserId && onParticipantContextMenu
-                  ? (e) => onParticipantContextMenu(m, e, { kind: roomKind, id: roomId })
-                  : undefined
-              }
-            />
-          ))}
-          {isSharingScreen && (
-            <ScreenPreviewTile
-              username="Вы"
-              stream={ownScreenStream}
-              own
-              deafened={deafened}
-              onWatch={() => {}}
-              onExpand={() => setExpanded({ userId: selfUserId, mode: 'screen' })}
-              onStopWatching={() => {}}
-            />
-          )}
-          {sharingOthers.map((m) => {
-            const stream = screenShares.get(m.id) ?? null
-            return (
-              <ScreenPreviewTile
-                key={m.id}
-                username={m.username}
-                stream={stream}
-                own={false}
-                deafened={deafened}
-                onWatch={() => onRequestWatch(m.id)}
-                onExpand={() => {
-                  if (stream) setExpanded({ userId: m.id, mode: 'screen' })
-                }}
-                onStopWatching={() => unwatchScreen(m.id)}
+        (() => {
+          // Единый список тайлов (участники + своя демка + чужие демки, тот
+          // же порядок, что и раньше) — чтобы разбить его на строки ровно по
+          // gridCols. Строка — отдельный flex-контейнер с justify-content:
+          // center, поэтому неполная последняя строка (например, третий тайл
+          // из трёх) центрируется сама, без ручной раскладки по колонкам.
+          const tiles = [
+            ...roster.map((m) => (
+              <ParticipantTile
+                key={`p-${m.id}`}
+                member={m}
+                speaking={speakingUserIds.has(m.id)}
+                muted={m.id === selfUserId ? selfMuted : m.muted}
+                deafened={m.id === selfUserId ? deafened : m.deafened}
+                onOpenProfile={onOpenProfile}
+                onExpand={() => setExpanded({ userId: m.id, mode: 'participant' })}
+                onContextMenu={
+                  m.id !== selfUserId && onParticipantContextMenu
+                    ? (e) => onParticipantContextMenu(m, e, { kind: roomKind, id: roomId })
+                    : undefined
+                }
               />
-            )
-          })}
-        </div>
+            )),
+            ...(isSharingScreen
+              ? [
+                  <ScreenPreviewTile
+                    key="s-own"
+                    username="Вы"
+                    stream={ownScreenStream}
+                    own
+                    deafened={deafened}
+                    onWatch={() => {}}
+                    onExpand={() => setExpanded({ userId: selfUserId, mode: 'screen' })}
+                    onStopWatching={() => {}}
+                  />,
+                ]
+              : []),
+            ...sharingOthers.map((m) => {
+              const stream = screenShares.get(m.id) ?? null
+              return (
+                <ScreenPreviewTile
+                  key={`s-${m.id}`}
+                  username={m.username}
+                  stream={stream}
+                  own={false}
+                  deafened={deafened}
+                  onWatch={() => onRequestWatch(m.id)}
+                  onExpand={() => {
+                    if (stream) setExpanded({ userId: m.id, mode: 'screen' })
+                  }}
+                  onStopWatching={() => unwatchScreen(m.id)}
+                />
+              )
+            }),
+          ]
+          const rows: (typeof tiles)[] = []
+          for (let i = 0; i < tiles.length; i += gridCols) rows.push(tiles.slice(i, i + gridCols))
+          const rowStyle = { '--tile-w': `${tileWidth}px` } as React.CSSProperties
+          return (
+            <div ref={gridRef} className="voice-stage-grid">
+              {rows.map((row, i) => (
+                <div key={i} className="voice-stage-row" style={rowStyle}>
+                  {row}
+                </div>
+              ))}
+            </div>
+          )
+        })()
       )}
 
       <div className={`voice-controls-bar ${showControls ? 'visible' : ''}`}>
