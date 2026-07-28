@@ -49,7 +49,14 @@ export default function VoiceProvider({
             ref={(el) => {
               if (!el) return
               el.srcObject = stream
-              el.volume = outputVolume * userVolume.getUserVolume(uid)
+              // userVolume — 0..2 (буст громче обычного, см. userVolume.ts), но
+              // нативный HTMLMediaElement.volume принимает только 0..1 и КИДАЕТ
+              // DOMException "IndexSizeError" за пределами диапазона — именно
+              // так ронялась вся страница, стоило кому-то один раз поднять
+              // ползунок громкости конкретного участника выше 100% (буст
+              // персистится в localStorage, поэтому крash повторялся при
+              // каждом новом заходе в канал с этим человеком).
+              el.volume = Math.min(1, Math.max(0, outputVolume * userVolume.getUserVolume(uid)))
             }}
           />
         ))}
