@@ -1244,13 +1244,49 @@ input {
   padding-left: 18px;
 }
 
-/* ---- Блок 4: переключение аккаунтов ---- */
-.account-switch-item {
+/* ---- Блок 4: переключение аккаунтов (флаут по наведению, как у статуса) ---- */
+.account-flyout {
+  width: 220px;
+}
+
+.account-flyout-item {
   position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 4px;
+  font-size: 14px;
+  color: var(--text-normal);
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.account-flyout-item:hover:not(:disabled) {
+  background: var(--channel-hover);
+}
+
+.account-flyout-item.active {
+  cursor: default;
+}
+
+.account-flyout-item.active:disabled {
+  opacity: 1;
 }
 
 .account-switch-spinner {
   margin-left: auto;
+}
+
+.account-flyout-current-dot {
+  margin-left: auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--blurple);
+  flex-shrink: 0;
 }
 
 .status-menu-error {
