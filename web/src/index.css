@@ -4860,38 +4860,46 @@ button.settings-row-clickable:hover .settings-row-label {
 @media (max-width: 768px) {
   /* ---- layout: nav-экран (.mobile-nav-pane — рельса+сайдбар каналов
      единым блоком) vs content-экран (main.chat — текстовый чат или
-     VoiceStage) на весь экран, между ними slide-переход. Класс
-     is-mobile/screen-* — на .app, см. AppShell.tsx. ----
+     VoiceStage) на весь экран, между ними slide-переход. Класс screen-* —
+     на .app, см. AppShell.tsx.
+     Раскладка ЦЕЛИКОМ на голом .app под этим @media, без доп. JS-класса
+     вроде .is-mobile: раньше сюда добавлялся классом ещё и JS-флаг
+     isMobile (matchMedia), и если он хоть на миг расходился с реальной
+     шириной вьюпорта (гонка при первом рендере и т.п.), классов не было
+     вовсе — и всё падало обратно на десктопную grid-раскладку, где main
+     всегда виден рядом с сайдбаром, не на весь экран и без возможности
+     "закрыть". Один источник истины — сам @media — расхождения не
+     допускает в принципе.
      Оба "экрана" — честные 100%-ширины блоки (не inset:0 вперемешку с
      одиночным left/right — это даёт width:0, а не 100%, и ломает раскладку
      целиком), сдвигаются через transform, а не left/right, — так их ширина
      всегда 100% контейнера независимо от текущего смещения. */
-  .app.is-mobile {
+  .app {
     position: relative;
     display: block;
     overflow: hidden;
   }
 
-  .app.is-mobile .mobile-nav-pane {
+  .app .mobile-nav-pane {
     display: flex;
     position: absolute;
     inset: 0;
     transition: transform 0.25s ease;
   }
 
-  .app.is-mobile .server-rail {
+  .app .server-rail {
     width: 72px;
     flex-shrink: 0;
   }
 
   /* .channel-sidebar — общий класс и у ChannelSidebar, и у HomeSidebar (см.
      HomeSidebar.tsx корневой className="channel-sidebar home-sidebar"). */
-  .app.is-mobile .channel-sidebar {
+  .app .channel-sidebar {
     flex: 1;
     min-width: 0;
   }
 
-  .app.is-mobile main.chat {
+  .app main.chat {
     position: absolute;
     top: 0;
     right: 0;
@@ -4902,25 +4910,25 @@ button.settings-row-clickable:hover .settings-row-label {
     transition: transform 0.25s ease;
   }
 
-  .app.is-mobile.screen-content .mobile-nav-pane {
+  .app.screen-content .mobile-nav-pane {
     transform: translateX(-100%);
   }
 
-  .app.is-mobile.screen-content main.chat {
+  .app.screen-content main.chat {
     transform: translateX(0);
   }
 
   /* Список участников сервера (4-я колонка на ПК) на мобилке не показываем
      совсем — в голосовом канале участники и так видны плитками VoiceStage,
      для текстового канала это осознанный компромисс (см. план). */
-  .app.is-mobile .members-list {
+  .app .members-list {
     display: none;
   }
 
   /* .sidebar-bottom живёт внутри .channel-sidebar (position:relative — см.
      правило этого класса выше в файле), а тот на мобилке занимает не всю
      ширину экрана, а только то, что осталось после 72px рельсы (см.
-     .app.is-mobile .channel-sidebar выше). Чтобы панель пользователя
+     .app .channel-sidebar выше). Чтобы панель пользователя
      реально была на всю ширину экрана (как просили) — растягиваем её
      влево ЗА пределы собственного контейнера ровно на ширину рельсы,
      тот же приём, что и на ПК (там .sidebar-bottom 312px = 72+240 по той
@@ -4959,13 +4967,15 @@ button.settings-row-clickable:hover .settings-row-label {
     z-index: 2;
   }
 
-  /* ---- панель действий над сообщением — на тач нет :hover, показываем
-     всегда, а не по наведению (см. MessageList.tsx). ---- */
-  .message-actions {
+  /* ---- панель действий над сообщением — на тач нет :hover. Показываем не
+     всегда (было шумно — висело под каждым сообщением сразу), а по
+     двойному тапу на конкретном сообщении (см. MessageList.tsx
+     mobileActiveKey/onDoubleClick). ---- */
+  .message-row.mobile-actions-active .message-actions {
     display: flex;
   }
 
-  .message-row .reaction-add {
+  .message-row.mobile-actions-active .reaction-add {
     opacity: 1;
   }
 
