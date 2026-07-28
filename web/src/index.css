@@ -499,8 +499,32 @@ input {
 .app {
   height: 100%;
   display: grid;
-  grid-template-columns: 72px 240px 1fr 240px;
+  /* Первая колонка — .mobile-nav-pane (рельса+сайдбар каналов вместе, см.
+     AppShell.tsx), а не рельса и сайдбар отдельными колонками: раньше
+     обёртка была display:contents и "исчезала" для grid — но у
+     display:contents есть реальные баги совместимости на части мобильных
+     WebKit, из-за которых вся мобильная раскладка съезжала. Теперь
+     .mobile-nav-pane — всегда настоящий flex-контейнер (72px рельса +
+     240px сайдбар внутри, см. .mobile-nav-pane/.server-rail/.channel-sidebar
+     ниже), 312px = 72+240, ничего для десктопа не меняется визуально. */
+  grid-template-columns: 312px 1fr 240px;
   overflow: hidden;
+}
+
+.mobile-nav-pane {
+  display: flex;
+  height: 100%;
+  min-width: 0;
+}
+
+.mobile-nav-pane .server-rail {
+  width: 72px;
+  flex-shrink: 0;
+}
+
+.mobile-nav-pane .channel-sidebar {
+  width: 240px;
+  flex-shrink: 0;
 }
 
 /* ---- server rail ---- */
@@ -4848,87 +4872,60 @@ button.settings-row-clickable:hover .settings-row-label {
    МОБИЛЬНЫЙ АДАПТИВ — брейкпоинт синхронизирован с useIsMobile()
    (web/src/hooks/useIsMobile.ts, по умолчанию тоже 768px).
    =================================================================== */
-/* .mobile-nav-pane (обёртка ServerRail+сайдбар, см. AppShell.tsx) — на ПК
-   должна быть невидима для layout'а: display:contents убирает у неё
-   собственный box, ServerRail/сайдбар остаются прямыми grid-items .app,
-   как будто обёртки нет вовсе. Вне @media — действует всегда, кроме
-   случаев ниже, где мобильный брейкпоинт явно её включает как flex. */
-.mobile-nav-pane {
-  display: contents;
-}
-
 @media (max-width: 768px) {
   /* ---- layout: nav-экран (.mobile-nav-pane — рельса+сайдбар каналов
-     единым блоком) vs content-экран (main.chat — текстовый чат или
-     VoiceStage) на весь экран, между ними slide-переход. Класс screen-* —
-     на .app, см. AppShell.tsx.
+     единым блоком, см. .mobile-nav-pane выше в файле) vs content-экран
+     (main.chat — текстовый чат или VoiceStage) на весь экран. Класс
+     screen-* — на .app, см. AppShell.tsx.
      Раскладка ЦЕЛИКОМ на голом .app под этим @media, без доп. JS-класса
-     вроде .is-mobile: раньше сюда добавлялся классом ещё и JS-флаг
-     isMobile (matchMedia), и если он хоть на миг расходился с реальной
-     шириной вьюпорта (гонка при первом рендере и т.п.), классов не было
-     вовсе — и всё падало обратно на десктопную grid-раскладку, где main
-     всегда виден рядом с сайдбаром, не на весь экран и без возможности
-     "закрыть". Один источник истины — сам @media — расхождения не
-     допускает в принципе.
-     Оба "экрана" — честные 100%-ширины блоки (не inset:0 вперемешку с
-     одиночным left/right — это даёт width:0, а не 100%, и ломает раскладку
-     целиком), сдвигаются через transform, а не left/right, — так их ширина
-     всегда 100% контейнера независимо от текущего смещения. */
+     вроде .is-mobile — реальная ширина вьюпорта решает сама, применится
+     ли она вообще, никакого второго источника истины (JS matchMedia),
+     который мог бы разойтись с ним.
+     Переключение — простым display:none/flex, БЕЗ position:absolute +
+     transform: тот вариант ломался (main либо не показывался на весь
+     экран, либо не скрывался обратно) — судя по всему, из-за сочетания
+     transform на main.chat (создаёт новый containing block) с
+     display:contents у обёртки рельса+сайдбар (известные баги на части
+     мобильных WebKit). display:none/flex проще и с этим классом проблем
+     не имеет — ценой анимации слайда, её можно будет вернуть отдельно,
+     когда базовое переключение подтверждено рабочим. */
   .app {
-    position: relative;
     display: block;
     overflow: hidden;
   }
 
-  .app .mobile-nav-pane {
-    display: flex;
-    position: absolute;
-    inset: 0;
-    transition: transform 0.25s ease;
-  }
-
-  .app .server-rail {
-    width: 72px;
-    flex-shrink: 0;
-  }
-
-  /* .channel-sidebar — общий класс и у ChannelSidebar, и у HomeSidebar (см.
-     HomeSidebar.tsx корневой className="channel-sidebar home-sidebar"). */
-  .app .channel-sidebar {
+  /* .mobile-nav-pane уже height:100% из базового (не-@media) правила выше
+     в файле — здесь только то, что специфично мобилке. */
+  .mobile-nav-pane .channel-sidebar {
+    width: auto;
     flex: 1;
     min-width: 0;
   }
 
-  .app main.chat {
-    position: absolute;
-    top: 0;
-    right: 0;
-    bottom: 0;
-    left: 0;
-    width: 100%;
-    transform: translateX(100%);
-    transition: transform 0.25s ease;
+  main.chat {
+    display: none;
   }
 
   .app.screen-content .mobile-nav-pane {
-    transform: translateX(-100%);
+    display: none;
   }
 
   .app.screen-content main.chat {
-    transform: translateX(0);
+    display: flex;
+    height: 100%;
   }
 
   /* Список участников сервера (4-я колонка на ПК) на мобилке не показываем
      совсем — в голосовом канале участники и так видны плитками VoiceStage,
      для текстового канала это осознанный компромисс (см. план). */
-  .app .members-list {
+  .members-list {
     display: none;
   }
 
   /* .sidebar-bottom живёт внутри .channel-sidebar (position:relative — см.
      правило этого класса выше в файле), а тот на мобилке занимает не всю
      ширину экрана, а только то, что осталось после 72px рельсы (см.
-     .app .channel-sidebar выше). Чтобы панель пользователя
+     .mobile-nav-pane .channel-sidebar выше). Чтобы панель пользователя
      реально была на всю ширину экрана (как просили) — растягиваем её
      влево ЗА пределы собственного контейнера ровно на ширину рельсы,
      тот же приём, что и на ПК (там .sidebar-bottom 312px = 72+240 по той

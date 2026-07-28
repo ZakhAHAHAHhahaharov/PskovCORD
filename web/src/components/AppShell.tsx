@@ -1802,11 +1802,10 @@ export default function AppShell() {
         сайдбаром. isMobile ниже используется только для вещей, которые
         JS ДОЛЖЕН явно знать (кнопка назад, история браузера). */}
     <div className={`app screen-${mobileScreen}`}>
-      {/* На ПК — display:contents (см. index.css), обёртка "исчезает" из
-          layout'а: ServerRail и сайдбар остаются прямыми grid-items .app,
-          как раньше. На мобилке становится реальным flex-контейнером —
-          единая "nav-панель" (рельса+сайдбар), которая двигается как один
-          блок при слайд-переходе в content-экран (см. .mobile-nav-pane). */}
+      {/* Единая "nav-панель" — рельса+сайдбар каналов вместе, всегда
+          настоящий flex-контейнер (см. .mobile-nav-pane в index.css; на ПК
+          это первая 312px-колонка общей grid, на мобилке — nav-экран на
+          весь экран, скрывается целиком при переходе в content). */}
       <div className="mobile-nav-pane">
       <ServerRail
         servers={servers}
