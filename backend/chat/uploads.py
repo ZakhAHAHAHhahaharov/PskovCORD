@@ -1,0 +1,90 @@
+"""Разбор и обеззараживание загруженных вложений.
+
+Отдельный модуль, а не пара функций во вьюхе, потому что здесь принимается
+решение о БЕЗОПАСНОСТИ, а не просто о валидации размера.
+
+Суть проблемы: в проде nginx отдаёт /media/ напрямую с того же домена, что и
+само приложение (см. deploy/nginx.conf.example), а JWT лежит в localStorage.
+Файл, который браузер согласится открыть КАК ДОКУМЕНТ и выполнить в нём
+скрипт — .html, .svg, .xhtml, — это stored-XSS на том же origin, то есть
+кража токенов у любого, кто кликнул по вложению. Поэтому:
+
+  1. Тип файла определяется здесь, по содержимому, а не берётся из заголовка
+     запроса: клиент присылает Content-Type какой захочет.
+  2. Всё, что не опознано как заведомо безопасное для встраивания, получает
+     тип application/octet-stream — фронт такое не инлайнит, а только
+     предлагает скачать.
+  3. Вторым рубежом nginx отдаёт вложения с Content-Disposition: attachment и
+     X-Content-Type-Options: nosniff — тогда даже опознанный не тем типом
+     файл не выполнится как документ (на <img>/<video> это не влияет:
+     Content-Disposition учитывается только при переходе, не при встраивании).
+
+Один рубеж без другого дырявый: без (2) фронт сам вставит <img src> с svg,
+без (3) любая ошибка в определении типа снова открывает XSS.
+"""
+import mimetypes
+
+from PIL import Image, UnidentifiedImageError
+
+# Растровые форматы, которые Pillow надёжно опознаёт по содержимому и которые
+# не умеют исполнять скрипты. SVG здесь нет и быть не может: это XML-документ,
+# который браузер выполняет со всем содержимым <script> внутри.
+SAFE_IMAGE_FORMATS = {
+    "JPEG": "image/jpeg",
+    "PNG": "image/png",
+    "GIF": "image/gif",
+    "WEBP": "image/webp",
+    "BMP": "image/bmp",
+}
+
+# Типы, которые фронт встраивает плеером. Скрипт из них не выполнить, а
+# опознать по содержимому нечем (Pillow их не читает) — доверяем расширению.
+# Ошибка здесь безобидна: не тот тип означает лишь «не проиграется».
+EMBEDDABLE_MEDIA_PREFIXES = ("video/", "audio/")
+
+FALLBACK_CONTENT_TYPE = "application/octet-stream"
+
+
+def sniff(uploaded_file) -> tuple[str, int | None, int | None]:
+    """(content_type, width, height) для загруженного файла.
+
+    width/height не None только у картинок. Курсор файла возвращается в
+    начало: после нас его читает и сохраняет FileField.
+    """
+    content_type, width, height = _sniff_image(uploaded_file)
+    uploaded_file.seek(0)
+    if content_type:
+        return content_type, width, height
+    return _guess_media_type(uploaded_file.name), None, None
+
+
+def _sniff_image(uploaded_file) -> tuple[str | None, int | None, int | None]:
+    try:
+        uploaded_file.seek(0)
+        with Image.open(uploaded_file) as img:
+            # Pillow читает заголовок лениво, размеры доступны сразу; verify()
+            # намеренно не зовём — он инвалидирует объект, а нам нужен размер.
+            image_format = img.format
+            width, height = img.size
+    except (UnidentifiedImageError, OSError, ValueError):
+        # Не картинка вовсе, либо битая — и то, и другое означает «дальше
+        # разбираемся по расширению». Обвал Pillow на мусорном вводе (OSError)
+        # это ожидаемый путь, а не исключительная ситуация.
+        return None, None, None
+    mime = SAFE_IMAGE_FORMATS.get(image_format or "")
+    if not mime:
+        # Формат Pillow опознал, но в белом списке его нет (ICO, TIFF, PSD…) —
+        # отдаём как обычный файл, а не как встраиваемую картинку.
+        return None, None, None
+    return mime, width, height
+
+
+def _guess_media_type(filename: str) -> str:
+    guessed, _encoding = mimetypes.guess_type(filename or "")
+    if guessed and guessed.startswith(EMBEDDABLE_MEDIA_PREFIXES):
+        return guessed
+    # Всё прочее — включая text/html, image/svg+xml и просто неопознанное —
+    # становится «файлом на скачивание». Тип из mimetypes здесь намеренно
+    # выбрасывается: он выведен из РАСШИРЕНИЯ, то есть полностью подконтролен
+    # загружающему, и доверять ему для решения «встраивать ли» нельзя.
+    return FALLBACK_CONTENT_TYPE

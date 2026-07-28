@@ -11,11 +11,26 @@ import { getToken, UserStatus } from './api'
 
 type Handler = (payload: any) => void
 
+/** Что нужно серверу для создания сообщения сверх самого текста.
+ *
+ * nonce — метка ПОПЫТКИ отправки (см. web/src/outbox.ts): по ней приходит
+ * подтверждение доставки и по ней же сервер узнаёт ретрай, чтобы не создать
+ * дубль. attachmentIds — id уже загруженных файлов (api.uploadAttachment):
+ * сами файлы через сокет не идут, он тут один на всё приложение. */
+export interface SendMessageOptions {
+  replyTo?: number | null
+  attachmentIds?: string[]
+  nonce?: string
+}
+
 interface GatewayCtx {
   on: (op: string, handler: Handler) => () => void
-  sendMessage: (channelId: number, content: string, replyTo?: number | null) => void
+  sendMessage: (channelId: number, content: string, opts?: SendMessageOptions) => void
   deleteMessage: (messageId: number) => void
   editMessage: (messageId: number, content: string) => void
+  /** Поставить/снять свою реакцию на сообщение канала. */
+  addReaction: (messageId: number, emoji: string) => void
+  removeReaction: (messageId: number, emoji: string) => void
   voiceJoin: (channelId: number) => void
   voiceLeave: () => void
   voiceMuteUpdate: (muted: boolean, deafened: boolean) => void
@@ -33,9 +48,17 @@ interface GatewayCtx {
    * персональный тихий пинг, слышен только адресату (voice_screen_share_requested). */
   voiceRequestScreenShare: (targetUserId: number) => void
   setStatus: (status: UserStatus) => void
-  dmSendMessage: (conversationId: number, content: string, replyTo?: number | null) => void
+  dmSendMessage: (
+    conversationId: number,
+    content: string,
+    opts?: SendMessageOptions,
+  ) => void
   dmDeleteMessage: (messageId: number) => void
   dmEditMessage: (messageId: number, content: string) => void
+  /** Реакции в личке/группе — отдельные оп'ы, потому что id сообщений в
+   * ConversationMessage и Message нумеруются независимо (см. backend). */
+  dmAddReaction: (messageId: number, emoji: string) => void
+  dmRemoveReaction: (messageId: number, emoji: string) => void
   /** voiceLeave/voiceMuteUpdate/voiceScreenShareUpdate — те же клиентские
    * op'ы для звонка в диалоге/группе (сервер сам различает по текущей
    * комнате, см. chat.consumers._send_to_room_group). */
@@ -188,11 +211,22 @@ export function GatewayProvider({ children }: { children: ReactNode }) {
   // потребителей useGateway().
   const value: GatewayCtx = useMemo(() => ({
     on,
-    sendMessage: (channelId, content, replyTo) =>
-      raw({ op: 'send_message', channel_id: channelId, content, reply_to: replyTo ?? null }),
+    sendMessage: (channelId, content, opts) =>
+      raw({
+        op: 'send_message',
+        channel_id: channelId,
+        content,
+        reply_to: opts?.replyTo ?? null,
+        attachment_ids: opts?.attachmentIds ?? [],
+        nonce: opts?.nonce ?? null,
+      }),
     deleteMessage: (messageId) => raw({ op: 'delete_message', message_id: messageId }),
     editMessage: (messageId, content) =>
       raw({ op: 'edit_message', message_id: messageId, content }),
+    addReaction: (messageId, emoji) =>
+      raw({ op: 'add_reaction', message_id: messageId, emoji }),
+    removeReaction: (messageId, emoji) =>
+      raw({ op: 'remove_reaction', message_id: messageId, emoji }),
     voiceJoin: (channelId) => raw({ op: 'voice_join', channel_id: channelId }),
     voiceLeave: () => raw({ op: 'voice_leave' }),
     voiceMuteUpdate: (muted, deafened) =>
@@ -207,14 +241,22 @@ export function GatewayProvider({ children }: { children: ReactNode }) {
     voiceRequestScreenShare: (targetUserId) =>
       raw({ op: 'voice_request_screen_share', target_user_id: targetUserId }),
     setStatus: (status) => raw({ op: 'set_status', status }),
-    dmSendMessage: (conversationId, content, replyTo) =>
+    dmSendMessage: (conversationId, content, opts) =>
       raw({
-        op: 'dm_send_message', conversation_id: conversationId, content,
-        reply_to: replyTo ?? null,
+        op: 'dm_send_message',
+        conversation_id: conversationId,
+        content,
+        reply_to: opts?.replyTo ?? null,
+        attachment_ids: opts?.attachmentIds ?? [],
+        nonce: opts?.nonce ?? null,
       }),
     dmDeleteMessage: (messageId) => raw({ op: 'dm_delete_message', message_id: messageId }),
     dmEditMessage: (messageId, content) =>
       raw({ op: 'dm_edit_message', message_id: messageId, content }),
+    dmAddReaction: (messageId, emoji) =>
+      raw({ op: 'dm_add_reaction', message_id: messageId, emoji }),
+    dmRemoveReaction: (messageId, emoji) =>
+      raw({ op: 'dm_remove_reaction', message_id: messageId, emoji }),
     dmVoiceJoin: (conversationId) =>
       raw({ op: 'dm_voice_join', conversation_id: conversationId }),
   }), [on, raw])

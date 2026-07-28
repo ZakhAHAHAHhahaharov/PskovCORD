@@ -20,7 +20,31 @@ server {
         alias /opt/pskovcord/deploy/staticfiles/;
     }
 
-    # Пользовательские загрузки (favicon-наборы, см. core.models.Favicon) —
+    # Вложения сообщений (chat.models.Attachment). ОТДЕЛЬНЫЙ location до
+    # общего /media/ — из-за двух заголовков ниже.
+    #
+    # Файлы сюда кладут пользователи, а отдаются они с того же домена, что и
+    # само приложение, где в localStorage лежит JWT. Без этих заголовков
+    # загруженный .html или .svg открывался бы как ДОКУМЕНТ на нашем origin,
+    # то есть выполнял бы свой скрипт с доступом к токенам всякого, кто по
+    # нему кликнул — классический stored-XSS через загрузку файла.
+    #
+    #   Content-Disposition: attachment — браузер такой ответ скачивает, а не
+    #     открывает. На встраивание это НЕ влияет: <img>/<video>/<audio>
+    #     заголовок игнорируют, поэтому картинки в чате видны как обычно.
+    #   nosniff — запрещает угадывать тип в обход Content-Type (иначе
+    #     браузер сам «опознал» бы HTML в файле, отданном как octet-stream).
+    #
+    # Первый рубеж — на бэкенде: тип определяется по содержимому, и всё, что
+    # небезопасно встраивать, помечается application/octet-stream (chat/uploads.py).
+    # Здесь второй, на случай ошибки в первом.
+    location /media/attachments/ {
+        alias /opt/pskovcord/deploy/media/attachments/;
+        add_header Content-Disposition "attachment" always;
+        add_header X-Content-Type-Options "nosniff" always;
+    }
+
+    # Прочие пользовательские загрузки (favicon-наборы, см. core.models.Favicon) —
     # тем же приёмом, что и /static/: bind-mount ./media из
     # docker-compose.prod.yml, отдаём напрямую, минуя Django.
     location /media/ {

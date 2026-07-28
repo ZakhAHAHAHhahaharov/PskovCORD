@@ -1,5 +1,10 @@
+import uuid
+
 from django.conf import settings
 from django.db import models
+from django.db.models.signals import post_delete
+from django.dispatch import receiver
+from django.utils.text import get_valid_filename
 
 
 class Server(models.Model):
@@ -36,8 +41,11 @@ class Server(models.Model):
     # при наведении. Список строк; JSONField, потому что это чистые данные
     # для отображения, отдельная таблица под них избыточна.
     tags = models.JSONField(default=list, blank=True)
-    # Приватный сервер: описание/особенности/участников видят только свои
-    # (см. chat.views.ServerDiscover и ServerSerializer.to_representation).
+    # Приватный сервер не отдаётся поиском серверов вообще — ни строкой, ни
+    # именем (см. chat.views.ServerDiscover). Попасть в него можно, только
+    # узнав о нём извне; на каких условиях пускают дальше, решает уже
+    # access_mode — это ортогональные вещи (приватный + public = «не в
+    # каталоге, но по ссылке заходи»).
     is_private = models.BooleanField(default=False)
     access_mode = models.CharField(
         max_length=10, choices=ACCESS_CHOICES, default=ACCESS_PUBLIC)
@@ -194,7 +202,12 @@ class Message(models.Model):
         on_delete=models.CASCADE,
         related_name="messages",
     )
-    content = models.TextField()
+    # Пусто разрешено с появлением вложений: сообщение из одной картинки без
+    # подписи — совершенно нормальное. Проверку «хоть что-то одно должно быть»
+    # делает отправляющий код (chat.consumers._handle_send), а не БД: пустое
+    # сообщение без вложений законно существует ровно один миг между
+    # Message.objects.create() и привязкой Attachment'ов в той же транзакции.
+    content = models.TextField(blank=True, default="")
     reply_to = models.ForeignKey(
         "self",
         null=True,
@@ -302,7 +315,8 @@ class ConversationMessage(models.Model):
     author = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
         related_name="conversation_messages")
-    content = models.TextField()
+    # Пусто разрешено — см. Message.content.
+    content = models.TextField(blank=True, default="")
     reply_to = models.ForeignKey(
         "self", null=True, blank=True, on_delete=models.SET_NULL,
         related_name="replies")
@@ -314,3 +328,166 @@ class ConversationMessage(models.Model):
 
     def __str__(self) -> str:
         return f"{self.author}: {self.content[:30]}"
+
+
+# --- вложения и реакции -----------------------------------------------------
+# Оба вида сообщений (Message в канале сервера и ConversationMessage в личке/
+# группе) — разные таблицы с разными правилами доступа, но вложения и реакции
+# у них устроены одинаково. Вместо двух пар почти одинаковых моделей (или
+# GenericForeignKey, который лишает нас внешних ключей и каскадного удаления)
+# здесь одна модель с ДВУМЯ nullable-FK и check-constraint'ом «заполнен ровно
+# один из них». Так остаётся и целостность на уровне БД, и ON DELETE CASCADE:
+# удалили сообщение — уехали и его вложения с реакциями.
+
+ATTACHMENT_SUBDIR = "attachments"
+
+# Потолок на один файл. Не техническое ограничение, а защита диска и чужого
+# трафика: файлы отдаёт nginx напрямую из volume'а, никакой квоты сверху нет.
+MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024
+# Сколько файлов можно повесить на одно сообщение — как в Discord.
+MAX_ATTACHMENTS_PER_MESSAGE = 10
+# Сколько РАЗНЫХ эмодзи может висеть на одном сообщении. Ограничение на
+# сообщение, а не на пользователя: один человек волен поставить все 20 сразу.
+MAX_REACTIONS_PER_MESSAGE = 20
+# Длины хватает и на unicode-последовательность с ZWJ и модификаторами тона
+# (семья из четырёх человек — это 11 кодовых точек), и на будущий ключ
+# кастомного эмодзи сервера вида "custom:<id>" (см. web/src/emoji.ts).
+MAX_EMOJI_LEN = 64
+
+
+def attachment_upload_to(instance, filename: str) -> str:
+    """MEDIA_ROOT/attachments/<uuid>/<исходное имя>.
+
+    Каталог на файл, а не общая свалка: имя внутри остаётся человеческим (оно
+    же уезжает в Content-Disposition при скачивании), но коллизий не бывает —
+    два `photo.jpg` от разных людей лежат в разных uuid-каталогах.
+
+    uuid здесь заодно единственная защита самого файла: /media/ отдаёт nginx
+    напрямую, без похода в Django, то есть без проверки прав (см.
+    deploy/nginx.conf.example). Ссылка неугадываема, но тот, кому она попала,
+    файл получит — ровно та же модель, что у вложений в Discord. Если однажды
+    понадобится настоящая проверка доступа, менять придётся не модель, а
+    раздачу: отдавать через вьюху с X-Accel-Redirect.
+    """
+    safe = get_valid_filename(filename) or "file"
+    return f"{ATTACHMENT_SUBDIR}/{instance.id.hex}/{safe[:100]}"
+
+
+class Attachment(models.Model):
+    """Файл, прикреплённый к сообщению.
+
+    Живёт двумя стадиями. Сначала загружается сам по себе (POST
+    /api/attachments) и висит «ничей» — с uploaded_by, но без обоих FK на
+    сообщения; так композер на фронте показывает превью и прогресс до того,
+    как сообщение вообще отправлено, а сама отправка по WS остаётся лёгким
+    JSON'ом со списком id. Потом send_message привязывает его к созданному
+    сообщению (см. chat.consumers._bind_attachments).
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    uploaded_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+        related_name="uploaded_attachments")
+    file = models.FileField(upload_to=attachment_upload_to, max_length=300)
+    # Имя, которое видел пользователь у себя на диске: file.name уже
+    # просанитизировано под файловую систему (get_valid_filename), а показывать
+    # и отдавать при скачивании нужно исходное.
+    original_name = models.CharField(max_length=255)
+    # Тип берём НЕ из заголовка запроса (клиент шлёт что хочет), а определяем
+    # на сервере по содержимому — см. chat.views.AttachmentUpload.
+    content_type = models.CharField(max_length=100)
+    size = models.PositiveBigIntegerField()
+    # Только у картинок — фронту нужны, чтобы зарезервировать место под превью
+    # до его загрузки и не дёргать вёрстку уже прочитанного чата.
+    width = models.PositiveIntegerField(null=True, blank=True)
+    height = models.PositiveIntegerField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    message = models.ForeignKey(
+        Message, null=True, blank=True, on_delete=models.CASCADE,
+        related_name="attachments")
+    conversation_message = models.ForeignKey(
+        ConversationMessage, null=True, blank=True, on_delete=models.CASCADE,
+        related_name="attachments")
+
+    class Meta:
+        ordering = ["created_at", "id"]
+        constraints = [
+            models.CheckConstraint(
+                # Ровно один владелец либо ни одного (свежая загрузка).
+                check=models.Q(message__isnull=True)
+                | models.Q(conversation_message__isnull=True),
+                name="attachment_single_owner",
+            )
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.original_name} ({self.size} B)"
+
+
+@receiver(post_delete, sender=Attachment)
+def _cleanup_attachment_file(sender, instance, **kwargs):
+    """Сигнал, а не override delete(): каскадное удаление вложений вместе с
+    сообщением идёт через queryset, и override метода модели его бы не увидел —
+    строки бы исчезли, а файлы остались лежать на диске навсегда.
+
+    save=False — модели, которую удаляют, повторный save() не нужен и был бы
+    ошибкой (строки уже нет).
+    """
+    if instance.file:
+        instance.file.delete(save=False)
+
+
+class Reaction(models.Model):
+    """Реакция-эмодзи одного человека на одно сообщение.
+
+    Одна строка = один (пользователь, сообщение, эмодзи). Счётчики, которые
+    видит фронт, считаются агрегатом при сериализации (см.
+    chat.serializers.reactions_map) — отдельное поле-счётчик означало бы два
+    источника правды и неизбежный рассинхрон.
+    """
+
+    emoji = models.CharField(max_length=MAX_EMOJI_LEN)
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+        related_name="reactions")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    message = models.ForeignKey(
+        Message, null=True, blank=True, on_delete=models.CASCADE,
+        related_name="reactions")
+    conversation_message = models.ForeignKey(
+        ConversationMessage, null=True, blank=True, on_delete=models.CASCADE,
+        related_name="reactions")
+
+    class Meta:
+        ordering = ["created_at", "id"]
+        constraints = [
+            # Дважды одну и ту же реакцию один человек поставить не может —
+            # гарантия на уровне БД, а не только проверкой в консьюмере: два
+            # клика подряд из двух вкладок это классическая гонка.
+            models.UniqueConstraint(
+                fields=["message", "user", "emoji"],
+                condition=models.Q(message__isnull=False),
+                name="unique_message_reaction",
+            ),
+            models.UniqueConstraint(
+                fields=["conversation_message", "user", "emoji"],
+                condition=models.Q(conversation_message__isnull=False),
+                name="unique_conversation_message_reaction",
+            ),
+            models.CheckConstraint(
+                # У реакции владелец обязателен (в отличие от Attachment,
+                # который какое-то время живёт ничей) — ровно один из двух.
+                check=(
+                    models.Q(message__isnull=False,
+                             conversation_message__isnull=True)
+                    | models.Q(message__isnull=True,
+                               conversation_message__isnull=False)
+                ),
+                name="reaction_exactly_one_owner",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.user} {self.emoji}"

@@ -19,10 +19,22 @@ urlpatterns = [
         for public_name in FAVICON_ROUTES
     ],
     path("api/favicon/site.webmanifest", favicon_manifest, name="favicon-manifest"),
-    # Всё остальное — веб-клиент (SPA). Должно идти последним.
-    re_path(r"^(?P<path>.*)$", spa, name="spa"),
 ]
 
 if settings.DEBUG:
-    # В проде это делает nginx напрямую из volume'а (см. deploy/nginx.conf.example).
+    # Пользовательские загрузки (вложения сообщений, см. chat.models.Attachment).
+    # В проде их отдаёт nginx напрямую из volume'а, минуя Django
+    # (см. deploy/nginx.conf.example) — здесь только для dev-сервера.
+    #
+    # ВАЖНО: строго ДО catch-all'а SPA ниже. Раньше эта строка стояла в самом
+    # конце файла, после него — и не работала вообще: `^(?P<path>.*)$` матчит
+    # в том числе /media/..., Django берёт ПЕРВЫЙ подходящий маршрут, и на
+    # запрос картинки приезжал HTML веб-клиента с кодом 200. Незаметно это
+    # было ровно потому, что до появления вложений в MEDIA_ROOT лежали одни
+    # favicon-наборы, а их отдаёт отдельная вьюха по /api/favicon/.
     urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
+
+urlpatterns += [
+    # Всё остальное — веб-клиент (SPA). Должно идти последним.
+    re_path(r"^(?P<path>.*)$", spa, name="spa"),
+]

@@ -154,6 +154,35 @@ export interface ServerBanEntry {
   created_at: string
 }
 
+/** Файл, прикреплённый к сообщению (backend chat.models.Attachment). */
+export interface Attachment {
+  id: string
+  /** Путь от корня (`/media/...`) — домен подставляет mediaUrl(). */
+  url: string
+  original_name: string
+  /** Определён сервером ПО СОДЕРЖИМОМУ, а не по заголовку запроса; всё, что
+   * небезопасно встраивать, приезжает как application/octet-stream —
+   * см. backend chat/uploads.py. Решение «инлайнить или дать скачать»
+   * принимается по нему и только по нему. */
+  content_type: string
+  size: number
+  /** Только у картинок — чтобы зарезервировать место под превью. */
+  width: number | null
+  height: number | null
+}
+
+/** Одна реакция-эмодзи в агрегированном виде.
+ *
+ * Сервер не присылает готовый флаг «моя»: один и тот же объект уходит всем
+ * получателям разом (см. backend chat/serializers.py reactions_payload).
+ * Клиент считает его сам — сверяя user_ids со своим id. */
+export interface MessageReaction {
+  /** Unicode-символ либо ключ вида "custom:<id>" — см. web/src/emoji.ts. */
+  emoji: string
+  count: number
+  user_ids: number[]
+}
+
 export interface ChatMessageReplyBase {
   id: number
   author: User
@@ -170,6 +199,8 @@ export interface ChatMessageBase {
   author: User
   content: string
   reply_to: ChatMessageReplyBase | null
+  attachments: Attachment[]
+  reactions: MessageReaction[]
   created_at: string
   edited_at: string | null
 }
@@ -370,10 +401,92 @@ async function req(path: string, options: RequestInit = {}, allowRetry = true): 
   return res.json()
 }
 
-function buildQuery(params: Record<string, number | undefined>): string {
-  const entries = Object.entries(params).filter(([, v]) => v !== undefined)
+function buildQuery(params: Record<string, number | string | undefined>): string {
+  const entries = Object.entries(params).filter(([, v]) => v !== undefined && v !== '')
   if (entries.length === 0) return ''
-  return '?' + entries.map(([k, v]) => `${k}=${v}`).join('&')
+  return (
+    '?' +
+    entries
+      .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`)
+      .join('&')
+  )
+}
+
+/** Абсолютный адрес файла из /media/.
+ *
+ * Backend отдаёт путь от корня, без домена (см. AttachmentSerializer.get_url):
+ * тот же объект сообщения уходит и по WebSocket, где request'а нет. В проде
+ * всё за одним доменом и подставлять нечего, а в деве фронт живёт на :5173, и
+ * без этой склейки `/media/...` резолвился бы в Vite, а не в Django. */
+export function mediaUrl(path: string): string {
+  if (!path) return ''
+  if (/^https?:\/\//i.test(path)) return path
+  return `${API}${path}`
+}
+
+/** Загрузка вложения. XHR, а не fetch, ради upload.onprogress: файл до 25 МБ
+ * на медленном канале идёт секунды, и полоса прогресса здесь не украшение —
+ * без неё непонятно, висит загрузка или нет.
+ *
+ * onProgress получает долю 0..1. Возвращённый объект — уже сохранённое
+ * вложение; привязывается к сообщению позже, при отправке (см. outbox.ts). */
+export function uploadAttachment(
+  file: File,
+  opts: { onProgress?: (fraction: number) => void; signal?: AbortSignal } = {},
+): Promise<Attachment> {
+  const send = (token: string | null, allowRetry: boolean): Promise<Attachment> =>
+    new Promise((resolve, reject) => {
+      const form = new FormData()
+      form.append('file', file)
+      const xhr = new XMLHttpRequest()
+      xhr.open('POST', `${API}/api/attachments`)
+      xhr.withCredentials = true
+      if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`)
+
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable) opts.onProgress?.(e.loaded / e.total)
+      }
+      xhr.onload = () => {
+        if (xhr.status === 201) {
+          try {
+            resolve(JSON.parse(xhr.responseText))
+          } catch {
+            reject(new Error('Некорректный ответ сервера.'))
+          }
+          return
+        }
+        // Тот же путь, что у обычных запросов (см. req): протухший токен
+        // обновляем и повторяем ровно один раз.
+        if (xhr.status === 401 && allowRetry && token) {
+          refreshAccessToken().then((fresh) => {
+            if (fresh) {
+              send(fresh, false).then(resolve, reject)
+              return
+            }
+            setTokens(null, null)
+            onSessionExpired?.()
+            reject(new Error('Сессия истекла — войдите заново.'))
+          })
+          return
+        }
+        let detail = xhr.statusText || 'Не удалось загрузить файл.'
+        try {
+          detail = JSON.parse(xhr.responseText).detail || detail
+        } catch {
+          /* ignore */
+        }
+        reject(new Error(detail))
+      }
+      xhr.onerror = () => reject(new Error('Сеть недоступна — файл не загрузился.'))
+      xhr.onabort = () => reject(new DOMException('Загрузка отменена', 'AbortError'))
+      opts.signal?.addEventListener('abort', () => xhr.abort(), { once: true })
+      xhr.send(form)
+    })
+
+  if (opts.signal?.aborted) {
+    return Promise.reject(new DOMException('Загрузка отменена', 'AbortError'))
+  }
+  return send(accessToken, true)
 }
 
 export const api = {
@@ -449,7 +562,10 @@ export const api = {
   servers: (): Promise<Server[]> => req('/api/servers'),
   createServer: (name: string): Promise<Server> =>
     req('/api/servers', { method: 'POST', body: JSON.stringify({ name }) }),
-  discover: (): Promise<DiscoverServer[]> => req('/api/servers/discover'),
+  /** Поиск серверов. Приватные сюда не попадают вообще — кроме тех, где мы
+   * уже состоим (см. backend chat.views.ServerDiscover). */
+  discover: (query = ''): Promise<DiscoverServer[]> =>
+    req(`/api/servers/discover${buildQuery({ q: query.trim() })}`),
   /** Сервер «по заявке» вместо вступления отдаёт {status:'pending'} —
    * членства ещё нет, ждём одобрения (см. chat.views.ServerJoin). */
   joinServer: (id: number): Promise<Server | { status: 'pending'; detail: string }> =>

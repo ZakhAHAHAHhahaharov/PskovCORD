@@ -2007,15 +2007,27 @@ input {
 }
 
 .message-input-wrap {
+  position: relative;
   padding: 0 16px 24px;
 }
 
-.message-input input {
-  width: 100%;
+/* Пилюля поля ввода теперь общая для кнопок и текста: скрепка слева, эмодзи
+   справа, между ними — сам input без собственного фона. */
+.message-input {
+  display: flex;
+  align-items: center;
+  gap: 4px;
   background: var(--input-secondary-bg);
-  border: none;
   border-radius: 8px;
-  padding: 12px 16px;
+  padding: 0 8px;
+}
+
+.message-input input {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: none;
+  padding: 12px 8px;
   color: var(--text-normal);
   font-size: 15px;
   outline: none;
@@ -2023,6 +2035,49 @@ input {
 
 .message-input input::placeholder {
   color: var(--text-faint);
+}
+
+.composer-btn {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  color: var(--text-muted);
+}
+
+.composer-btn:hover:not(:disabled) {
+  color: var(--text-normal);
+  background: var(--channel-hover);
+}
+
+.composer-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.composer-hint {
+  padding: 4px 8px 0;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+/* Подсветка зоны, когда над композером тащат файл. */
+.message-input-wrap.dragging::after {
+  content: 'Отпусти файл, чтобы прикрепить';
+  position: absolute;
+  inset: 0 16px 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px dashed var(--blurple);
+  border-radius: 8px;
+  background: rgba(88, 101, 242, 0.12);
+  color: var(--text-normal);
+  font-size: 14px;
+  pointer-events: none;
 }
 
 .reply-banner {
@@ -3837,4 +3892,491 @@ button.settings-row-clickable:hover .settings-row-label {
 
 .mute-vote-btn.against:hover {
   background: #c8393c;
+}
+
+/* ===================================================================
+   Вложения, реакции, эмодзи и статусы доставки
+   =================================================================== */
+
+/* ---- файлы, выбранные в композере (до отправки) ---- */
+.staged-files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px;
+  margin-bottom: 4px;
+  background: var(--surface-2);
+  border: 1px solid var(--surface-2-border);
+  border-radius: 8px;
+}
+
+.staged-file {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 220px;
+  padding: 6px;
+  background: var(--input-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+}
+
+.staged-file-error {
+  border-color: var(--red);
+}
+
+.staged-preview {
+  flex-shrink: 0;
+  width: 40px;
+  height: 40px;
+  border-radius: 4px;
+  object-fit: cover;
+}
+
+.staged-preview-generic {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--channel-active);
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.staged-file-info {
+  min-width: 0;
+  flex: 1;
+}
+
+.staged-file-name {
+  display: block;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 13px;
+  color: var(--text-normal);
+}
+
+.staged-file-meta {
+  display: block;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.staged-file-error .staged-file-meta {
+  color: var(--red);
+}
+
+.staged-progress {
+  margin-top: 4px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--channel-active);
+  overflow: hidden;
+}
+
+.staged-progress-bar {
+  height: 100%;
+  background: var(--blurple);
+  transition: width 0.15s linear;
+}
+
+.staged-file-remove {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  color: var(--text-muted);
+}
+
+.staged-file-remove:hover {
+  color: var(--text-normal);
+  background: var(--channel-hover);
+}
+
+/* ---- вложения в отправленном сообщении ---- */
+.message-attachments {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.attachment-image-btn {
+  display: block;
+  padding: 0;
+  border-radius: 8px;
+  overflow: hidden;
+  line-height: 0;
+}
+
+.attachment-image {
+  display: block;
+  max-width: 420px;
+  max-height: 320px;
+  width: auto;
+  height: auto;
+  border-radius: 8px;
+}
+
+.attachment-image-btn:hover .attachment-image {
+  filter: brightness(0.9);
+}
+
+.attachment-video {
+  max-width: 420px;
+  max-height: 320px;
+  border-radius: 8px;
+  background: #000;
+}
+
+.attachment-audio {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  background: var(--surface-2);
+  border: 1px solid var(--surface-2-border);
+  border-radius: 8px;
+}
+
+.attachment-audio .attachment-name {
+  font-size: 13px;
+  color: var(--text-normal);
+}
+
+.attachment-file {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: 400px;
+  padding: 10px 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--surface-2-border);
+  border-radius: 8px;
+  text-decoration: none;
+}
+
+.attachment-file:hover {
+  border-color: var(--blurple);
+}
+
+.attachment-file-icon {
+  flex-shrink: 0;
+  color: var(--blurple);
+}
+
+.attachment-file-info {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.attachment-file-name {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 14px;
+  color: var(--blurple);
+}
+
+.attachment-file-size {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.attachment-file-download {
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+
+/* ---- лайтбокс картинки ---- */
+.lightbox-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 40px;
+  background: rgba(0, 0, 0, 0.85);
+}
+
+.lightbox-image {
+  max-width: 90vw;
+  max-height: 80vh;
+  border-radius: 6px;
+  object-fit: contain;
+}
+
+.lightbox-bar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  color: #fff;
+}
+
+.lightbox-name {
+  font-size: 14px;
+  opacity: 0.85;
+}
+
+.lightbox-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+  font-size: 14px;
+  text-decoration: none;
+}
+
+.lightbox-action:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+/* ---- реакции ---- */
+.message-reactions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 5px;
+}
+
+.reaction-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 7px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--text-normal);
+  font-size: 14px;
+  line-height: 1;
+}
+
+.reaction-pill:hover {
+  border-color: var(--text-faint);
+}
+
+/* Своя реакция — заметно выделена: без этого непонятно, что уже поставлено,
+   и клик превращается в угадывание. */
+.reaction-pill.mine {
+  background: rgba(88, 101, 242, 0.2);
+  border-color: var(--blurple);
+}
+
+.reaction-count {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.reaction-pill.mine .reaction-count {
+  color: var(--blurple);
+}
+
+.reaction-add {
+  color: var(--text-muted);
+}
+
+/* Кнопка «+» видна только при наведении на сообщение — иначе она висела бы
+   под каждым сообщением в ленте и создавала визуальный шум. */
+.message-row .reaction-add {
+  opacity: 0;
+}
+
+.message-row:hover .reaction-add {
+  opacity: 1;
+}
+
+.reaction-custom {
+  width: 18px;
+  height: 18px;
+  object-fit: contain;
+}
+
+.reaction-missing {
+  opacity: 0.5;
+}
+
+.message-action-emoji {
+  font-size: 15px;
+}
+
+/* ---- пикер эмодзи ---- */
+.emoji-picker {
+  position: fixed;
+  z-index: 900;
+  display: flex;
+  flex-direction: column;
+  background: var(--modal-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  overflow: hidden;
+}
+
+.emoji-picker-search {
+  padding: 8px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.emoji-picker-search input {
+  width: 100%;
+  background: var(--input-bg);
+  border: 1px solid var(--input-border);
+  border-radius: 4px;
+  padding: 7px 10px;
+  color: var(--text-normal);
+  font-size: 14px;
+  outline: none;
+}
+
+.emoji-picker-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--border-color);
+  overflow-x: auto;
+}
+
+.emoji-tab {
+  flex-shrink: 0;
+  width: 30px;
+  height: 30px;
+  border-radius: 4px;
+  font-size: 17px;
+  opacity: 0.6;
+}
+
+.emoji-tab:hover,
+.emoji-tab.active {
+  opacity: 1;
+  background: var(--channel-hover);
+}
+
+.emoji-picker-scroll {
+  flex: 1;
+  overflow-y: auto;
+  padding: 6px;
+}
+
+.emoji-category-label {
+  padding: 6px 4px 4px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.emoji-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(34px, 1fr));
+  gap: 2px;
+}
+
+.emoji-cell {
+  width: 34px;
+  height: 34px;
+  border-radius: 4px;
+  font-size: 21px;
+  line-height: 1;
+}
+
+.emoji-cell:hover {
+  background: var(--channel-hover);
+}
+
+.emoji-empty {
+  padding: 20px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 14px;
+}
+
+/* ---- статус доставки ---- */
+.msg-status {
+  display: inline-flex;
+  align-items: center;
+}
+
+.msg-status-sending {
+  color: var(--text-faint);
+}
+
+.msg-status-delivered {
+  color: var(--green);
+}
+
+.msg-status-failed {
+  color: var(--red);
+}
+
+/* Пока сообщение не подтверждено — приглушено: видно, что оно ещё в пути. */
+.message-row.message-pending .message-content,
+.message-row.message-pending .message-attachments {
+  opacity: 0.6;
+}
+
+.message-row.message-failed {
+  background: rgba(242, 63, 67, 0.07);
+  border-radius: 4px;
+}
+
+.message-failed-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.message-failed-text {
+  font-size: 12px;
+  color: var(--red);
+}
+
+.message-failed-actions .btn-small {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  font-size: 12px;
+  background: var(--input-secondary-bg);
+  color: var(--text-normal);
+}
+
+.message-failed-actions .btn-small-danger:hover {
+  background: var(--red);
+  color: #fff;
+}
+
+/* ---- поиск серверов ---- */
+.discover-search {
+  width: 100%;
+  margin-bottom: 12px;
+  background: var(--input-bg);
+  border: 1px solid var(--input-border);
+  border-radius: 4px;
+  padding: 9px 12px;
+  color: var(--text-normal);
+  font-size: 14px;
+  outline: none;
+}
+
+.discover-search::placeholder {
+  color: var(--text-faint);
 }
