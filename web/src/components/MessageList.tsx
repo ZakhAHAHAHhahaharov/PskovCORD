@@ -9,6 +9,7 @@ import Avatar from './Avatar'
 import EmojiPicker, { EmojiPickerAnchor } from './EmojiPicker'
 import MessageAttachments from './MessageAttachments'
 import MessageReactions from './MessageReactions'
+import ServerInviteCard from './ServerInviteCard'
 import { ProfilePopupUser } from './MiniProfilePopup'
 
 /** Сообщение в ленте. Неотправленные приходят сюда в той же форме, что и
@@ -61,6 +62,9 @@ export default function MessageList({
   onToggleReaction,
   onRetry,
   onDiscard,
+  onAcceptServerInvite,
+  onDeclineServerInvite,
+  onOpenInvitedServer,
 }: {
   messages: ListMessage[]
   currentUserId: number
@@ -79,6 +83,11 @@ export default function MessageList({
   onRetry: (nonce: string) => void
   /** Выбросить неотправленное сообщение вместе с черновиком. */
   onDiscard: (nonce: string) => void
+  /** Карточка приглашения на сервер (см. ChatMessageBase.server_invite) —
+   * только у диалогов/групп, у серверных сообщений её не бывает. */
+  onAcceptServerInvite?: (inviteId: number) => void
+  onDeclineServerInvite?: (inviteId: number) => void
+  onOpenInvitedServer?: (serverId: number) => void
 }) {
   const bottomRef = useRef<HTMLDivElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
@@ -162,6 +171,15 @@ export default function MessageList({
               </div>
               {m.content && <div className="message-content">{m.content}</div>}
               <MessageAttachments attachments={m.attachments} />
+              {m.server_invite && (
+                <ServerInviteCard
+                  invite={m.server_invite}
+                  isAuthor={isAuthor}
+                  onAccept={() => onAcceptServerInvite?.(m.server_invite!.id)}
+                  onDecline={() => onDeclineServerInvite?.(m.server_invite!.id)}
+                  onOpen={() => onOpenInvitedServer?.(m.server_invite!.server.id)}
+                />
+              )}
               {!pending && (
                 <MessageReactions
                   reactions={m.reactions}

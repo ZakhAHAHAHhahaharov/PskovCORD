@@ -255,6 +255,81 @@ def _grant_server_membership(server, user_id):
     })
 
 
+def _find_or_create_dm(user_a_id, user_b_id):
+    """Найти личный диалог между двумя людьми или завести новый — без
+    проверки can_dm: прямое приглашение на сервер, как и раньше, обходит
+    настройки личных сообщений целиком (см. docstring ServerInvite),
+    поэтому в отличие от ConversationListCreate._create_dm здесь её нет."""
+    dm_key = Conversation.build_dm_key(user_a_id, user_b_id)
+    conversation = Conversation.objects.filter(
+        kind=Conversation.DM, dm_key=dm_key).first()
+    if conversation is None:
+        # Диалоги, заведённые до появления dm_key (см. миграцию 0006).
+        conversation = (
+            Conversation.objects.filter(
+                kind=Conversation.DM, dm_key="", participants__id=user_a_id)
+            .filter(participants__id=user_b_id)
+            .first()
+        )
+    if conversation is not None:
+        return conversation, False
+    try:
+        with transaction.atomic():
+            conversation = Conversation.objects.create(
+                kind=Conversation.DM, dm_key=dm_key)
+            ConversationParticipant.objects.bulk_create([
+                ConversationParticipant(conversation=conversation, user_id=user_a_id),
+                ConversationParticipant(conversation=conversation, user_id=user_b_id),
+            ])
+        return conversation, True
+    except IntegrityError:
+        # Гонка (двойной клик "Пригласить") — та же строка, что и обычный
+        # _create_dm, уже успела появиться.
+        return Conversation.objects.get(kind=Conversation.DM, dm_key=dm_key), False
+
+
+def _send_invite_message(request, target, invite):
+    """Приглашение приходит адресату не отдельным списком, а карточкой
+    сервера прямо в диалоге с пригласившим (см. web/src/components/
+    ServerInviteCard.tsx) — заводит диалог при необходимости и рассылает
+    сообщение так же, как обычная отправка по WebSocket (chat.consumers).
+    """
+    conversation, conv_created = _find_or_create_dm(request.user.id, target.id)
+    message = ConversationMessage.objects.create(
+        conversation=conversation, author=request.user, server_invite=invite)
+    if conv_created:
+        data = ConversationSerializer(
+            conversation, context=conversation_context(request, conversation)).data
+        for uid in (request.user.id, target.id):
+            _notify_user(uid, {"op": "conversation_create", "conversation": data})
+    channel_layer = get_channel_layer()
+    async_to_sync(channel_layer.group_send)(
+        f"conversation_{conversation.id}",
+        {"type": "broadcast", "payload": {
+            "op": "dm_message_create",
+            "message": ConversationMessageSerializer(message).data,
+            "nonce": None,
+        }})
+
+
+def _broadcast_invite_message_update(invite):
+    """После accept/decline карточка приглашения в переписке должна
+    обновить свой статус у ОБОИХ участников живьём — тем же dm_message_update,
+    что и обычное редактирование сообщения (см. chat.consumers._handle_dm_edit_message)."""
+    message = invite.conversation_messages.select_related(
+        "author", "reply_to__author", "server_invite__server"
+    ).prefetch_related("attachments", "reactions").first()
+    if message is None:
+        return
+    channel_layer = get_channel_layer()
+    async_to_sync(channel_layer.group_send)(
+        f"conversation_{message.conversation_id}",
+        {"type": "broadcast", "payload": {
+            "op": "dm_message_update",
+            "message": ConversationMessageSerializer(message).data,
+        }})
+
+
 class ServerListCreate(APIView):
     def get(self, request):
         # Фильтр по id, а не join'ом по memberships: с join'ом
@@ -751,7 +826,10 @@ class ServerInvites(APIView):
     человека напрямую. Может любой участник сервера — приглашать друзей на
     свой сервер не требует прав модерации, это не изменение самого сервера.
     Байпасит access_mode ЦЕЛИКОМ (в т.ч. «только по приглашению») — в этом и
-    смысл приглашения; бан по-прежнему блокирует."""
+    смысл приглашения; бан по-прежнему блокирует.
+
+    Само приглашение адресат видит не отдельным списком, а карточкой сервера
+    прямо в переписке с пригласившим — см. _send_invite_message."""
 
     def post(self, request, server_id):
         server = get_object_or_404(Server, id=server_id)
@@ -766,23 +844,23 @@ class ServerInvites(APIView):
             return Response({"detail": "Этот пользователь забанен на сервере."}, status=400)
         invite, created = ServerInvite.objects.get_or_create(
             server=server, invited_user=target, kind=ServerInvite.DIRECT,
-            defaults={"created_by": request.user},
+            status=ServerInvite.PENDING, defaults={"created_by": request.user},
         )
         if created:
-            _notify_user(target.id, {
-                "op": "server_invite_create",
-                "invite": ServerInviteSerializer(invite).data,
-            })
+            _send_invite_message(request, target, invite)
         return Response(ServerInviteSerializer(invite).data, status=201 if created else 200)
 
 
 class MyServerInvites(APIView):
-    """GET /api/invites — личные приглашения, адресованные МНЕ. Ссылочные
-    приглашения (kind=LINK) сюда не попадают — они не адресные."""
+    """GET /api/invites — личные приглашения, адресованные МНЕ и ещё не
+    решённые. Ссылочные приглашения (kind=LINK) сюда не попадают — они не
+    адресные. Решённые приглашения адресат видит в самой переписке
+    (карточкой — см. ConversationServerInviteSerializer), не здесь."""
 
     def get(self, request):
         qs = ServerInvite.objects.filter(
             kind=ServerInvite.DIRECT, invited_user=request.user,
+            status=ServerInvite.PENDING,
         ).select_related("server", "created_by")
         return Response(ServerInviteSerializer(qs, many=True).data)
 
@@ -791,28 +869,39 @@ class ServerInviteDecision(APIView):
     """POST — принять приглашение (сразу становишься участником, без
     рассмотрения владельцем — сам факт приглашения от участника это
     разрешение). DELETE — отклонить (приглашённым) или отозвать
-    (пригласившим) — симметрично FriendRequestDecline."""
+    (пригласившим) — симметрично FriendRequestDecline.
+
+    Приглашение не удаляется по решению (в отличие от прежнего поведения) —
+    оно живёт карточкой в переписке (см. ConversationMessage.server_invite) и
+    должно продолжать показывать там своё состояние."""
 
     def post(self, request, invite_id):
         invite = get_object_or_404(
             ServerInvite, id=invite_id, kind=ServerInvite.DIRECT,
-            invited_user=request.user)
+            invited_user=request.user, status=ServerInvite.PENDING)
         server = invite.server
         if ServerBan.objects.filter(server=server, user=request.user).exists():
-            invite.delete()
+            invite.status = ServerInvite.DECLINED
+            invite.save(update_fields=["status"])
+            _broadcast_invite_message_update(invite)
             return Response({"detail": "Вы забанены на этом сервере."}, status=403)
         Membership.objects.get_or_create(user=request.user, server=server)
-        invite.delete()
+        invite.status = ServerInvite.ACCEPTED
+        invite.save(update_fields=["status"])
         _grant_server_membership(server, request.user.id)
+        _broadcast_invite_message_update(invite)
         return Response(
             ServerSerializer(server, context=server_context(request, server)).data)
 
     def delete(self, request, invite_id):
-        get_object_or_404(
+        invite = get_object_or_404(
             ServerInvite.objects.filter(
                 Q(invited_user=request.user) | Q(created_by=request.user)),
-            id=invite_id, kind=ServerInvite.DIRECT,
-        ).delete()
+            id=invite_id, kind=ServerInvite.DIRECT, status=ServerInvite.PENDING,
+        )
+        invite.status = ServerInvite.DECLINED
+        invite.save(update_fields=["status"])
+        _broadcast_invite_message_update(invite)
         return Response(status=204)
 
 
@@ -1207,7 +1296,7 @@ class ConversationMessages(APIView):
         if not is_participant(request.user, conversation):
             return Response({"detail": "Нет доступа."}, status=403)
         qs = conversation.messages.select_related(
-            "author", "reply_to__author"
+            "author", "reply_to__author", "server_invite__server"
         ).prefetch_related("attachments", "reactions")
         messages = _paginate_messages(request, qs)
         return Response(ConversationMessageSerializer(messages, many=True).data)

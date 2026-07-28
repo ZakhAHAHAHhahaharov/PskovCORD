@@ -268,16 +268,18 @@ class MembershipSettingsSerializer(serializers.ModelSerializer):
 
 
 class ServerInviteSerializer(serializers.ModelSerializer):
-    """Личное приглашение — то, что видит ПРИГЛАШЁННЫЙ в списке "Приглашения"
-    (см. chat.views.MyServerInvites). Ссылки (kind=LINK) этим сериализатором
-    не отдаются — у них другой, более узкий ответ (см. ServerInviteLink)."""
+    """Личное приглашение — ответ на POST /api/servers/<id>/invites и на
+    GET /api/invites (см. chat.views.MyServerInvites). Ссылки (kind=LINK)
+    этим сериализатором не отдаются — у них другой, более узкий ответ (см.
+    ServerInviteLink). Само приглашение адресат теперь видит карточкой в
+    переписке — см. ConversationServerInviteSerializer."""
 
     created_by = UserSerializer(read_only=True)
     server = serializers.SerializerMethodField()
 
     class Meta:
         model = ServerInvite
-        fields = ["id", "server", "created_by", "created_at"]
+        fields = ["id", "server", "created_by", "created_at", "status"]
 
     def get_server(self, obj):
         # Компактно и без контекста запроса: этому серверу приглашённый
@@ -285,6 +287,27 @@ class ServerInviteSerializer(serializers.ModelSerializer):
         # my_settings ему тут ни к чему, а лишний вес (все каналы) — тем
         # более.
         return {"id": obj.server_id, "name": obj.server.name, "icon": obj.server.icon}
+
+
+class ConversationServerInviteSerializer(serializers.ModelSerializer):
+    """Приглашение как оно встроено КАРТОЧКОЙ в сообщение диалога (см.
+    ConversationMessageSerializer.server_invite) — компактнее
+    ServerInviteSerializer: без created_by (это и так автор сообщения) и с
+    member_count, чтобы карточка сама показывала, куда зовут."""
+
+    server = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ServerInvite
+        fields = ["id", "status", "server"]
+
+    def get_server(self, obj):
+        return {
+            "id": obj.server_id,
+            "name": obj.server.name,
+            "icon": obj.server.icon,
+            "member_count": obj.server.memberships.count(),
+        }
 
 
 class AttachmentSerializer(serializers.ModelSerializer):
@@ -367,11 +390,13 @@ class ConversationMessageSerializer(serializers.ModelSerializer):
     reply_to = ConversationMessageReplySerializer(read_only=True)
     attachments = AttachmentSerializer(many=True, read_only=True)
     reactions = serializers.SerializerMethodField()
+    server_invite = ConversationServerInviteSerializer(read_only=True)
 
     class Meta:
         model = ConversationMessage
         fields = ["id", "conversation", "author", "content", "reply_to",
-                  "attachments", "reactions", "created_at", "edited_at"]
+                  "attachments", "reactions", "server_invite", "created_at",
+                  "edited_at"]
         read_only_fields = ["author", "created_at", "edited_at"]
 
     def get_reactions(self, obj):

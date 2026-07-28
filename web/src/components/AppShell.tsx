@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, MouseEvent as ReactM
 import { Phone, PhoneOff } from 'lucide-react'
 import {
   api, Channel, ChatMessageBase, Conversation, ConversationMessage, FriendsState, KnownPerson,
-  Member, Message, NotificationLevel, Role, Server, ServerInviteEntry, ServerMemberSettings,
+  Member, Message, NotificationLevel, Role, Server, ServerMemberSettings,
 } from '../api'
 import { useAuth } from '../auth'
 import { useGateway } from '../gateway'
@@ -210,9 +210,6 @@ export default function AppShell() {
   } | null>(null)
   const [showServerInviteId, setShowServerInviteId] = useState<number | null>(null)
   const [showServerPrivacyId, setShowServerPrivacyId] = useState<number | null>(null)
-
-  // Приглашения на сервера, адресованные МНЕ (см. HomeSidebar «Приглашения»).
-  const [serverInvites, setServerInvites] = useState<ServerInviteEntry[]>([])
 
   const currentServer = servers.find((s) => s.id === serverId) || null
   const channels = currentServer?.channels || []
@@ -435,8 +432,10 @@ export default function AppShell() {
     })()
   }, [serverId])
 
-  // Диалоги/группы, друзья и приглашения на сервера — не завязаны на
-  // выбранный сервер, нужны сразу (бейджи, домашний экран в любой момент).
+  // Диалоги/группы и друзья — не завязаны на выбранный сервер, нужны сразу
+  // (бейджи, домашний экран в любой момент). Приглашения на сервера теперь
+  // приходят карточкой прямо в историю диалога (см. ConversationMessage.
+  // server_invite) — отдельно грузить их не нужно.
   useEffect(() => {
     ;(async () => {
       try {
@@ -448,11 +447,6 @@ export default function AppShell() {
         setFriends(await api.friends())
       } catch {
         setFriends({ friends: [], incoming: [], outgoing: [] })
-      }
-      try {
-        setServerInvites(await api.myServerInvites())
-      } catch {
-        setServerInvites([])
       }
     })()
   }, [])
@@ -551,13 +545,6 @@ export default function AppShell() {
           prev.has(d.message.channel) ? prev : new Set(prev).add(d.message.channel),
         )
       }
-    })
-    // Кто-то из участников сервера пригласил меня — сразу видно во вкладке
-    // «Приглашения» на домашнем экране (см. HomeSidebar).
-    const offServerInviteCreate = gateway.on('server_invite_create', (d) => {
-      setServerInvites((prev) =>
-        prev.some((i) => i.id === d.invite.id) ? prev : [...prev, d.invite],
-      )
     })
     // Подтверждение ПОВТОРНОЙ попытки: сообщение создала прошлая, эхо до нас
     // не дошло. Само сообщение доберётся обычным путём (перечитыванием
@@ -1007,7 +994,6 @@ export default function AppShell() {
 
     return () => {
       offMsg()
-      offServerInviteCreate()
       offMsgAck()
       offMsgNack()
       offReactions()
@@ -1280,24 +1266,32 @@ export default function AppShell() {
     [serverId],
   )
 
-  const handleAcceptServerInvite = useCallback(async (invite: ServerInviteEntry) => {
+  // Приглашение теперь карточка прямо в сообщении диалога (см.
+  // ServerInviteCard/MessageList) — статус на ней обновится сам, живым
+  // dm_message_update от бэкенда (см. chat.views._broadcast_invite_message_update),
+  // отдельно патчить локальное состояние не нужно.
+  const handleAcceptServerInvite = useCallback(async (inviteId: number) => {
     try {
-      const server = await api.acceptServerInvite(invite.id)
+      const server = await api.acceptServerInvite(inviteId)
       setServers((prev) => (prev.some((s) => s.id === server.id) ? prev : [...prev, server]))
-      setServerInvites((prev) => prev.filter((i) => i.id !== invite.id))
+      selectServer(server)
+    } catch (e) {
+      alert((e as Error).message)
+    }
+  }, [selectServer])
+
+  const handleDeclineServerInvite = useCallback(async (inviteId: number) => {
+    try {
+      await api.declineServerInvite(inviteId)
     } catch (e) {
       alert((e as Error).message)
     }
   }, [])
 
-  const handleDeclineServerInvite = useCallback(async (invite: ServerInviteEntry) => {
-    try {
-      await api.declineServerInvite(invite.id)
-      setServerInvites((prev) => prev.filter((i) => i.id !== invite.id))
-    } catch (e) {
-      alert((e as Error).message)
-    }
-  }, [])
+  const handleOpenInvitedServer = useCallback((targetServerId: number) => {
+    const server = servers.find((s) => s.id === targetServerId)
+    if (server) selectServer(server)
+  }, [servers, selectServer])
 
   const handleCreateChannel = async (kind: 'text' | 'voice') => {
     if (serverId == null) return
@@ -1779,7 +1773,7 @@ export default function AppShell() {
         onDiscover={() => setShowDiscover(true)}
         onHome={handleOpenHome}
         homeNotificationCount={
-          friends.incoming.length + unreadConversationIds.size + serverInvites.length
+          friends.incoming.length + unreadConversationIds.size
         }
         unreadServerIds={unreadServerIds}
         mutedServerIds={mutedServerIds}
@@ -1805,9 +1799,6 @@ export default function AppShell() {
           onOpenSettings={() => setShowSettings(true)}
           onOpenProfile={() => setShowProfile(true)}
           onOpenUserProfile={openProfilePopup}
-          serverInvites={serverInvites}
-          onAcceptServerInvite={handleAcceptServerInvite}
-          onDeclineServerInvite={handleDeclineServerInvite}
         />
       ) : (
         <ChannelSidebar
@@ -1900,6 +1891,9 @@ export default function AppShell() {
                 onToggleReaction={handleToggleDmReaction}
                 onRetry={(nonce) => outbox.retry(nonce)}
                 onDiscard={(nonce) => outbox.discard(nonce)}
+                onAcceptServerInvite={handleAcceptServerInvite}
+                onDeclineServerInvite={handleDeclineServerInvite}
+                onOpenInvitedServer={handleOpenInvitedServer}
               />
               <MessageInput
                 channelName={conversationDisplayName(activeConversation)}
