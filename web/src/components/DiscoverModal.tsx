@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api, DiscoverServer, Server } from '../api'
+import { useEscToClose } from '../modalStack'
 import Avatar from './Avatar'
 
 export default function DiscoverModal({
@@ -9,6 +10,7 @@ export default function DiscoverModal({
   onClose: () => void
   onJoined: (s: Server) => void
 }) {
+  useEscToClose(onClose)
   const [list, setList] = useState<DiscoverServer[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')

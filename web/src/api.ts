@@ -375,6 +375,9 @@ export const api = {
   me: (): Promise<Me> => req('/api/auth/me'),
   updateProfile: (data: {
     username?: string
+    /** Обязателен, если меняется username — см. backend
+     * ProfileUpdateSerializer.validate. */
+    current_password?: string
     avatar_image?: string
     banner_gradient?: string
     banner_image?: string
@@ -388,6 +391,13 @@ export const api = {
       body: JSON.stringify({ current_password, new_password }),
     }),
   getSessions: (): Promise<Session[]> => req('/api/auth/sessions'),
+  /** Отозвать ОДИН чужой сеанс — крестик у "других устройств" в настройках.
+   * Текущий сеанс так не отозвать (сервер отдаст 400 — для него есть
+   * обычный выход). */
+  revokeSession: (id: number) => req(`/api/auth/sessions/${id}`, { method: 'DELETE' }),
+  /** «Выйти на всех известных устройствах» — не меняет пароль, только
+   * отзывает refresh-токены всех сеансов, включая текущий. */
+  revokeAllSessions: () => req('/api/auth/sessions/revoke-all', { method: 'POST' }),
   config: () => req('/api/config'),
 
   servers: (): Promise<Server[]> => req('/api/servers'),

@@ -12,6 +12,7 @@ import {
   SERVER_ICON_SIZE, buildGradient, fileToBannerDataUrl, fileToSquareDataUrl,
   parseGradient,
 } from '../images'
+import { useEscToClose } from '../modalStack'
 import Avatar from './Avatar'
 
 type TabId = 'profile' | 'roles' | 'requests' | 'access' | 'bans'
@@ -124,13 +125,9 @@ export default function ServerSettingsModal({
   const [tab, setTab] = useState<TabId>(availableTabs[0]?.id ?? 'profile')
 
   // Esc закрывает редактор — он занимает весь экран, кликать мимо неудобно.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose()
-    }
-    document.addEventListener('keydown', onKey)
-    return () => document.removeEventListener('keydown', onKey)
-  }, [onClose])
+  // Общий стек модалок (см. modalStack.ts): если поверх редактора открыто
+  // что-то ещё (например, мини-профиль), Esc сначала закроет ЕГО, а не оба разом.
+  useEscToClose(onClose)
 
   return (
     <div className="server-settings-overlay">

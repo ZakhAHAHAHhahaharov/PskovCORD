@@ -6,7 +6,9 @@ from .views import (
     LogoutView,
     MeView,
     RegisterView,
+    SessionDetailView,
     SessionListView,
+    SessionRevokeAllView,
     SessionTokenRefreshView,
 )
 
@@ -18,4 +20,6 @@ urlpatterns = [
     path("me", MeView.as_view(), name="me"),
     path("change-password", ChangePasswordView.as_view(), name="change-password"),
     path("sessions", SessionListView.as_view(), name="sessions"),
+    path("sessions/revoke-all", SessionRevokeAllView.as_view(), name="sessions-revoke-all"),
+    path("sessions/<int:pk>", SessionDetailView.as_view(), name="session-detail"),
 ]

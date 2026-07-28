@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { KnownPerson } from '../api'
+import { useEscToClose } from '../modalStack'
 import Avatar from './Avatar'
 
 /**
@@ -16,6 +17,7 @@ export default function NewConversationModal({
   onClose: () => void
   onCreate: (data: { kind: 'dm' | 'group'; userIds: number[]; name: string }) => void
 }) {
+  useEscToClose(onClose)
   const [selected, setSelected] = useState<Set<number>>(new Set())
   const [name, setName] = useState('')
   const [error, setError] = useState('')

@@ -21,19 +21,41 @@ class ProfileUpdateTests(APITestCase):
         self.client.force_authenticate(self.user)
 
     def test_patch_username(self):
-        resp = self.client.patch("/api/auth/me", {"username": "alice2"})
+        resp = self.client.patch(
+            "/api/auth/me", {"username": "alice2", "current_password": "pw12345"})
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.data["username"], "alice2")
         self.user.refresh_from_db()
         self.assertEqual(self.user.username, "alice2")
 
     def test_patch_username_conflict_case_insensitive(self):
-        resp = self.client.patch("/api/auth/me", {"username": "BOB"})
+        resp = self.client.patch(
+            "/api/auth/me", {"username": "BOB", "current_password": "pw12345"})
         self.assertEqual(resp.status_code, 400)
 
     def test_patch_username_keeps_own_name_untouched_by_conflict_check(self):
         # Патчим на своё же (регистр другой) имя — не должно считаться занятым.
-        resp = self.client.patch("/api/auth/me", {"username": "Alice"})
+        resp = self.client.patch(
+            "/api/auth/me", {"username": "Alice", "current_password": "pw12345"})
+        self.assertEqual(resp.status_code, 200)
+
+    def test_patch_username_requires_current_password(self):
+        resp = self.client.patch("/api/auth/me", {"username": "alice2"})
+        self.assertEqual(resp.status_code, 400)
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.username, "alice")
+
+    def test_patch_username_rejects_wrong_current_password(self):
+        resp = self.client.patch(
+            "/api/auth/me", {"username": "alice2", "current_password": "wrongpass"})
+        self.assertEqual(resp.status_code, 400)
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.username, "alice")
+
+    def test_patch_current_password_not_required_without_username_change(self):
+        # Аватар/баннер/приватность личных сообщений — не username, пароль
+        # спрашивать незачем.
+        resp = self.client.patch("/api/auth/me", {"avatar_image": TINY_PNG})
         self.assertEqual(resp.status_code, 200)
 
     def test_patch_avatar_image_roundtrip(self):
@@ -331,3 +353,69 @@ class LoginSessionTests(APITestCase):
         })
         self.assertEqual(resp.status_code, 204)
         self.assertEqual(self.user.login_sessions.count(), 0)
+
+    def test_password_change_revokes_even_a_session_that_already_refreshed(self):
+        """Регрессия: SimpleJWT заводит строку OutstandingToken только на
+        самый первый токен сессии и заново — в момент блэклиста ПРЕДЫДУЩЕГО
+        jti при ротации; ТЕКУЩИЙ (ещё ни разу не ротированный) jti активной
+        сессии своей строки не имеет. Наивный "блэклистнуть все
+        OutstandingToken пользователя" эту сессию бы не поймал — см.
+        blacklist_session в revoke_all_refresh_tokens."""
+        access, refresh = self._login()
+        refreshed = self.client.post("/api/auth/token/refresh", {"refresh": refresh})
+        rotated_refresh = refreshed.data["refresh"]
+
+        self._auth(access)
+        resp = self.client.post("/api/auth/change-password", {
+            "current_password": "sufficientlyLong1",
+            "new_password": "brandNewSecret7",
+        })
+        self.assertEqual(resp.status_code, 204)
+
+        self.client.credentials()
+        retry = self.client.post("/api/auth/token/refresh", {"refresh": rotated_refresh})
+        self.assertEqual(
+            retry.status_code, 401,
+            "ротированный refresh-токен обязан умереть вместе со сменой пароля")
+
+    def test_revoke_single_session(self):
+        access1, _ = self._login()
+        access2, refresh2 = self._login()
+        self._auth(access1)
+        sessions = self.client.get("/api/auth/sessions").data
+        other = next(s for s in sessions if not s["is_current"])
+
+        resp = self.client.delete(f"/api/auth/sessions/{other['id']}")
+        self.assertEqual(resp.status_code, 204)
+
+        remaining = self.client.get("/api/auth/sessions").data
+        self.assertEqual(len(remaining), 1)
+        self.assertTrue(remaining[0]["is_current"])
+
+        self.client.credentials()
+        retry = self.client.post("/api/auth/token/refresh", {"refresh": refresh2})
+        self.assertEqual(retry.status_code, 401, "отозванный сеанс не должен обновляться")
+
+    def test_cannot_revoke_current_session_via_detail_endpoint(self):
+        access, _ = self._login()
+        self._auth(access)
+        own = self.client.get("/api/auth/sessions").data[0]
+        resp = self.client.delete(f"/api/auth/sessions/{own['id']}")
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(self.user.login_sessions.count(), 1)
+
+    def test_revoke_all_logs_out_everywhere_without_touching_password(self):
+        access, refresh = self._login()
+        self._login()  # второе устройство
+        self._auth(access)
+
+        resp = self.client.post("/api/auth/sessions/revoke-all")
+        self.assertEqual(resp.status_code, 204)
+        self.assertEqual(self.user.login_sessions.count(), 0)
+
+        self.user.refresh_from_db()
+        self.assertTrue(self.user.check_password("sufficientlyLong1"), "пароль не должен меняться")
+
+        self.client.credentials()
+        retry = self.client.post("/api/auth/token/refresh", {"refresh": refresh})
+        self.assertEqual(retry.status_code, 401)

@@ -129,15 +129,24 @@ class RegisterSerializer(serializers.ModelSerializer):
 
 
 class ProfileUpdateSerializer(serializers.ModelSerializer):
-    """PATCH /api/auth/me — смена ника и/или аватара. Оба поля необязательны
+    """PATCH /api/auth/me — смена ника и/или аватара. Поля необязательны
     (partial-обновление); avatar_image="" удаляет аватар (возврат к цветному
-    кружку с буквой)."""
+    кружку с буквой).
+
+    current_password — write-only, обязателен, ТОЛЬКО когда меняют username:
+    ник виден всем и его смена ничего в аккаунте не защищает сама по себе, но
+    это первое, что видит владелец при угоне сессии, — проверка пароля здесь
+    ловит момент, когда кто-то с чужим (например, скопированным) access-
+    токеном пытается тихо переименовать аккаунт себе."""
+
+    current_password = serializers.CharField(
+        write_only=True, required=False, allow_blank=True)
 
     class Meta:
         model = User
         fields = [
             "username", "avatar_image", "banner_gradient", "banner_image",
-            "dm_privacy",
+            "dm_privacy", "current_password",
         ]
         extra_kwargs = {
             "username": {"required": False},
@@ -153,6 +162,15 @@ class ProfileUpdateSerializer(serializers.ModelSerializer):
         ).exists():
             raise serializers.ValidationError("Имя пользователя уже занято.")
         return value
+
+    def validate(self, attrs):
+        if "username" in attrs:
+            password = attrs.get("current_password") or ""
+            if not password or not self.instance.check_password(password):
+                raise serializers.ValidationError(
+                    {"current_password": "Неверный текущий пароль."})
+        attrs.pop("current_password", None)
+        return attrs
 
     def validate_avatar_image(self, value):
         return validate_data_url(

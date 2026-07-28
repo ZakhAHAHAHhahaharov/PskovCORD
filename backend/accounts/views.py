@@ -95,19 +95,52 @@ def record_login_session(user, refresh_str, request):
     )
 
 
+def blacklist_session(session):
+    """Отозвать ИМЕННО ТЕКУЩИЙ refresh-токен сеанса (session.jti) и удалить
+    саму строку LoginSession.
+
+    OutstandingToken для этого jti почти наверняка ещё не существует: строка
+    заводится SimpleJWT только в момент выдачи самого первого токена сессии
+    (see RefreshToken.for_user) и заново — в момент блэклиста ПРЕДЫДУЩЕГО jti
+    при очередной ротации (see TokenRefreshSerializer.validate: blacklist()
+    вызывается для СТАРОГО jti, до set_jti() на новый). Иначе говоря, у
+    текущего (ещё ни разу не ротированного) jti активной сессии просто нет
+    своей строки — get_or_create заводит её здесь же, специально чтобы было
+    что блэклистить.
+    """
+    token, _ = OutstandingToken.objects.get_or_create(
+        jti=session.jti,
+        defaults={
+            "user": session.user,
+            "token": "",
+            "created_at": timezone.now(),
+            "expires_at": timezone.now() + settings.SIMPLE_JWT["REFRESH_TOKEN_LIFETIME"],
+        },
+    )
+    BlacklistedToken.objects.get_or_create(token=token)
+    session.delete()
+
+
 def revoke_all_refresh_tokens(user):
     """Отозвать все выданные пользователю refresh-токены.
 
-    Нужно при смене пароля: его меняют в том числе тогда, когда он утёк, и
-    остальные сессии обязаны умереть. Access-токены так не отозвать — они
-    проверяются по подписи, без похода в БД, — но их срок теперь 15 минут
-    (см. settings.SIMPLE_JWT), это и есть верхняя граница окна.
+    Нужно при смене пароля (его меняют в том числе тогда, когда он утёк, и
+    остальные сессии обязаны умереть) и при явном «Выйти на всех
+    устройствах». Access-токены так не отозвать — они проверяются по
+    подписи, без похода в БД, — но их срок теперь 15 минут (см.
+    settings.SIMPLE_JWT), это и есть верхняя граница окна.
     """
     for token in OutstandingToken.objects.filter(user=user):
         BlacklistedToken.objects.get_or_create(token=token)
-    # «Активные сеансы» должны опустеть вместе с самими сессиями — иначе
-    # список ещё показывал бы устройства, токены которых уже отозваны выше.
-    LoginSession.objects.filter(user=user).delete()
+    # Дырка, которую легко не заметить: цикл выше блэклистит только jti,
+    # которые УЖЕ засветились в OutstandingToken (первый токен сессии и все,
+    # что были отозваны предыдущими ротациями) — ТЕКУЩИЙ, ещё ни разу не
+    # ротированный jti каждой сессии там не появится (см. blacklist_session).
+    # Без этого шага сеанс, который хоть раз обновлялся (а обновляются все —
+    # access живёт 15 минут), пережил бы «отозвать всё» на своём текущем
+    # refresh-токене.
+    for session in LoginSession.objects.filter(user=user):
+        blacklist_session(session)
 
 
 class RegisterView(generics.CreateAPIView):
@@ -219,6 +252,22 @@ class MeView(APIView):
         return Response(MeSerializer(user).data)
 
 
+def _current_session_id(request) -> str | None:
+    auth = getattr(request, "auth", None)
+    return auth.payload.get("session_id") if auth is not None else None
+
+
+def _serialize_session(session, current_session_id) -> dict:
+    return {
+        "id": session.id,
+        "ip_address": session.ip_address,
+        "user_agent": session.user_agent,
+        "created_at": session.created_at,
+        "last_seen_at": session.last_seen_at,
+        "is_current": str(session.session_id) == str(current_session_id),
+    }
+
+
 class SessionListView(APIView):
     """«Активные сеансы» в настройках — с каких устройств/IP сейчас можно
     зайти под этим аккаунтом.
@@ -230,31 +279,51 @@ class SessionListView(APIView):
     выданного токена лишь для того, чтобы её можно было блэклистнуть; jti
     уже провёрнутого (ротированного) токена там не появляется вовсе, хотя
     сам токен остаётся действительным по подписи. Строка LoginSession
-    удаляется явно — при logout и при смене пароля (revoke_all_refresh_tokens) —
+    удаляется явно — при logout, отзыве конкретного сеанса и смене пароля /
+    «выйти на всех устройствах» (revoke_all_refresh_tokens/blacklist_session) —
     так что её наличие само по себе и есть признак «сеанс ещё не завершён»."""
 
     def get(self, request):
         cutoff = timezone.now() - settings.SIMPLE_JWT["REFRESH_TOKEN_LIFETIME"]
-        current_session_id = None
-        auth = getattr(request, "auth", None)
-        if auth is not None:
-            current_session_id = auth.payload.get("session_id")
-
+        current_session_id = _current_session_id(request)
         sessions = LoginSession.objects.filter(
             user=request.user, last_seen_at__gte=cutoff,
         ).order_by("-last_seen_at")
-        data = [
-            {
-                "id": s.id,
-                "ip_address": s.ip_address,
-                "user_agent": s.user_agent,
-                "created_at": s.created_at,
-                "last_seen_at": s.last_seen_at,
-                "is_current": str(s.session_id) == str(current_session_id),
-            }
-            for s in sessions
-        ]
-        return Response(data)
+        return Response([_serialize_session(s, current_session_id) for s in sessions])
+
+
+class SessionDetailView(APIView):
+    """Отозвать ОДИН сеанс — крестик у "других устройств" в настройках.
+    Нельзя отозвать текущий отсюда (это делает обычный logout, у него другая
+    семантика — гасит и Django-сессию), поэтому 400, а не молчаливый no-op."""
+
+    def delete(self, request, pk):
+        try:
+            session = LoginSession.objects.get(id=pk, user=request.user)
+        except LoginSession.DoesNotExist:
+            return Response(status=404)
+        if str(session.session_id) == str(_current_session_id(request)):
+            return Response(
+                {"detail": "Текущий сеанс отзывается через обычный выход."},
+                status=400,
+            )
+        blacklist_session(session)
+        return Response(status=204)
+
+
+class SessionRevokeAllView(APIView):
+    """«Выйти на всех известных устройствах» — в отличие от смены пароля, сам
+    пароль не трогает, только отзывает refresh-токены (см.
+    revoke_all_refresh_tokens). Текущий access ещё доработает свои
+    оставшиеся минуты (см. SIMPLE_JWT.ACCESS_TOKEN_LIFETIME), но обновить
+    его сессии больше не смогут — как и было явно обещано в UI."""
+
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "auth"
+
+    def post(self, request):
+        revoke_all_refresh_tokens(request.user)
+        return Response(status=204)
 
 
 class ChangePasswordView(APIView):
