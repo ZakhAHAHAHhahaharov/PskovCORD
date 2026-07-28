@@ -1199,7 +1199,13 @@ input {
 .status-flyout {
   position: absolute;
   left: calc(100% + 8px);
-  top: 0;
+  /* bottom, а не top: строка-триггер обычно ближе к низу экрана (весь
+     StatusMenu открывается от нижней панели сайдбара), флаут растёт вверх
+     от НИЖНЕГО края строки — так же, как сам .status-menu-popup растёт
+     вверх от триггера — и не утыкается в низ экрана длинным содержимым. */
+  bottom: 0;
+  max-height: calc(100vh - 24px);
+  overflow-y: auto;
   width: 240px;
   background: var(--modal-bg);
   border-radius: 8px;
