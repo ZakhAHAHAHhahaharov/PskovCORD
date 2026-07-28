@@ -1129,6 +1129,7 @@ class UserProfileCard(APIView):
             "id": target.id,
             "banner_gradient": target.banner_gradient,
             "banner_image": target.banner_image,
+            "bio": target.bio,
         })
 
 
