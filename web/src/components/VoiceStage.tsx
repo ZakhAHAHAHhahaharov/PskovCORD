@@ -600,9 +600,12 @@ export default function VoiceStage({
               </div>
             )}
 
-            {/* Подпись и кнопки — в левом нижнем углу, поверх видео (как и у
-                тайлов в сетке); отдельной «шапки» сверху больше нет.
-                stopPropagation — иначе клик по кнопке свернул бы весь тайл. */}
+            {/* Подпись и «перестать смотреть» — в левом нижнем углу, поверх
+                видео (как и у тайлов в сетке); отдельной «шапки» сверху нет.
+                Открыть-в-окне/полноэкран уехали в правый нижний угол, а
+                «Показать участников» — наверх, над voice-controls-bar (см.
+                .voice-stage-participants-toggle ниже). stopPropagation —
+                иначе клик по кнопке свернул бы весь тайл. */}
             <div
               className="voice-stage-expanded-overlay"
               onClick={(e) => e.stopPropagation()}
@@ -619,33 +622,8 @@ export default function VoiceStage({
                   nameOf(expanded.userId)
                 )}
               </span>
-              <div className="voice-stage-expanded-actions">
-                {expanded.mode === 'screen' && (
-                  <button
-                    className={`icon-btn ${filmstripOpen ? 'active' : ''}`}
-                    title={filmstripOpen ? 'Скрыть участников' : 'Показать участников'}
-                    onClick={() => setFilmstripOpen((v) => !v)}
-                  >
-                    <Users size={16} />
-                  </button>
-                )}
-                {expanded.mode === 'screen' && pipSupported && expandedStream && (
-                  <button
-                    className="icon-btn"
-                    title="Открыть в отдельном окне"
-                    onClick={handleTogglePip}
-                  >
-                    <PictureInPicture2 size={16} />
-                  </button>
-                )}
-                <button
-                  className="icon-btn"
-                  title={isFullscreen ? 'Выйти из полноэкранного режима' : 'На весь экран'}
-                  onClick={toggleFullscreen}
-                >
-                  {isFullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
-                </button>
-                {expanded.mode === 'screen' && expanded.userId !== selfUserId && (
+              {expanded.mode === 'screen' && expanded.userId !== selfUserId && (
+                <div className="voice-stage-expanded-actions">
                   <button
                     className="icon-btn"
                     title="Перестать смотреть"
@@ -656,8 +634,33 @@ export default function VoiceStage({
                   >
                     <X size={16} />
                   </button>
-                )}
-              </div>
+                </div>
+              )}
+            </div>
+
+            {/* Открыть в отдельном окне / на весь экран — в правом нижнем
+                углу демонстрации (не зависят от того, звонок это или
+                участник — полноэкранный режим есть у обоих). */}
+            <div
+              className="voice-stage-expanded-corner"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {expanded.mode === 'screen' && pipSupported && expandedStream && (
+                <button
+                  className="icon-btn"
+                  title="Открыть в отдельном окне"
+                  onClick={handleTogglePip}
+                >
+                  <PictureInPicture2 size={16} />
+                </button>
+              )}
+              <button
+                className="icon-btn"
+                title={isFullscreen ? 'Выйти из полноэкранного режима' : 'На весь экран'}
+                onClick={toggleFullscreen}
+              >
+                {isFullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+              </button>
             </div>
           </div>
 
@@ -695,6 +698,21 @@ export default function VoiceStage({
             </div>
           )
         })()
+      )}
+
+      {/* Наверху, над панелью отключения/прекращения демонстрации — а не в
+          углу самой демки: это переключатель ленты участников, а не свойство
+          видео (в отличие от открыть-в-окне/полноэкран рядом с ним). */}
+      {expanded?.mode === 'screen' && (
+        <button
+          className={`voice-stage-participants-toggle ${filmstripOpen ? 'active' : ''} ${
+            showControls ? 'visible' : ''
+          }`}
+          title={filmstripOpen ? 'Скрыть участников' : 'Показать участников'}
+          onClick={() => setFilmstripOpen((v) => !v)}
+        >
+          <Users size={16} />
+        </button>
       )}
 
       <div className={`voice-controls-bar ${showControls ? 'visible' : ''}`}>
