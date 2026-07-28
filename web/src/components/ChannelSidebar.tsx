@@ -9,6 +9,89 @@ import SidebarBottomBar from './SidebarBottomBar'
 import { useVoice } from '../voice'
 import { VoiceState } from './AppShell'
 import { VoiceStatus } from './VoiceProvider'
+import { useLongPress } from '../hooks/useLongPress'
+
+function VoiceUserRow({
+  member: m,
+  channelId,
+  speaking,
+  muted,
+  deafened,
+  canOpenMenu,
+  onOpenParticipantProfile,
+  onParticipantContextMenu,
+  onWatchScreen,
+}: {
+  member: Member
+  channelId: number
+  speaking: boolean
+  muted: boolean
+  deafened: boolean
+  canOpenMenu: boolean
+  onOpenParticipantProfile?: (member: Member, e: ReactMouseEvent) => void
+  onParticipantContextMenu?: (
+    member: Member,
+    e: ReactMouseEvent,
+    room: { kind: 'channel'; id: number },
+  ) => void
+  onWatchScreen: (member: Member) => void
+}) {
+  // Long-press — тач-аналог правого клика ниже, тот же колбэк (читает только
+  // .clientX/.clientY, см. AppShell.openParticipantContextMenu).
+  const longPress = useLongPress((point) => {
+    if (!canOpenMenu) return
+    onParticipantContextMenu!(m, point as unknown as ReactMouseEvent, { kind: 'channel', id: channelId })
+  })
+  return (
+    <button
+      type="button"
+      className="voice-user"
+      onClick={(e) => onOpenParticipantProfile?.(m, e)}
+      onContextMenu={
+        canOpenMenu
+          ? (e) => {
+              e.preventDefault()
+              onParticipantContextMenu!(m, e, { kind: 'channel', id: channelId })
+            }
+          : undefined
+      }
+      {...(canOpenMenu ? longPress : {})}
+    >
+      <Avatar
+        name={m.username}
+        color={m.avatar_color}
+        image={m.avatar_image}
+        size={20}
+        speaking={speaking}
+      />
+      <span className={speaking ? 'speaking' : ''}>{m.username}</span>
+      {m.sharing_screen && (
+        <span
+          className="demo-badge"
+          title={`Смотреть демонстрацию экрана — ${m.username}`}
+          onClick={(e) => {
+            e.stopPropagation()
+            onWatchScreen(m)
+          }}
+        >
+          <Monitor size={11} /> демка
+        </span>
+      )}
+      <span className="voice-user-icons">
+        {muted && (
+          <span title="Микрофон выключен">
+            <MicOff size={13} />
+          </span>
+        )}
+        {deafened && (
+          <span title="Не слышит участников">
+            <HeadphoneOff size={13} />
+          </span>
+        )}
+      </span>
+    </button>
+  )
+}
 
 export default function ChannelSidebar({
   server,
@@ -179,53 +262,18 @@ export default function ChannelSidebar({
                     const mic = micStateOf(m)
                     const canOpenMenu = m.id !== user.id && !!onParticipantContextMenu
                     return (
-                      <button
+                      <VoiceUserRow
                         key={m.id}
-                        type="button"
-                        className="voice-user"
-                        onClick={(e) => onOpenParticipantProfile?.(m, e)}
-                        onContextMenu={
-                          canOpenMenu
-                            ? (e) => {
-                                e.preventDefault()
-                                onParticipantContextMenu!(m, e, { kind: 'channel', id: c.id })
-                              }
-                            : undefined
-                        }
-                      >
-                        <Avatar
-                          name={m.username}
-                          color={m.avatar_color}
-                          image={m.avatar_image}
-                          size={20}
-                          speaking={speaking}
-                        />
-                        <span className={speaking ? 'speaking' : ''}>{m.username}</span>
-                        {m.sharing_screen && (
-                          <span
-                            className="demo-badge"
-                            title={`Смотреть демонстрацию экрана — ${m.username}`}
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              onWatchScreen(m)
-                            }}
-                          >
-                            <Monitor size={11} /> демка
-                          </span>
-                        )}
-                        <span className="voice-user-icons">
-                          {mic.muted && (
-                            <span title="Микрофон выключен">
-                              <MicOff size={13} />
-                            </span>
-                          )}
-                          {mic.deafened && (
-                            <span title="Не слышит участников">
-                              <HeadphoneOff size={13} />
-                            </span>
-                          )}
-                        </span>
-                      </button>
+                        member={m}
+                        channelId={c.id}
+                        speaking={speaking}
+                        muted={mic.muted}
+                        deafened={mic.deafened}
+                        canOpenMenu={canOpenMenu}
+                        onOpenParticipantProfile={onOpenParticipantProfile}
+                        onParticipantContextMenu={onParticipantContextMenu}
+                        onWatchScreen={onWatchScreen}
+                      />
                     )
                   })}
                 </div>

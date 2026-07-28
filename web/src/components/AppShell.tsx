@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, MouseEvent as ReactMouseEvent } from 'react'
-import { Phone, PhoneOff } from 'lucide-react'
+import { ChevronLeft, Phone, PhoneOff } from 'lucide-react'
+import { useIsMobile } from '../hooks/useIsMobile'
 import {
   api, Channel, ChatMessageBase, Conversation, ConversationMessage, FriendsState, KnownPerson,
   Member, Message, NotificationLevel, Role, Server, ServerMemberSettings,
@@ -85,6 +86,32 @@ interface IncomingCall {
 export default function AppShell() {
   const { user, logout } = useAuth()
   const gateway = useGateway()
+
+  // --- мобильный layout: список каналов (nav) vs открытый канал (content) ---
+  // На ПК оба видны разом (grid-колонки), на мобилке — по очереди, с
+  // системной кнопкой "назад" через history (см. navigateToContent/popstate
+  // ниже и .app.is-mobile в index.css).
+  const isMobile = useIsMobile()
+  const [mobileScreen, setMobileScreen] = useState<'nav' | 'content'>('nav')
+  const navigateToContent = useCallback(() => {
+    if (!isMobile) return
+    setMobileScreen((prev) => {
+      // Уже в content и просто переключились на другой канал/диалог — не
+      // плодим стек истории на каждый тап, иначе один "назад" не долистает
+      // до списка, если успел пооткрывать несколько каналов подряд.
+      if (prev === 'content') history.replaceState({ pskovcordMobile: true }, '')
+      else history.pushState({ pskovcordMobile: true }, '')
+      return 'content'
+    })
+  }, [isMobile])
+  useEffect(() => {
+    const onPopState = () => setMobileScreen('nav')
+    window.addEventListener('popstate', onPopState)
+    return () => window.removeEventListener('popstate', onPopState)
+  }, [])
+  const goBackMobile = useCallback(() => {
+    history.back()
+  }, [])
 
   const [servers, setServers] = useState<Server[]>([])
   const [serverId, setServerId] = useState<number | null>(null)
@@ -1764,7 +1791,7 @@ export default function AppShell() {
 
   return (
     <VoiceProvider voice={voice} onStatus={handleVoiceStatus}>
-    <div className="app">
+    <div className={isMobile ? `app is-mobile screen-${mobileScreen}` : 'app'}>
       <ServerRail
         servers={servers}
         activeId={serverId}
@@ -1784,7 +1811,10 @@ export default function AppShell() {
         <HomeSidebar
           conversations={conversations}
           activeConversationId={activeConversationId}
-          onSelectConversation={handleSelectConversation}
+          onSelectConversation={(c) => {
+            handleSelectConversation(c)
+            navigateToContent()
+          }}
           friends={friends}
           onOpenNewConversation={() => setShowNewConversation(true)}
           onSendFriendRequest={handleSendFriendRequest}
@@ -1811,8 +1841,14 @@ export default function AppShell() {
           voiceTopic={voiceTopic}
           voiceStatus={voiceStatus}
           user={user!}
-          onSelectText={handleSelectChannel}
-          onJoinVoice={handleJoinVoice}
+          onSelectText={(c) => {
+            handleSelectChannel(c)
+            navigateToContent()
+          }}
+          onJoinVoice={(c) => {
+            handleJoinVoice(c)
+            navigateToContent()
+          }}
           onLeaveVoice={handleLeaveVoice}
           onCreateChannel={handleCreateChannel}
           onOpenSettings={() => setShowSettings(true)}
@@ -1829,6 +1865,11 @@ export default function AppShell() {
           activeConversation ? (
             <>
               <header className="chat-header">
+                {isMobile && (
+                  <button className="chat-back-btn" title="Назад к списку" onClick={goBackMobile}>
+                    <ChevronLeft size={20} />
+                  </button>
+                )}
                 <span className="hash">@</span>
                 <span className="chat-header-name">{conversationDisplayName(activeConversation)}</span>
                 {voice?.room.kind === 'conversation' && voice.room.id === activeConversation.id ? (
@@ -1928,10 +1969,17 @@ export default function AppShell() {
             isConnected={voice?.room.kind === 'channel' && voice.room.id === currentChannel.id}
             onJoin={() => handleJoinVoice(currentChannel)}
             onLeave={handleLeaveVoice}
+            isMobile={isMobile}
+            onBack={goBackMobile}
           />
         ) : currentChannel && currentChannel.kind === 'text' ? (
           <>
             <header className="chat-header">
+              {isMobile && (
+                <button className="chat-back-btn" title="Назад к списку" onClick={goBackMobile}>
+                  <ChevronLeft size={20} />
+                </button>
+              )}
               <span className="hash">#</span>
               <span className="chat-header-name">{currentChannel.name}</span>
             </header>
