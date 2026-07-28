@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { ChevronRight, Copy, Check, Plus, Loader2 } from 'lucide-react'
+import { ChevronRight, Copy, Check, Plus, Loader2, Users } from 'lucide-react'
 import { useAuth } from '../auth'
 import { useGateway } from '../gateway'
 import { UserStatus } from '../api'
@@ -56,6 +56,7 @@ export default function StatusMenu({
   const gateway = useGateway()
   const [open, setOpen] = useState(false)
   const [statusFlyoutOpen, setStatusFlyoutOpen] = useState(false)
+  const [accountFlyoutOpen, setAccountFlyoutOpen] = useState(false)
   const [showAddAccount, setShowAddAccount] = useState(false)
   const [switchingId, setSwitchingId] = useState<number | null>(null)
   const [switchError, setSwitchError] = useState('')
@@ -69,6 +70,7 @@ export default function StatusMenu({
       if (ref.current && !ref.current.contains(e.target as Node)) {
         setOpen(false)
         setStatusFlyoutOpen(false)
+        setAccountFlyoutOpen(false)
       }
     }
     document.addEventListener('mousedown', onClick)
@@ -199,12 +201,12 @@ export default function StatusMenu({
               Редактировать профиль
             </button>
 
-            <div className="status-row-wrap">
-              <button
-                type="button"
-                className="profile-popup-item status-row"
-                onClick={() => setStatusFlyoutOpen((o) => !o)}
-              >
+            <div
+              className="status-row-wrap"
+              onMouseEnter={() => setStatusFlyoutOpen(true)}
+              onMouseLeave={() => setStatusFlyoutOpen(false)}
+            >
+              <button type="button" className="profile-popup-item status-row">
                 <span className={`status-menu-dot ${user.status}`} />
                 {STATUS_LABELS[user.status]}
                 <ChevronRight size={15} className="status-row-chevron" />
@@ -235,33 +237,57 @@ export default function StatusMenu({
 
           {/* Блок 4 — переключение аккаунтов + копирование ID */}
           <div className="profile-popup-menu">
-            {knownAccounts.map((a) => (
-              <button
-                key={a.id}
-                type="button"
-                className="profile-popup-item account-switch-item"
-                onClick={() => handleSwitchAccount(a.id)}
-                disabled={switchingId !== null}
-              >
-                <Avatar name={a.username} color={a.avatar_color} image={a.avatar_image} size={22} />
-                {a.username}
-                {switchingId === a.id && <Loader2 size={14} className="spin account-switch-spinner" />}
+            <div
+              className="status-row-wrap"
+              onMouseEnter={() => setAccountFlyoutOpen(true)}
+              onMouseLeave={() => setAccountFlyoutOpen(false)}
+            >
+              <button type="button" className="profile-popup-item status-row">
+                <Users size={15} /> Переключение между учётными записями
+                <ChevronRight size={15} className="status-row-chevron" />
               </button>
-            ))}
-            {switchError && <div className="status-menu-error">{switchError}</div>}
 
-            {canAddAccount && (
-              <button
-                type="button"
-                className="profile-popup-item"
-                onClick={() => {
-                  setOpen(false)
-                  setShowAddAccount(true)
-                }}
-              >
-                <Plus size={15} /> Добавить аккаунт
-              </button>
-            )}
+              {accountFlyoutOpen && (
+                <div className="status-flyout account-flyout">
+                  {[
+                    { ...user, isActive: true },
+                    ...knownAccounts.map((a) => ({ ...a, isActive: false })),
+                  ].map((a) => (
+                    <button
+                      key={a.id}
+                      type="button"
+                      className={`account-flyout-item ${a.isActive ? 'active' : ''}`}
+                      disabled={a.isActive || switchingId !== null}
+                      onClick={() => handleSwitchAccount(a.id)}
+                    >
+                      <Avatar name={a.username} color={a.avatar_color} image={a.avatar_image} size={22} />
+                      {a.username}
+                      {switchingId === a.id && (
+                        <Loader2 size={14} className="spin account-switch-spinner" />
+                      )}
+                      {a.isActive && <span className="account-flyout-current-dot" />}
+                    </button>
+                  ))}
+                  {switchError && <div className="status-menu-error">{switchError}</div>}
+
+                  {canAddAccount && (
+                    <>
+                      <div className="profile-popup-divider" />
+                      <button
+                        type="button"
+                        className="account-flyout-item"
+                        onClick={() => {
+                          setOpen(false)
+                          setShowAddAccount(true)
+                        }}
+                      >
+                        <Plus size={15} /> Добавить аккаунт
+                      </button>
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
 
             <button type="button" className="profile-popup-item" onClick={copyId}>
               {copied ? <Check size={15} /> : <Copy size={15} />}
