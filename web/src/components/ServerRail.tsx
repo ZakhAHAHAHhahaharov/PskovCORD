@@ -1,6 +1,7 @@
 import { useState, MouseEvent as ReactMouseEvent } from 'react'
 import { BellOff } from 'lucide-react'
 import { Server } from '../api'
+import { useLongPress } from '../hooks/useLongPress'
 
 const APP_NAME: string = import.meta.env.VITE_APP_NAME || 'PskovCord'
 
@@ -18,6 +19,60 @@ function serverInitials(name: string): string {
     .slice(0, 2)
     .map((w) => w.charAt(0).toUpperCase())
     .join('')
+}
+
+function RailServerPill({
+  server: s,
+  active,
+  unread,
+  muted,
+  onSelect,
+  onContextMenu,
+  onHint,
+  onHideHint,
+}: {
+  server: Server
+  active: boolean
+  unread: boolean
+  muted: boolean
+  onSelect: (s: Server) => void
+  onContextMenu: (s: Server, e: ReactMouseEvent) => void
+  onHint: (e: ReactMouseEvent<HTMLButtonElement>, name: string, lines?: string[]) => void
+  onHideHint: () => void
+}) {
+  // Long-press — тач-аналог правого клика ниже, тот же колбэк (тот на
+  // клиенте читает только .clientX/.clientY, см. AppShell).
+  const longPress = useLongPress((point) => onContextMenu(s, point as unknown as ReactMouseEvent))
+  return (
+    <button
+      className={`rail-pill ${active ? 'active' : ''}`}
+      // Подсказка при наведении — имя, особенности и описание сервера
+      // (см. вкладку «Профиль» редактора сервера).
+      onMouseEnter={(e) =>
+        onHint(e, s.name, [s.tags?.join(' · ') || '', s.description || ''].filter(Boolean))
+      }
+      onMouseLeave={onHideHint}
+      onClick={() => onSelect(s)}
+      onContextMenu={(e) => {
+        e.preventDefault()
+        onHideHint()
+        onContextMenu(s, e)
+      }}
+      {...longPress}
+    >
+      {s.icon ? (
+        <img className="rail-pill-icon" src={s.icon} alt="" />
+      ) : (
+        serverInitials(s.name)
+      )}
+      {unread && !muted && <span className="rail-pill-unread-dot" />}
+      {muted && (
+        <span className="rail-pill-muted-badge" title="Заглушён">
+          <BellOff size={10} />
+        </span>
+      )}
+    </button>
+  )
 }
 
 export default function ServerRail({
@@ -82,36 +137,17 @@ export default function ServerRail({
       <div className="rail-divider" />
 
       {servers.map((s) => (
-        <button
+        <RailServerPill
           key={s.id}
-          className={`rail-pill ${activeId === s.id ? 'active' : ''}`}
-          // Подсказка при наведении — имя, особенности и описание сервера
-          // (см. вкладку «Профиль» редактора сервера).
-          onMouseEnter={(e) =>
-            showHint(e, s.name, [s.tags?.join(' · ') || '', s.description || ''].filter(Boolean))
-          }
-          onMouseLeave={hideHint}
-          onClick={() => onSelect(s)}
-          onContextMenu={(e) => {
-            e.preventDefault()
-            hideHint()
-            onContextMenu(s, e)
-          }}
-        >
-          {s.icon ? (
-            <img className="rail-pill-icon" src={s.icon} alt="" />
-          ) : (
-            serverInitials(s.name)
-          )}
-          {unreadServerIds.has(s.id) && !mutedServerIds.has(s.id) && (
-            <span className="rail-pill-unread-dot" />
-          )}
-          {mutedServerIds.has(s.id) && (
-            <span className="rail-pill-muted-badge" title="Заглушён">
-              <BellOff size={10} />
-            </span>
-          )}
-        </button>
+          server={s}
+          active={activeId === s.id}
+          unread={unreadServerIds.has(s.id)}
+          muted={mutedServerIds.has(s.id)}
+          onSelect={onSelect}
+          onContextMenu={onContextMenu}
+          onHint={showHint}
+          onHideHint={hideHint}
+        />
       ))}
 
       <button
