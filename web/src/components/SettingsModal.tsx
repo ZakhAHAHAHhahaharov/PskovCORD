@@ -715,7 +715,12 @@ export default function SettingsModal({
               >
                 <Heart size={16} /> Пожертвовать
               </button>
-              <button className="settings-sidebar-item danger" onClick={onLogout}>
+              <button
+                className="settings-sidebar-item danger"
+                onClick={() => {
+                  if (window.confirm('Точно выйти из аккаунта?')) onLogout()
+                }}
+              >
                 <LogOut size={16} /> Выйти
               </button>
             </div>
