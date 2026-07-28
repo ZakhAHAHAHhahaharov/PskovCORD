@@ -1,8 +1,13 @@
 """Тесты профиля: смена ника/аватара (PATCH /api/auth/me) и пароля."""
+from datetime import timedelta
+
 from django.contrib.auth import get_user_model
 from django.core.cache import cache
+from django.utils import timezone
 from rest_framework.test import APITestCase
 from rest_framework.throttling import SimpleRateThrottle
+
+from .models import QRLoginRequest
 
 User = get_user_model()
 
@@ -419,3 +424,141 @@ class LoginSessionTests(APITestCase):
         self.client.credentials()
         retry = self.client.post("/api/auth/token/refresh", {"refresh": refresh})
         self.assertEqual(retry.status_code, 401)
+
+
+class QRLoginTests(APITestCase):
+    """Вход по QR: ПК заводит запрос (без авторизации), телефон (уже
+    залогиненный) сканирует и подтверждает кодом, ПК получает токены
+    поллингом. См. accounts.models.QRLoginRequest, accounts.views.QR*."""
+
+    def setUp(self):
+        self.phone_user = User.objects.create_user(
+            username="qrphone", password="sufficientlyLong1")
+
+    def _start(self):
+        resp = self.client.post("/api/auth/qr/start")
+        self.assertEqual(resp.status_code, 201)
+        return resp.data["token"]
+
+    def _auth_as_phone(self):
+        login = self.client.post("/api/auth/token", {
+            "username": "qrphone", "password": "sufficientlyLong1",
+        })
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {login.data['access']}")
+
+    def test_start_creates_pending_request_visible_by_status(self):
+        token = self._start()
+        resp = self.client.get(f"/api/auth/qr/{token}/status")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data["status"], "pending")
+        self.assertNotIn("code", resp.data)
+
+    def test_unknown_token_reports_expired(self):
+        resp = self.client.get("/api/auth/qr/does-not-exist/status")
+        self.assertEqual(resp.data["status"], "expired")
+
+    def test_scan_requires_authentication(self):
+        token = self._start()
+        resp = self.client.post(f"/api/auth/qr/{token}/scan")
+        self.assertEqual(resp.status_code, 401)
+
+    def test_scan_returns_candidates_and_the_desktops_own_device_info(self):
+        token = self._start()
+        self._auth_as_phone()
+        # Телефон и "ПК" (self.client, тот же тестовый клиент) в этом тесте
+        # технически один HTTP-клиент — device в ответе обязан быть тем, что
+        # /qr/start сохранил ДО авторизации (т.е. независимо от текущего
+        # запроса), не текущим User-Agent'ом запроса /scan.
+        resp = self.client.post(f"/api/auth/qr/{token}/scan")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(len(resp.data["candidates"]), 4)
+        self.assertIn("ip_address", resp.data["device"])
+        self.assertIn("user_agent", resp.data["device"])
+
+    def test_status_after_scan_exposes_code_from_the_same_candidates(self):
+        token = self._start()
+        self._auth_as_phone()
+        scan = self.client.post(f"/api/auth/qr/{token}/scan")
+        self.client.credentials()  # ПК не авторизован
+        status = self.client.get(f"/api/auth/qr/{token}/status")
+        self.assertEqual(status.data["status"], "scanned")
+        self.assertIn(status.data["code"], scan.data["candidates"])
+
+    def test_confirm_wrong_code_denies_and_does_not_issue_tokens(self):
+        token = self._start()
+        self._auth_as_phone()
+        scan = self.client.post(f"/api/auth/qr/{token}/scan")
+        # code не приходит на телефон напрямую в scan-ответе (только
+        # candidates) — берём заведомо неверный вариант, отличный от того,
+        # что реально верен (сверяем через отдельный поллинг статуса).
+        correct = self.client.get(f"/api/auth/qr/{token}/status")
+        wrong = next(c for c in scan.data["candidates"] if c != correct.data["code"])
+        resp = self.client.post(f"/api/auth/qr/{token}/confirm", {"code": wrong})
+        self.assertEqual(resp.status_code, 400)
+
+        self.client.credentials()
+        first_poll = self.client.get(f"/api/auth/qr/{token}/status")
+        self.assertEqual(first_poll.data["status"], "denied")
+        # denied тоже одноразовый — второй поллинг уже ничего не находит.
+        second_poll = self.client.get(f"/api/auth/qr/{token}/status")
+        self.assertEqual(second_poll.data["status"], "expired")
+
+    def test_confirm_correct_code_issues_tokens_for_the_desktop_device(self):
+        token = self._start()
+        self._auth_as_phone()
+        self.client.post(f"/api/auth/qr/{token}/scan")
+        code = self.client.get(f"/api/auth/qr/{token}/status").data["code"]
+
+        resp = self.client.post(f"/api/auth/qr/{token}/confirm", {"code": code})
+        self.assertEqual(resp.status_code, 204)
+
+        self.client.credentials()  # снова "ПК", без авторизации
+        status = self.client.get(f"/api/auth/qr/{token}/status")
+        self.assertEqual(status.data["status"], "confirmed")
+        self.assertIn("access", status.data)
+        self.assertEqual(status.data["user"]["username"], "qrphone")
+
+        # Выданный access реально работает.
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {status.data['access']}")
+        me = self.client.get("/api/auth/me")
+        self.assertEqual(me.status_code, 200)
+        self.assertEqual(me.data["username"], "qrphone")
+
+        # Две сессии: одна от собственного логина телефона (_auth_as_phone),
+        # вторая — заведённая подтверждением QR для "ПК".
+        self.assertEqual(self.phone_user.login_sessions.count(), 2)
+        self.assertIsNone(QRLoginRequest.objects.first(), "запись уже должна быть удалена")
+
+    def test_status_delivers_tokens_only_once(self):
+        token = self._start()
+        self._auth_as_phone()
+        self.client.post(f"/api/auth/qr/{token}/scan")
+        code = self.client.get(f"/api/auth/qr/{token}/status").data["code"]
+        self.client.post(f"/api/auth/qr/{token}/confirm", {"code": code})
+
+        self.client.credentials()
+        first = self.client.get(f"/api/auth/qr/{token}/status")
+        self.assertEqual(first.data["status"], "confirmed")
+        second = self.client.get(f"/api/auth/qr/{token}/status")
+        self.assertEqual(second.data["status"], "expired")
+
+    def test_expired_request_rejects_scan(self):
+        token = self._start()
+        QRLoginRequest.objects.filter(token=token).update(
+            created_at=timezone.now() - timedelta(minutes=10))
+        self._auth_as_phone()
+        resp = self.client.post(f"/api/auth/qr/{token}/scan")
+        self.assertEqual(resp.status_code, 404)
+
+    def test_confirm_by_different_user_than_scanned_is_rejected(self):
+        token = self._start()
+        self._auth_as_phone()
+        self.client.post(f"/api/auth/qr/{token}/scan")
+
+        other = User.objects.create_user(username="qrother", password="sufficientlyLong1")
+        other_login = self.client.post("/api/auth/token", {
+            "username": "qrother", "password": "sufficientlyLong1",
+        })
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {other_login.data['access']}")
+        resp = self.client.post(f"/api/auth/qr/{token}/confirm", {"code": "00"})
+        self.assertEqual(resp.status_code, 404)

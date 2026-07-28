@@ -97,6 +97,61 @@ class LoginSession(models.Model):
         return f"{self.user_id} @ {self.ip_address} ({self.session_id})"
 
 
+class QRLoginRequest(models.Model):
+    """Вход по QR-коду (как в WhatsApp/Telegram Web): страница логина на ПК
+    заводит запрос и рисует QR с token'ом, телефон (уже залогиненный)
+    сканирует и подтверждает — ПК получает токены поллингом.
+
+    Цифровой код (code/candidates) — не про защиту от подбора (это сделал
+    бы сам token, он длинный и случайный), а про то, чтобы человек своими
+    глазами сверил ОДИН И ТОТ ЖЕ код на обоих экранах перед подтверждением —
+    страховка от релея/подмены QR на фишинговой странице, тот же приём, что
+    у Google Sign-in prompt."""
+
+    PENDING = "pending"
+    SCANNED = "scanned"
+    CONFIRMED = "confirmed"
+    DENIED = "denied"
+    STATUS_CHOICES = [
+        (PENDING, "Ждёт сканирования"),
+        (SCANNED, "Отсканирован, ждёт подтверждения"),
+        (CONFIRMED, "Подтверждён"),
+        (DENIED, "Отклонён"),
+    ]
+
+    token = models.CharField(max_length=64, unique=True, db_index=True)
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default=PENDING)
+
+    # Устройство, которое ПОКАЗЫВАЕТ QR (то есть то, что логинится) —
+    # captured при /qr/start, показывается на телефоне при подтверждении.
+    ip_address = models.GenericIPAddressField(null=True, blank=True)
+    user_agent = models.CharField(max_length=300, blank=True, default="")
+
+    # Кто сканирует (заполняется при /scan) — этому пользователю в итоге и
+    # выдаём токены.
+    user = models.ForeignKey(
+        "accounts.User", null=True, blank=True,
+        related_name="qr_login_requests", on_delete=models.CASCADE)
+
+    code = models.CharField(max_length=2, blank=True, default="")
+    # JSON-массив вариантов (включая верный code) — что телефон показывает
+    # для выбора. Хранится, чтобы /confirm мог проверить, что выбор вообще
+    # был из предложенных, а не просто угадан произвольный текст.
+    candidates = models.JSONField(default=list, blank=True)
+
+    # Токены кладутся сюда РОВНО на момент между /confirm и следующим
+    # /status с ПК — тот заберёт их один раз и тут же обнулит поля (см.
+    # QRStatusView.get), чтобы второй поллинг тем же token'ом ничего не
+    # унёс повторно.
+    access_token = models.TextField(blank=True, default="")
+    refresh_token = models.TextField(blank=True, default="")
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self) -> str:
+        return f"qr:{self.token[:8]}… ({self.status})"
+
+
 class Friendship(models.Model):
     """Заявка в друзья/дружба. Одна строка на пару, направленная
     (from_user отправил to_user), но симметричная по смыслу — is_friend

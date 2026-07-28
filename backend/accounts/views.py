@@ -1,4 +1,7 @@
+import random
+import secrets
 import uuid
+from datetime import timedelta
 
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
@@ -18,7 +21,7 @@ from rest_framework_simplejwt.token_blacklist.models import (
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 
-from .models import LoginSession
+from .models import LoginSession, QRLoginRequest
 from .serializers import (
     ChangePasswordSerializer,
     MeSerializer,
@@ -80,18 +83,26 @@ def tokens_for(user):
     return {"access": str(refresh.access_token), "refresh": str(refresh)}
 
 
-def record_login_session(user, refresh_str, request):
+def record_login_session(user, refresh_str, ip_address, user_agent):
     """Завести строку LoginSession для новеньких (только что выданных при
-    логине/регистрации) access/refresh — см. SessionTokenObtainPairSerializer.
-    Обновление той же строки при последующих /token/refresh — в
-    SessionTokenRefreshView, по тому же session_id."""
+    логине/регистрации/QR-подтверждении) access/refresh — см.
+    SessionTokenObtainPairSerializer. Обновление той же строки при
+    последующих /token/refresh — в SessionTokenRefreshView, по тому же
+    session_id.
+
+    ip_address/user_agent — явные параметры, а не request: при QR-логине
+    request, которым подтверждают вход (телефон), и устройство, для
+    которого заводится сессия (ПК, показавший QR), — два разных физических
+    устройства. Извлекать их из "текущего" request было бы неверно для
+    этого случая (см. QRConfirmView — там передаётся ip/UA, сохранённые в
+    QRLoginRequest при /qr/start)."""
     token = RefreshToken(refresh_str)
     LoginSession.objects.create(
         user=user,
         session_id=token["session_id"],
         jti=token["jti"],
-        ip_address=get_client_ip(request),
-        user_agent=request.META.get("HTTP_USER_AGENT", "")[:300],
+        ip_address=ip_address,
+        user_agent=(user_agent or "")[:300],
     )
 
 
@@ -160,7 +171,9 @@ class RegisterView(generics.CreateAPIView):
         # входа (см. LoginView.post — тот же приём).
         django_login(request, user)
         tokens = tokens_for(user)
-        record_login_session(user, tokens["refresh"], request)
+        record_login_session(
+            user, tokens["refresh"], get_client_ip(request),
+            request.META.get("HTTP_USER_AGENT", ""))
         return Response(
             {"user": MeSerializer(user).data, **tokens},
             status=201,
@@ -182,7 +195,8 @@ class LoginView(TokenObtainPairView):
         serializer.is_valid(raise_exception=True)
         django_login(request, serializer.user)
         record_login_session(
-            serializer.user, serializer.validated_data["refresh"], request)
+            serializer.user, serializer.validated_data["refresh"],
+            get_client_ip(request), request.META.get("HTTP_USER_AGENT", ""))
         return Response(serializer.validated_data, status=200)
 
 
@@ -340,4 +354,146 @@ class ChangePasswordView(APIView):
         # пароля после утечки ничего не давала: старые токены продолжали
         # работать весь свой срок.
         revoke_all_refresh_tokens(request.user)
+        return Response(status=204)
+
+
+# --- вход по QR-коду -----------------------------------------------------
+# Ссылка на "ждёт сканирования, ждёт подтверждения" — короче TTL refresh-
+# токена в разы, окно атаки на угаданный/перехваченный token минимально.
+QR_LOGIN_TTL = timedelta(minutes=2)
+
+
+def _generate_qr_code_candidates():
+    """Верный 2-значный код + ещё 3 отличных от него — то, что телефон
+    покажет для выбора. Не про защиту от подбора (это делает сам token,
+    длинный и случайный) — про то, чтобы человек сверил глазами один и тот
+    же код на обоих экранах перед подтверждением (см. QRLoginRequest)."""
+    correct = f"{secrets.randbelow(100):02d}"
+    candidates = {correct}
+    while len(candidates) < 4:
+        candidates.add(f"{secrets.randbelow(100):02d}")
+    candidates = list(candidates)
+    random.shuffle(candidates)
+    return correct, candidates
+
+
+class QRStartView(APIView):
+    """Страница логина на ПК — заводит запрос и получает token для QR.
+    Без авторизации: это и есть первый шаг для ещё не залогиненного ПК."""
+
+    permission_classes = [permissions.AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "auth"
+
+    def post(self, request):
+        # Опportунистическая чистка — без периодического sweep'а строки
+        # копились бы вечно. Дёшево при ожидаемом объёме (эта ручка сама по
+        # себе троттлится).
+        QRLoginRequest.objects.filter(
+            created_at__lt=timezone.now() - QR_LOGIN_TTL).delete()
+        qr = QRLoginRequest.objects.create(
+            token=secrets.token_urlsafe(32),
+            ip_address=get_client_ip(request),
+            user_agent=request.META.get("HTTP_USER_AGENT", "")[:300],
+        )
+        return Response({
+            "token": qr.token,
+            "expires_in": int(QR_LOGIN_TTL.total_seconds()),
+        }, status=201)
+
+
+def _get_live_qr(token):
+    """QRLoginRequest по token'у, либо None если не найден/истёк (и тогда
+    же подчищен)."""
+    try:
+        qr = QRLoginRequest.objects.get(token=token)
+    except QRLoginRequest.DoesNotExist:
+        return None
+    if qr.created_at < timezone.now() - QR_LOGIN_TTL:
+        qr.delete()
+        return None
+    return qr
+
+
+class QRStatusView(APIView):
+    """Поллинг с ПК — без авторизации, тем же самым token'ом, которым он сам
+    себя и представляет (см. QRStartView). confirmed отдаёт токены РОВНО
+    один раз: следующий же поллинг тем же token'ом застанет запись уже
+    удалённой, второй раз ничего не унесёт."""
+
+    permission_classes = [permissions.AllowAny]
+
+    def get(self, request, token):
+        qr = _get_live_qr(token)
+        if qr is None:
+            return Response({"status": "expired"})
+
+        data = {"status": qr.status}
+        if qr.status == QRLoginRequest.SCANNED:
+            data["code"] = qr.code
+        elif qr.status == QRLoginRequest.CONFIRMED:
+            data["access"] = qr.access_token
+            data["refresh"] = qr.refresh_token
+            data["user"] = MeSerializer(qr.user).data
+            qr.delete()
+        elif qr.status == QRLoginRequest.DENIED:
+            qr.delete()
+        return Response(data)
+
+
+class QRScanView(APIView):
+    """Телефон (уже залогиненный — IsAuthenticated по умолчанию) сканирует
+    QR и получает варианты кода + инфо об устройстве, которое логинится,
+    чтобы показать человеку "это точно вы?" перед подтверждением."""
+
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "auth"
+
+    def post(self, request, token):
+        qr = _get_live_qr(token)
+        if qr is None or qr.status != QRLoginRequest.PENDING:
+            return Response(
+                {"detail": "QR-код недействителен или уже использован."}, status=404)
+
+        correct, candidates = _generate_qr_code_candidates()
+        qr.user = request.user
+        qr.code = correct
+        qr.candidates = candidates
+        qr.status = QRLoginRequest.SCANNED
+        qr.save(update_fields=["user", "code", "candidates", "status"])
+
+        return Response({
+            "candidates": candidates,
+            "device": {
+                "ip_address": qr.ip_address,
+                "user_agent": qr.user_agent,
+            },
+        })
+
+
+class QRConfirmView(APIView):
+    """Телефон подтверждает, выбрав код, который видит на ПК, из вариантов,
+    показанных на /scan. Неверный выбор сразу гасит весь запрос (DENIED) —
+    не даёт тыкать варианты по кругу."""
+
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "auth"
+
+    def post(self, request, token):
+        qr = _get_live_qr(token)
+        if qr is None or qr.status != QRLoginRequest.SCANNED or qr.user_id != request.user.id:
+            return Response({"detail": "Запрос не найден."}, status=404)
+
+        chosen = str(request.data.get("code") or "")
+        if chosen not in qr.candidates or chosen != qr.code:
+            qr.status = QRLoginRequest.DENIED
+            qr.save(update_fields=["status"])
+            return Response({"detail": "Неверный код."}, status=400)
+
+        tokens = tokens_for(qr.user)
+        record_login_session(qr.user, tokens["refresh"], qr.ip_address, qr.user_agent)
+        qr.access_token = tokens["access"]
+        qr.refresh_token = tokens["refresh"]
+        qr.status = QRLoginRequest.CONFIRMED
+        qr.save(update_fields=["access_token", "refresh_token", "status"])
         return Response(status=204)

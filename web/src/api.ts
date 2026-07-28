@@ -48,6 +48,25 @@ export interface Session {
   is_current: boolean
 }
 
+/** Вход по QR — см. backend accounts.models.QRLoginRequest. */
+export type QRStatus = 'pending' | 'scanned' | 'confirmed' | 'denied' | 'expired'
+
+export interface QRStatusResponse {
+  status: QRStatus
+  /** Есть только при status='scanned' — тот самый код, что нужно выбрать на телефоне. */
+  code?: string
+  /** Есть только при status='confirmed', и только один раз — сервер тут же
+   * забывает запрос (см. accounts.views.QRStatusView). */
+  access?: string
+  refresh?: string
+  user?: Me
+}
+
+export interface QRScanResponse {
+  candidates: string[]
+  device: { ip_address: string | null; user_agent: string }
+}
+
 export interface Channel {
   id: number
   server: number
@@ -398,6 +417,20 @@ export const api = {
   /** «Выйти на всех известных устройствах» — не меняет пароль, только
    * отзывает refresh-токены всех сеансов, включая текущий. */
   revokeAllSessions: () => req('/api/auth/sessions/revoke-all', { method: 'POST' }),
+
+  // --- вход по QR-коду -----------------------------------------------------
+  /** Экран логина на ПК — без авторизации, ПК ещё не залогинен. */
+  qrStart: (): Promise<{ token: string; expires_in: number }> =>
+    req('/api/auth/qr/start', { method: 'POST' }),
+  /** Поллинг с ПК тем же token'ом — тоже без авторизации. */
+  qrStatus: (token: string): Promise<QRStatusResponse> => req(`/api/auth/qr/${token}/status`),
+  /** Телефон (уже залогинен) сканирует QR. */
+  qrScan: (token: string): Promise<QRScanResponse> =>
+    req(`/api/auth/qr/${token}/scan`, { method: 'POST' }),
+  /** Телефон подтверждает код, который видит на экране ПК. */
+  qrConfirm: (token: string, code: string) =>
+    req(`/api/auth/qr/${token}/confirm`, { method: 'POST', body: JSON.stringify({ code }) }),
+
   config: () => req('/api/config'),
 
   servers: (): Promise<Server[]> => req('/api/servers'),
