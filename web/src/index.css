@@ -1204,17 +1204,39 @@ input {
      от НИЖНЕГО края строки — так же, как сам .status-menu-popup растёт
      вверх от триггера — и не утыкается в низ экрана длинным содержимым. */
   bottom: 0;
-  max-height: calc(100vh - 24px);
-  overflow-y: auto;
   width: 240px;
   background: var(--modal-bg);
   border-radius: 8px;
   box-shadow: 0 8px 16px rgba(0, 0, 0, 0.32);
+  z-index: 55;
+  /* overflow НЕ ставим здесь (см. .status-flyout-scroll) — иначе он обрежет
+     ::before-мост ниже, который специально торчит за левый край. */
+}
+
+/* Мост наведения через зазор до триггера: псевдоэлемент — часть самого
+   .status-flyout, поэтому курсор над ним не считается покинувшим DOM-
+   поддерево флаута, и обёртка-триггер (.status-row-wrap) не получает
+   mouseleave, пока курсор физически не уйдёт за пределы всей группы. */
+.status-flyout::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -8px;
+  width: 8px;
+}
+
+/* Скролл — во внутренней обёртке, а не на самом .status-flyout: overflow-y
+   не может стоять отдельно от overflow-x (CSS вычисляет "visible" другой
+   оси как "auto"), а auto по X обрезал бы ::before-мост выше, который
+   специально выходит за левый край элемента. */
+.status-flyout-scroll {
+  max-height: calc(100vh - 24px);
+  overflow-y: auto;
   padding: 6px;
   display: flex;
   flex-direction: column;
   gap: 2px;
-  z-index: 55;
 }
 
 .status-flyout-item {

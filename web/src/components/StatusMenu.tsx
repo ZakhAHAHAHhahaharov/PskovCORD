@@ -36,43 +36,23 @@ export const STATUS_LABELS: Record<UserStatus, string> = {
 
 const ROSTER_PREVIEW_LIMIT = 5
 
-// Закрытие с небольшой задержкой, а не сразу по mouseleave: между строкой-
-// триггером и флаутом есть визуальный зазор (см. .status-flyout — left:
-// calc(100% + 8px)), в котором физически ничего не отрисовано, и курсор,
-// идущий по прямой к флауту, там "выходит" из-под триггера раньше, чем
-// доходит до самого флаута — без задержки он успевал закрыться в процессе.
-const FLYOUT_CLOSE_DELAY_MS = 200
-
-/** Экспортирован — переиспользуется и в ServerContextMenu.tsx (заглушение/
- * параметры уведомлений открываются тем же наведением, тем же таймером
- * закрытия). */
+// Открытие/закрытие синхронно по mouseenter/mouseleave, без задержки: зазор
+// между строкой-триггером и флаутом (см. .status-flyout — left: calc(100% +
+// 8px)) перекрыт псевдоэлементом ::before самого флаута (.status-flyout::before
+// в index.css) — курсор в зазоре физически лежит над флаутом (его потомком в
+// DOM), поэтому mouseleave обёртки там не срабатывает и без искусственной
+// задержки. Раньше зазор был "мёртвой зоной" ничьей — курсор успевал выйти и
+// из триггера, и из флаута.
+//
+// Экспортирован — переиспользуется и в ServerContextMenu.tsx (заглушение/
+// параметры уведомлений открываются тем же наведением).
 export function useHoverFlyout() {
   const [open, setOpen] = useState(false)
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
-
-  const clearTimer = () => {
-    if (timer.current) {
-      clearTimeout(timer.current)
-      timer.current = null
-    }
-  }
-
-  useEffect(() => clearTimer, [])
-
   return {
     open,
-    onMouseEnter: () => {
-      clearTimer()
-      setOpen(true)
-    },
-    onMouseLeave: () => {
-      clearTimer()
-      timer.current = setTimeout(() => setOpen(false), FLYOUT_CLOSE_DELAY_MS)
-    },
-    close: () => {
-      clearTimer()
-      setOpen(false)
-    },
+    onMouseEnter: () => setOpen(true),
+    onMouseLeave: () => setOpen(false),
+    close: () => setOpen(false),
   }
 }
 
@@ -259,20 +239,22 @@ export default function StatusMenu({
 
               {statusFlyout.open && (
                 <div className="status-flyout">
-                  {OPTIONS.map((o) => (
-                    <button
-                      key={o.value}
-                      type="button"
-                      className={`status-flyout-item ${user.status === o.value ? 'active' : ''}`}
-                      onClick={() => chooseStatus(o.value)}
-                    >
-                      <span className="status-flyout-item-head">
-                        <span className={`status-menu-dot ${o.value}`} />
-                        {o.label}
-                      </span>
-                      <span className="status-flyout-item-caption">{o.caption}</span>
-                    </button>
-                  ))}
+                  <div className="status-flyout-scroll">
+                    {OPTIONS.map((o) => (
+                      <button
+                        key={o.value}
+                        type="button"
+                        className={`status-flyout-item ${user.status === o.value ? 'active' : ''}`}
+                        onClick={() => chooseStatus(o.value)}
+                      >
+                        <span className="status-flyout-item-head">
+                          <span className={`status-menu-dot ${o.value}`} />
+                          {o.label}
+                        </span>
+                        <span className="status-flyout-item-caption">{o.caption}</span>
+                      </button>
+                    ))}
+                  </div>
                 </div>
               )}
             </div>
@@ -294,42 +276,44 @@ export default function StatusMenu({
 
               {accountFlyout.open && (
                 <div className="status-flyout account-flyout">
-                  {[
-                    { ...user, isActive: true },
-                    ...knownAccounts.map((a) => ({ ...a, isActive: false })),
-                  ].map((a) => (
-                    <button
-                      key={a.id}
-                      type="button"
-                      className={`account-flyout-item ${a.isActive ? 'active' : ''}`}
-                      disabled={a.isActive || switchingId !== null}
-                      onClick={() => handleSwitchAccount(a.id)}
-                    >
-                      <Avatar name={a.username} color={a.avatar_color} image={a.avatar_image} size={22} />
-                      {a.username}
-                      {switchingId === a.id && (
-                        <Loader2 size={14} className="spin account-switch-spinner" />
-                      )}
-                      {a.isActive && <span className="account-flyout-current-dot" />}
-                    </button>
-                  ))}
-                  {switchError && <div className="status-menu-error">{switchError}</div>}
-
-                  {canAddAccount && (
-                    <>
-                      <div className="profile-popup-divider" />
+                  <div className="status-flyout-scroll">
+                    {[
+                      { ...user, isActive: true },
+                      ...knownAccounts.map((a) => ({ ...a, isActive: false })),
+                    ].map((a) => (
                       <button
+                        key={a.id}
                         type="button"
-                        className="account-flyout-item"
-                        onClick={() => {
-                          setOpen(false)
-                          setShowAddAccount(true)
-                        }}
+                        className={`account-flyout-item ${a.isActive ? 'active' : ''}`}
+                        disabled={a.isActive || switchingId !== null}
+                        onClick={() => handleSwitchAccount(a.id)}
                       >
-                        <Plus size={15} /> Добавить аккаунт
+                        <Avatar name={a.username} color={a.avatar_color} image={a.avatar_image} size={22} />
+                        {a.username}
+                        {switchingId === a.id && (
+                          <Loader2 size={14} className="spin account-switch-spinner" />
+                        )}
+                        {a.isActive && <span className="account-flyout-current-dot" />}
                       </button>
-                    </>
-                  )}
+                    ))}
+                    {switchError && <div className="status-menu-error">{switchError}</div>}
+
+                    {canAddAccount && (
+                      <>
+                        <div className="profile-popup-divider" />
+                        <button
+                          type="button"
+                          className="account-flyout-item"
+                          onClick={() => {
+                            setOpen(false)
+                            setShowAddAccount(true)
+                          }}
+                        >
+                          <Plus size={15} /> Добавить аккаунт
+                        </button>
+                      </>
+                    )}
+                  </div>
                 </div>
               )}
             </div>
