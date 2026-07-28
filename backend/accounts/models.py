@@ -15,6 +15,17 @@ class User(AbstractUser):
     ]
 
     avatar_color = models.CharField(max_length=7, default="#5865F2")
+    # Необязательное отображаемое имя (как глобальный display name в
+    # Discord) — показывается вместо username в карточке профиля, а сам
+    # username под ним отдельной строкой (см. фронт ProfileModal/
+    # StatusMenu/MiniProfilePopup). Пусто — используется username, второй
+    # строки с ним тогда не показываем (незачем дублировать одно и то же).
+    # Уникальности не требует: это просто подпись, а не идентификатор.
+    display_name = models.CharField(max_length=64, blank=True, default="")
+    # "О себе" в карточке профиля — свободный текст, лимит проверяется на
+    # сериализаторе (см. ProfileUpdateSerializer.validate_bio), не здесь —
+    # тот же приём, что у Server.description (chat.models).
+    bio = models.TextField(blank=True, default="")
     # data-URL (data:image/jpeg;base64,...) — хранится прямо в БД, без
     # ImageField/MEDIA_ROOT/Pillow: аватарки маленькие (сжимаются клиентом до
     # 256x256 перед отправкой), а лишний медиа-сервинг (volume + nginx

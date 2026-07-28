@@ -14,6 +14,10 @@ export type DmPrivacy = 'friends' | 'nobody' | 'everyone'
 export interface User {
   id: number
   username: string
+  /** Необязательная подпись поверх username в карточке профиля — пусто,
+   * если не задана (тогда карточка показывает только username, без
+   * дублирующей второй строки). См. accounts.models.User.display_name. */
+  display_name: string
   avatar_color: string
   /** Картинка аватара (data-URL), пусто — цветной кружок с буквой. */
   avatar_image: string
@@ -26,6 +30,10 @@ export interface User {
 export interface Me extends User {
   /** Гифка фона карточки профиля (data-URL); если задана — приоритетнее градиента. */
   banner_image: string
+  /** "О себе" в карточке профиля — как и bio у ProfileCard ниже, для СВОЕГО
+   * профиля приходит сразу (не тяжёлая, в отличие от banner_image это
+   * просто текст), догружать отдельно незачем. */
+  bio: string
   dm_privacy: DmPrivacy
 }
 
@@ -34,6 +42,7 @@ export interface ProfileCard {
   id: number
   banner_gradient: string
   banner_image: string
+  bio: string
 }
 
 /** Один активный сеанс (устройство/браузер) — «Активные сеансы» в
@@ -577,6 +586,8 @@ export const api = {
     /** Обязателен, если меняется username — см. backend
      * ProfileUpdateSerializer.validate. */
     current_password?: string
+    display_name?: string
+    bio?: string
     avatar_image?: string
     banner_gradient?: string
     banner_image?: string

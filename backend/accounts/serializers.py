@@ -85,19 +85,26 @@ class UserSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
         fields = [
-            "id", "username", "avatar_color", "avatar_image", "status",
-            "banner_gradient",
+            "id", "username", "display_name", "avatar_color", "avatar_image",
+            "status", "banner_gradient",
         ]
 
 
 class MeSerializer(serializers.ModelSerializer):
-    """Свой профиль — всё, включая личные настройки и тяжёлый баннер."""
+    """Свой профиль — всё, включая личные настройки и тяжёлый баннер.
+
+    bio — сюда же, а не в отдельную "тяжёлую" ручку как banner_image: это
+    просто текст (макс. пара сотен байт), не гифка на мегабайты, раздувать
+    им КАЖДОЕ сообщение/строку ростера (см. UserSerializer выше) незачем,
+    но и лениво догружать не за чем — в чужой карточке профиля отдаётся
+    вместе с баннером через chat.views.UserProfileCard."""
 
     class Meta:
         model = User
         fields = [
-            "id", "username", "avatar_color", "avatar_image", "status",
-            "banner_gradient", "banner_image", "dm_privacy",
+            "id", "username", "display_name", "bio", "avatar_color",
+            "avatar_image", "status", "banner_gradient", "banner_image",
+            "dm_privacy",
         ]
 
 
@@ -131,15 +138,20 @@ class RegisterSerializer(serializers.ModelSerializer):
 
 
 class ProfileUpdateSerializer(serializers.ModelSerializer):
-    """PATCH /api/auth/me — смена ника и/или аватара. Поля необязательны
-    (partial-обновление); avatar_image="" удаляет аватар (возврат к цветному
-    кружку с буквой).
+    """PATCH /api/auth/me — смена ника, отображаемого имени, био и/или
+    аватара. Поля необязательны (partial-обновление); avatar_image=""
+    удаляет аватар (возврат к цветному кружку с буквой), display_name=""
+    и bio="" — сброс к пустому (тогда карточка показывает только username).
 
-    current_password — write-only, обязателен, ТОЛЬКО когда меняют username:
-    ник виден всем и его смена ничего в аккаунте не защищает сама по себе, но
-    это первое, что видит владелец при угоне сессии, — проверка пароля здесь
-    ловит момент, когда кто-то с чужим (например, скопированным) access-
-    токеном пытается тихо переименовать аккаунт себе."""
+    username здесь остаётся ради фронтового SettingsModal.UsernameChangeModal
+    (единственное место, откуда теперь меняют ник — см. ProfileModal.tsx,
+    там username больше не редактируется). current_password — write-only,
+    обязателен, ТОЛЬКО когда меняют username: ник виден всем и его смена
+    ничего в аккаунте не защищает сама по себе, но это первое, что видит
+    владелец при угоне сессии, — проверка пароля здесь ловит момент, когда
+    кто-то с чужим (например, скопированным) access-токеном пытается тихо
+    переименовать аккаунт себе. display_name/bio такой защиты не требуют —
+    это просто подпись и текст "о себе", смена ничего не угоняет."""
 
     current_password = serializers.CharField(
         write_only=True, required=False, allow_blank=True)
@@ -147,11 +159,14 @@ class ProfileUpdateSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
         fields = [
-            "username", "avatar_image", "banner_gradient", "banner_image",
-            "dm_privacy", "current_password",
+            "username", "display_name", "bio", "avatar_image",
+            "banner_gradient", "banner_image", "dm_privacy",
+            "current_password",
         ]
         extra_kwargs = {
             "username": {"required": False},
+            "display_name": {"required": False, "allow_blank": True},
+            "bio": {"required": False, "allow_blank": True},
             "avatar_image": {"required": False, "allow_blank": True},
             "banner_gradient": {"required": False, "allow_blank": True},
             "banner_image": {"required": False, "allow_blank": True},
@@ -177,6 +192,17 @@ class ProfileUpdateSerializer(serializers.ModelSerializer):
     def validate_avatar_image(self, value):
         return validate_data_url(
             value, ALLOWED_AVATAR_MIME, MAX_AVATAR_BYTES, "аватар")
+
+    # bio — TextField без max_length на самой модели (тот же приём, что и у
+    # Server.description в chat.models — свободный текст без БД-лимита),
+    # лимит проверяется только здесь, на входе.
+    MAX_BIO_LENGTH = 300
+
+    def validate_bio(self, value):
+        if len(value) > self.MAX_BIO_LENGTH:
+            raise serializers.ValidationError(
+                f"Слишком длинное описание (максимум {self.MAX_BIO_LENGTH} символов).")
+        return value
 
     def update(self, instance, validated_data):
         # Новый аватар — сразу же пересчитываем avatar_color как средний

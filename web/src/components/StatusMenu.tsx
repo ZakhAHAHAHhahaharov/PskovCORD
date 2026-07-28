@@ -181,8 +181,13 @@ export default function StatusMenu({
               status={user.status}
               showStatus
             />
-            <span className="profile-popup-name">{user.username}</span>
+            <span className="profile-popup-name">{user.display_name || user.username}</span>
+            {!!user.display_name && (
+              <span className="profile-popup-username">@{user.username}</span>
+            )}
           </div>
+
+          {user.bio && <div className="profile-popup-bio">{user.bio}</div>}
 
           {/* Блок 2 (опционально) — текущий голосовой/ЛС-звонок */}
           {voice && (

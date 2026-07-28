@@ -8,15 +8,22 @@ import {
   buildGradient, fileToBannerDataUrl, fileToSquareDataUrl, parseGradient,
 } from '../images'
 import Avatar from './Avatar'
-import PasswordInput from './PasswordInput'
+
+const BIO_MAX_LENGTH = 300
+const DISPLAY_NAME_MAX_LENGTH = 64
 
 /**
  * Профиль пользователя — всплывает поверх страницы (как в Discord). Смена
- * ника и аватара (сжимается на клиенте до 256x256, хранится как data-URL в
- * БД — см. accounts.models.User.avatar_image). Смена пароля и "Кто может
- * мне писать" отсюда убраны — первое дублирует Settings → «Пароль и
- * безопасность», второе переехало в Settings → «Контент и общение».
- * Открывается из ChannelSidebar (иконка в user-panel-actions).
+ * отображаемого имени, био и аватара (сжимается на клиенте до 256x256,
+ * хранится как data-URL в БД — см. accounts.models.User.avatar_image).
+ * Смена НИКА (username) отсюда убрана — он остаётся идентификатором
+ * аккаунта и меняется только в Settings → «Учётная запись» (требует
+ * подтверждения паролем, см. SettingsModal.UsernameChangeModal); здесь же
+ * редактируется только то, что видно в карточке профиля поверх username.
+ * Смена пароля и "Кто может мне писать" тоже убраны — первое дублирует
+ * Settings → «Пароль и безопасность», второе переехало в Settings →
+ * «Контент и общение». Открывается из ChannelSidebar (иконка в
+ * user-panel-actions).
  */
 export default function ProfileModal({ onClose }: { onClose: () => void }) {
   useEscToClose(onClose)
@@ -24,12 +31,8 @@ export default function ProfileModal({ onClose }: { onClose: () => void }) {
   const fileRef = useRef<HTMLInputElement>(null)
   const bannerFileRef = useRef<HTMLInputElement>(null)
 
-  const [username, setUsername] = useState(user?.username ?? '')
-  // Отдельно от полей "Смена пароля" ниже — это подтверждение личности для
-  // смены НИКА (см. backend ProfileUpdateSerializer.validate), не смена
-  // самого пароля. Общее поле легко перепутать: ввёл пароль в одном месте —
-  // решил, что он же годится и для другого.
-  const [usernameConfirmPassword, setUsernameConfirmPassword] = useState('')
+  const [displayName, setDisplayName] = useState(user?.display_name ?? '')
+  const [bio, setBio] = useState(user?.bio ?? '')
   const [avatarImage, setAvatarImage] = useState(user?.avatar_image ?? '')
   const [savingProfile, setSavingProfile] = useState(false)
   const [profileError, setProfileError] = useState('')
@@ -55,7 +58,8 @@ export default function ProfileModal({ onClose }: { onClose: () => void }) {
     desiredBannerImage !== (user.banner_image || '')
 
   const profileDirty =
-    username.trim() !== user.username ||
+    displayName.trim() !== (user.display_name || '') ||
+    bio.trim() !== (user.bio || '') ||
     avatarImage !== user.avatar_image ||
     bannerDirty
 
@@ -86,16 +90,9 @@ export default function ProfileModal({ onClose }: { onClose: () => void }) {
     }
   }
 
-  const usernameDirty = username.trim() !== user.username
-
   const handleSaveProfile = async () => {
-    const trimmed = username.trim()
-    if (!trimmed) {
-      setProfileError('Ник не может быть пустым.')
-      return
-    }
-    if (usernameDirty && !usernameConfirmPassword) {
-      setProfileError('Для смены имени пользователя введите текущий пароль.')
+    if (bio.length > BIO_MAX_LENGTH) {
+      setProfileError(`Слишком длинное описание (максимум ${BIO_MAX_LENGTH} символов).`)
       return
     }
     setSavingProfile(true)
@@ -103,16 +100,14 @@ export default function ProfileModal({ onClose }: { onClose: () => void }) {
     setProfileSaved(false)
     try {
       const patch: {
-        username?: string
-        current_password?: string
+        display_name?: string
+        bio?: string
         avatar_image?: string
         banner_gradient?: string
         banner_image?: string
       } = {}
-      if (usernameDirty) {
-        patch.username = trimmed
-        patch.current_password = usernameConfirmPassword
-      }
+      if (displayName.trim() !== (user.display_name || '')) patch.display_name = displayName.trim()
+      if (bio.trim() !== (user.bio || '')) patch.bio = bio.trim()
       if (avatarImage !== user.avatar_image) patch.avatar_image = avatarImage
       if (bannerDirty) {
         patch.banner_gradient = desiredGradient
@@ -121,7 +116,6 @@ export default function ProfileModal({ onClose }: { onClose: () => void }) {
       const updated = await api.updateProfile(patch)
       updateLocalUser(updated)
       setProfileSaved(true)
-      setUsernameConfirmPassword('')
     } catch (err) {
       setProfileError((err as Error).message)
     } finally {
@@ -141,7 +135,7 @@ export default function ProfileModal({ onClose }: { onClose: () => void }) {
             onClick={() => fileRef.current?.click()}
             title="Сменить аватар"
           >
-            <Avatar name={username || user.username} color={user.avatar_color} image={avatarImage} size={80} />
+            <Avatar name={user.username} color={user.avatar_color} image={avatarImage} size={80} />
             <span className="profile-avatar-overlay">
               <Camera size={20} />
             </span>
@@ -291,29 +285,30 @@ export default function ProfileModal({ onClose }: { onClose: () => void }) {
         )}
         {bannerError && <div className="login-error">{bannerError}</div>}
 
-        <div className="field-label">Никнейм</div>
+        <div className="field-label">Отображаемое имя</div>
         <input
           className="field-input"
-          value={username}
+          value={displayName}
           onChange={(e) => {
-            setUsername(e.target.value)
+            setDisplayName(e.target.value)
             setProfileSaved(false)
           }}
-          maxLength={150}
+          placeholder={user.username}
+          maxLength={DISPLAY_NAME_MAX_LENGTH}
         />
-        {usernameDirty && (
-          <>
-            <div className="field-label">Текущий пароль — подтвердите смену имени</div>
-            <PasswordInput
-              autoComplete="current-password"
-              value={usernameConfirmPassword}
-              onChange={(e) => {
-                setUsernameConfirmPassword(e.target.value)
-                setProfileSaved(false)
-              }}
-            />
-          </>
-        )}
+
+        <div className="field-label">О себе</div>
+        <textarea
+          className="field-input profile-bio-input"
+          value={bio}
+          onChange={(e) => {
+            setBio(e.target.value)
+            setProfileSaved(false)
+          }}
+          placeholder="Расскажи о себе"
+          maxLength={BIO_MAX_LENGTH}
+          rows={3}
+        />
 
         {profileError && <div className="login-error">{profileError}</div>}
         {profileSaved && !profileError && <div className="profile-success">Сохранено.</div>}
@@ -322,7 +317,7 @@ export default function ProfileModal({ onClose }: { onClose: () => void }) {
           className="btn-primary"
           onClick={handleSaveProfile}
           disabled={
-            savingProfile || !profileDirty || (usernameDirty && !usernameConfirmPassword)
+            savingProfile || !profileDirty
           }
         >
           {savingProfile ? <Loader2 size={15} className="spin" /> : 'Сохранить'}

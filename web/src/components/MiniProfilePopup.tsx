@@ -13,6 +13,8 @@ import Avatar from './Avatar'
 export interface ProfilePopupUser {
   id: number
   username: string
+  /** Пусто — карточка показывает только username, без второй строки. */
+  display_name?: string
   avatar_color: string
   avatar_image: string
   banner_gradient?: string
@@ -65,20 +67,21 @@ export default function MiniProfilePopup({
   }
   const isSelf = user.id === currentUserId
 
-  // Баннер чужого профиля больше не приходит вместе с самим профилем: он
+  // Баннер и bio чужого профиля не приходят вместе с самим профилем: баннер
   // весит до 4 МБ, а профиль вложен в каждое сообщение и в каждую строку
-  // ростера. Догружаем ровно здесь — когда карточку реально открыли.
-  const [banner, setBanner] = useState<{ gradient: string; image: string } | null>(null)
+  // ростера (bio туда не тяжёлое, но всё равно ни к чему — см. api.ts
+  // ProfileCard). Догружаем ровно здесь — когда карточку реально открыли.
+  const [card, setCard] = useState<{ gradient: string; image: string; bio: string } | null>(null)
   useEffect(() => {
     let cancelled = false
     void (async () => {
       try {
-        const card = await api.profileCard(user.id)
+        const data = await api.profileCard(user.id)
         if (!cancelled) {
-          setBanner({ gradient: card.banner_gradient, image: card.banner_image })
+          setCard({ gradient: data.banner_gradient, image: data.banner_image, bio: data.bio })
         }
       } catch {
-        // Нет доступа или сеть — просто оставим фон по умолчанию.
+        // Нет доступа или сеть — просто оставим фон по умолчанию, без bio.
       }
     })()
     return () => {
@@ -86,8 +89,8 @@ export default function MiniProfilePopup({
     }
   }, [user.id])
 
-  const bannerGradient = banner?.gradient ?? user.banner_gradient
-  const bannerImage = banner?.image ?? user.banner_image
+  const bannerGradient = card?.gradient ?? user.banner_gradient
+  const bannerImage = card?.image ?? user.banner_image
 
   useLayoutEffect(() => {
     const el = ref.current
@@ -148,8 +151,13 @@ export default function MiniProfilePopup({
           status={user.status}
           showStatus={!!user.status}
         />
-        <span className="profile-popup-name">{user.username}</span>
+        <span className="profile-popup-name">{user.display_name || user.username}</span>
+        {!!user.display_name && (
+          <span className="profile-popup-username">@{user.username}</span>
+        )}
       </div>
+
+      {card?.bio && <div className="profile-popup-bio">{card.bio}</div>}
 
       {!isSelf && (
         <div className="profile-popup-menu">
