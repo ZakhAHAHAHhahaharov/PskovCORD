@@ -4434,6 +4434,9 @@ button.settings-row-clickable:hover .settings-row-label {
   width: 280px;
   max-height: calc(100vh - 24px);
   overflow-y: auto;
+  background: var(--modal-bg);
+  border-radius: 10px;
+  box-shadow: 0 8px 16px rgba(0, 0, 0, 0.32);
 }
 
 /* Подменю по наведению (заглушение/уведомления) — тот же визуальный язык,
