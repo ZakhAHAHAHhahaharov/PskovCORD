@@ -742,9 +742,14 @@ function SettingsSection({
 export default function SettingsModal({
   onClose,
   onLogout,
+  isMobile,
 }: {
   onClose: () => void
   onLogout: () => void
+  /** На мобилке настройки — полноэкранный "слой" со стрелкой назад в
+   * шапке вместо центрированной модалки (см. .settings-overlay в index.css
+   * и AppShell.openMobileSettings/closeSettings). */
+  isMobile?: boolean
 }) {
   const {
     outputVolume,
@@ -837,9 +842,16 @@ export default function SettingsModal({
 
   return (
     <>
-    <div className="modal-overlay" onClick={onClose}>
+    <div className="modal-overlay settings-overlay" onClick={onClose}>
       <div className="modal settings-modal" onClick={(e) => e.stopPropagation()}>
-        <h2 className="modal-title">Настройки</h2>
+        <h2 className="modal-title">
+          {isMobile && (
+            <button className="chat-back-btn" title="Назад" onClick={onClose}>
+              <ChevronLeft size={20} />
+            </button>
+          )}
+          Настройки
+        </h2>
 
         <div className="settings-body">
           <nav className="settings-sidebar">

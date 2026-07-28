@@ -87,32 +87,43 @@ export default function AppShell() {
   const { user, logout } = useAuth()
   const gateway = useGateway()
 
-  // --- мобильный layout: список каналов (nav) vs открытый канал (content) ---
-  // На ПК оба видны разом (grid-колонки), на мобилке — по очереди, с
-  // системной кнопкой "назад" через history (см. navigateToContent/popstate
-  // ниже и @media (max-width: 768px) в index.css — раскладка целиком на
-  // CSS, isMobile здесь нужен только для истории браузера и кнопки назад).
+  // --- мобильный layout: список каналов (nav) vs открытый канал (content),
+  // плюс модалки поверх (настройки и т.п.) — на мобилке полноэкранные и
+  // тоже закрываются "назад". На ПК всё видно разом (grid-колонки) или как
+  // обычная модалка, isMobile здесь нужен только для истории браузера. ---
   const isMobile = useIsMobile()
   const [mobileScreen, setMobileScreen] = useState<'nav' | 'content'>('nav')
-  const navigateToContent = useCallback(() => {
-    if (!isMobile) return
-    setMobileScreen((prev) => {
-      // Уже в content и просто переключились на другой канал/диалог — не
-      // плодим стек истории на каждый тап, иначе один "назад" не долистает
-      // до списка, если успел пооткрывать несколько каналов подряд.
-      if (prev === 'content') history.replaceState({ pskovcordMobile: true }, '')
-      else history.pushState({ pskovcordMobile: true }, '')
-      return 'content'
-    })
-  }, [isMobile])
+  // Стек "слоёв" мобильной навигации, каждый — одна pushState-запись в
+  // истории браузера. Popstate снимает верхний слой и откатывает именно
+  // его (закрывает то, что было открыто ПОСЛЕДНИМ — например настройки
+  // поверх открытого канала — а не всегда возвращает на список каналов).
+  const mobileBackStack = useRef<Array<() => void>>([])
+  const pushMobileLayer = useCallback(
+    (onPop: () => void) => {
+      if (!isMobile) return
+      history.pushState({ pskovcordMobile: true }, '')
+      mobileBackStack.current.push(onPop)
+    },
+    [isMobile],
+  )
   useEffect(() => {
-    const onPopState = () => setMobileScreen('nav')
+    const onPopState = () => {
+      const undo = mobileBackStack.current.pop()
+      undo?.()
+    }
     window.addEventListener('popstate', onPopState)
     return () => window.removeEventListener('popstate', onPopState)
   }, [])
   const goBackMobile = useCallback(() => {
     history.back()
   }, [])
+  const navigateToContent = useCallback(() => {
+    // Уже в content и просто переключились на другой канал/диалог — слой
+    // истории не плодим, там нечего откатывать (мобильный "экран" тот же).
+    if (!isMobile || mobileScreen === 'content') return
+    pushMobileLayer(() => setMobileScreen('nav'))
+    setMobileScreen('content')
+  }, [isMobile, mobileScreen, pushMobileLayer])
 
   const [servers, setServers] = useState<Server[]>([])
   const [serverId, setServerId] = useState<number | null>(null)
@@ -136,6 +147,17 @@ export default function AppShell() {
   const [showDiscover, setShowDiscover] = useState(false)
   const [showServerSettings, setShowServerSettings] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
+  // Настройки на мобилке — полноэкранный "слой" поверх текущего экрана
+  // (nav или content), а не центрированная модалка, и закрываются так же
+  // "назад", как и переход в content (см. pushMobileLayer выше).
+  const openMobileSettings = useCallback(() => {
+    pushMobileLayer(() => setShowSettings(false))
+    setShowSettings(true)
+  }, [pushMobileLayer])
+  const closeSettings = useCallback(() => {
+    if (isMobile) goBackMobile()
+    else setShowSettings(false)
+  }, [isMobile, goBackMobile])
   const [showProfile, setShowProfile] = useState(false)
   const [profilePopup, setProfilePopup] = useState<ProfilePopupTarget | null>(null)
   const [replyTarget, setReplyTarget] = useState<ChatMessageBase | null>(null)
@@ -1841,7 +1863,7 @@ export default function AppShell() {
           voiceStatus={voiceStatus}
           user={user!}
           onLeaveVoice={handleLeaveVoice}
-          onOpenSettings={() => setShowSettings(true)}
+          onOpenSettings={openMobileSettings}
           onOpenProfile={() => setShowProfile(true)}
           onOpenUserProfile={openProfilePopup}
         />
@@ -1866,7 +1888,7 @@ export default function AppShell() {
           }}
           onLeaveVoice={handleLeaveVoice}
           onCreateChannel={handleCreateChannel}
-          onOpenSettings={() => setShowSettings(true)}
+          onOpenSettings={openMobileSettings}
           onOpenProfile={() => setShowProfile(true)}
           onWatchScreen={handleWatchBadge}
           onOpenServerSettings={() => setShowServerSettings(true)}
@@ -2087,7 +2109,7 @@ export default function AppShell() {
         />
       )}
       {showSettings && (
-        <SettingsModal onClose={() => setShowSettings(false)} onLogout={logout} />
+        <SettingsModal onClose={closeSettings} onLogout={logout} isMobile={isMobile} />
       )}
       {showProfile && <ProfileModal onClose={() => setShowProfile(false)} />}
       {profilePopup && (
