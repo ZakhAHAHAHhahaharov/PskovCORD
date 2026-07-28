@@ -1,6 +1,7 @@
 import { MouseEvent as ReactMouseEvent } from 'react'
 import { Volume2, MicOff, HeadphoneOff, Monitor, Settings } from 'lucide-react'
 import { Channel, Member, Server, User } from '../api'
+import { VoiceRosterMember } from './VoiceStage'
 import Avatar from './Avatar'
 import CallDuration from './CallDuration'
 import CallTopic from './CallTopic'
@@ -15,6 +16,8 @@ export default function ChannelSidebar({
   activeChannelId,
   members,
   voice,
+  voiceRoster,
+  voiceTopic,
   voiceStatus,
   user,
   onSelectText,
@@ -33,6 +36,10 @@ export default function ChannelSidebar({
   activeChannelId: number | null
   members: Member[]
   voice: VoiceState | null
+  /** Кто ещё сейчас в том же звонке, что и мы — для Блока 2 в StatusMenu. */
+  voiceRoster: VoiceRosterMember[]
+  /** Статус текущего звонка (только у серверных голосовых каналов). */
+  voiceTopic: string | null
   voiceStatus: VoiceStatus
   user: User
   onSelectText: (c: Channel) => void
@@ -234,6 +241,8 @@ export default function ChannelSidebar({
           (см. inline style). */}
       <SidebarBottomBar
         voice={voice}
+        voiceRoster={voiceRoster}
+        voiceTopic={voiceTopic}
         voiceStatus={voiceStatus}
         user={user}
         onLeaveVoice={onLeaveVoice}

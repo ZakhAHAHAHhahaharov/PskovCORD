@@ -8,6 +8,7 @@ import DeafenButton from './DeafenButton'
 import { useVoice } from '../voice'
 import { VoiceState } from './AppShell'
 import { VoiceStatus } from './VoiceProvider'
+import { VoiceRosterMember } from './VoiceStage'
 
 function pingColor(ms: number): string {
   if (ms < 80) return 'var(--green)'
@@ -21,6 +22,8 @@ function pingColor(ms: number): string {
  * к статусу/настройкам нужен независимо от того, что выбрано в rail слева. */
 export default function SidebarBottomBar({
   voice,
+  voiceRoster,
+  voiceTopic,
   voiceStatus,
   user,
   onLeaveVoice,
@@ -28,6 +31,10 @@ export default function SidebarBottomBar({
   onOpenProfile,
 }: {
   voice: VoiceState | null
+  /** Кто ещё сейчас в том же звонке, что и мы — для Блока 2 в StatusMenu. */
+  voiceRoster: VoiceRosterMember[]
+  /** Статус текущего звонка (только у серверных голосовых каналов). */
+  voiceTopic: string | null
   voiceStatus: VoiceStatus
   user: User
   onLeaveVoice: () => void
@@ -83,7 +90,13 @@ export default function SidebarBottomBar({
       )}
 
       <div className="user-panel">
-        <StatusMenu speaking={speakingUserIds.has(user.id)} onOpenProfile={onOpenProfile} />
+        <StatusMenu
+          speaking={speakingUserIds.has(user.id)}
+          onOpenProfile={onOpenProfile}
+          voice={voice}
+          voiceRoster={voiceRoster}
+          voiceTopic={voiceTopic}
+        />
         <div className="user-panel-actions">
           {voice ? (
             <>

@@ -1,7 +1,7 @@
 import { useRef, useState, ChangeEvent } from 'react'
 import { Camera, Trash2, Loader2 } from 'lucide-react'
 import { useAuth } from '../auth'
-import { api, DmPrivacy } from '../api'
+import { api } from '../api'
 import { useEscToClose } from '../modalStack'
 import {
   AVATAR_SIZE, BANNER_MAX_BYTES, BANNER_MAX_H, BANNER_MAX_W, GRADIENT_PRESETS,
@@ -10,17 +10,13 @@ import {
 import Avatar from './Avatar'
 import PasswordInput from './PasswordInput'
 
-const DM_PRIVACY_LABELS: Record<DmPrivacy, string> = {
-  friends: 'Только друзья',
-  nobody: 'Никто',
-  everyone: 'Любой зарегистрированный',
-}
-
 /**
  * Профиль пользователя — всплывает поверх страницы (как в Discord). Смена
- * ника, аватара (сжимается на клиенте до 256x256, хранится как data-URL в
- * БД — см. accounts.models.User.avatar_image) и пароля (с проверкой знания
- * текущего). Открывается из ChannelSidebar (иконка в user-panel-actions).
+ * ника и аватара (сжимается на клиенте до 256x256, хранится как data-URL в
+ * БД — см. accounts.models.User.avatar_image). Смена пароля и "Кто может
+ * мне писать" отсюда убраны — первое дублирует Settings → «Пароль и
+ * безопасность», второе переехало в Settings → «Контент и общение».
+ * Открывается из ChannelSidebar (иконка в user-panel-actions).
  */
 export default function ProfileModal({ onClose }: { onClose: () => void }) {
   useEscToClose(onClose)
@@ -49,15 +45,6 @@ export default function ProfileModal({ onClose }: { onClose: () => void }) {
   const [bannerImage, setBannerImage] = useState(user?.banner_image ?? '')
   const [bannerError, setBannerError] = useState('')
 
-  const [dmPrivacy, setDmPrivacy] = useState<DmPrivacy>(user?.dm_privacy ?? 'everyone')
-
-  const [currentPassword, setCurrentPassword] = useState('')
-  const [newPassword, setNewPassword] = useState('')
-  const [newPassword2, setNewPassword2] = useState('')
-  const [savingPassword, setSavingPassword] = useState(false)
-  const [passwordError, setPasswordError] = useState('')
-  const [passwordSaved, setPasswordSaved] = useState(false)
-
   if (!user) return null
 
   const currentGradientCss = buildGradient(gradientAngle, gradientFrom, gradientTo)
@@ -70,8 +57,7 @@ export default function ProfileModal({ onClose }: { onClose: () => void }) {
   const profileDirty =
     username.trim() !== user.username ||
     avatarImage !== user.avatar_image ||
-    bannerDirty ||
-    dmPrivacy !== user.dm_privacy
+    bannerDirty
 
   const handleFileChange = async (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
@@ -122,7 +108,6 @@ export default function ProfileModal({ onClose }: { onClose: () => void }) {
         avatar_image?: string
         banner_gradient?: string
         banner_image?: string
-        dm_privacy?: DmPrivacy
       } = {}
       if (usernameDirty) {
         patch.username = trimmed
@@ -133,7 +118,6 @@ export default function ProfileModal({ onClose }: { onClose: () => void }) {
         patch.banner_gradient = desiredGradient
         patch.banner_image = desiredBannerImage
       }
-      if (dmPrivacy !== user.dm_privacy) patch.dm_privacy = dmPrivacy
       const updated = await api.updateProfile(patch)
       updateLocalUser(updated)
       setProfileSaved(true)
@@ -142,31 +126,6 @@ export default function ProfileModal({ onClose }: { onClose: () => void }) {
       setProfileError((err as Error).message)
     } finally {
       setSavingProfile(false)
-    }
-  }
-
-  const handleChangePassword = async () => {
-    setPasswordError('')
-    setPasswordSaved(false)
-    if (newPassword.length < 4) {
-      setPasswordError('Новый пароль должен быть не короче 4 символов.')
-      return
-    }
-    if (newPassword !== newPassword2) {
-      setPasswordError('Пароли не совпадают.')
-      return
-    }
-    setSavingPassword(true)
-    try {
-      await api.changePassword(currentPassword, newPassword)
-      setPasswordSaved(true)
-      setCurrentPassword('')
-      setNewPassword('')
-      setNewPassword2('')
-    } catch (err) {
-      setPasswordError((err as Error).message)
-    } finally {
-      setSavingPassword(false)
     }
   }
 
@@ -356,22 +315,6 @@ export default function ProfileModal({ onClose }: { onClose: () => void }) {
           </>
         )}
 
-        <div className="field-label">Кто может мне писать личные сообщения</div>
-        <select
-          className="field-input"
-          value={dmPrivacy}
-          onChange={(e) => {
-            setDmPrivacy(e.target.value as DmPrivacy)
-            setProfileSaved(false)
-          }}
-        >
-          {(Object.keys(DM_PRIVACY_LABELS) as DmPrivacy[]).map((value) => (
-            <option key={value} value={value}>
-              {DM_PRIVACY_LABELS[value]}
-            </option>
-          ))}
-        </select>
-
         {profileError && <div className="login-error">{profileError}</div>}
         {profileSaved && !profileError && <div className="profile-success">Сохранено.</div>}
 
@@ -383,42 +326,6 @@ export default function ProfileModal({ onClose }: { onClose: () => void }) {
           }
         >
           {savingProfile ? <Loader2 size={15} className="spin" /> : 'Сохранить'}
-        </button>
-
-        <div className="profile-divider" />
-
-        <h3 className="profile-subtitle">Смена пароля</h3>
-
-        <div className="field-label">Текущий пароль</div>
-        <PasswordInput
-          autoComplete="current-password"
-          value={currentPassword}
-          onChange={(e) => setCurrentPassword(e.target.value)}
-        />
-        <div className="field-label">Новый пароль</div>
-        <PasswordInput
-          autoComplete="new-password"
-          value={newPassword}
-          onChange={(e) => setNewPassword(e.target.value)}
-        />
-        <div className="field-label">Повторите новый пароль</div>
-        <PasswordInput
-          autoComplete="new-password"
-          value={newPassword2}
-          onChange={(e) => setNewPassword2(e.target.value)}
-        />
-
-        {passwordError && <div className="login-error">{passwordError}</div>}
-        {passwordSaved && !passwordError && (
-          <div className="profile-success">Пароль изменён.</div>
-        )}
-
-        <button
-          className="btn-primary"
-          onClick={handleChangePassword}
-          disabled={savingPassword || !currentPassword || !newPassword}
-        >
-          {savingPassword ? <Loader2 size={15} className="spin" /> : 'Сменить пароль'}
         </button>
 
         <button className="modal-close" onClick={onClose}>

@@ -294,20 +294,27 @@ let refreshInFlight: Promise<string | null> | null = null
 function refreshAccessToken(): Promise<string | null> {
   if (!refreshToken) return Promise.resolve(null)
   if (!refreshInFlight) {
+    // Захватываем токен, с которым стартовали: если за время фетча кто-то
+    // переключил аккаунт (см. auth.tsx switchAccount) или вышел, module-level
+    // refreshToken уже указывает на другой аккаунт/пуст — применять к нему
+    // результат ЭТОГО, более старого, обновления нельзя, иначе токены только
+    // что переключённого аккаунта тихо затрутся токенами предыдущего.
+    const startedWith = refreshToken
     refreshInFlight = (async () => {
       try {
         const res = await fetch(`${API}/api/auth/token/refresh`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           credentials: 'include',
-          body: JSON.stringify({ refresh: refreshToken }),
+          body: JSON.stringify({ refresh: startedWith }),
         })
         if (!res.ok) return null
         const data = await res.json()
+        if (refreshToken !== startedWith) return null
         // ROTATE_REFRESH_TOKENS=True — сервер отдаёт заодно новый refresh, а
         // старый отправляет в блэклист. Не сохранить его = разлогиниться на
         // следующем же обновлении.
-        setTokens(data.access, data.refresh ?? refreshToken)
+        setTokens(data.access, data.refresh ?? startedWith)
         return data.access as string
       } catch {
         return null
@@ -409,6 +416,12 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ current_password, new_password }),
     }),
+  /** Переключиться на другой аккаунт, уже авторизованный на этом устройстве
+   * (см. accounts.ts) — принимает ЕГО refresh, получает свежую JWT-пару и
+   * профиль; сервер заодно переставляет Django-сессию (см. backend
+   * SwitchAccountView). */
+  switchAccount: (refresh: string): Promise<{ access: string; refresh: string; user: Me }> =>
+    req('/api/auth/switch', { method: 'POST', body: JSON.stringify({ refresh }) }),
   getSessions: (): Promise<Session[]> => req('/api/auth/sessions'),
   /** Отозвать ОДИН чужой сеанс — крестик у "других устройств" в настройках.
    * Текущий сеанс так не отозвать (сервер отдаст 400 — для него есть

@@ -4,6 +4,7 @@ import { Conversation, FriendsState, User } from '../api'
 import Avatar from './Avatar'
 import SidebarBottomBar from './SidebarBottomBar'
 import { VoiceState } from './AppShell'
+import { VoiceRosterMember } from './VoiceStage'
 import { VoiceStatus } from './VoiceProvider'
 import { ProfilePopupUser } from './MiniProfilePopup'
 
@@ -37,6 +38,8 @@ export default function HomeSidebar({
   onAcceptFriendRequest,
   onDeclineFriendRequest,
   voice,
+  voiceRoster,
+  voiceTopic,
   voiceStatus,
   user,
   onLeaveVoice,
@@ -53,6 +56,11 @@ export default function HomeSidebar({
   onAcceptFriendRequest: (requestId: number) => void
   onDeclineFriendRequest: (requestId: number) => void
   voice: VoiceState | null
+  /** Кто ещё сейчас в том же звонке, что и мы — для Блока 2 в StatusMenu. */
+  voiceRoster: VoiceRosterMember[]
+  /** У диалогов топика нет — всегда null, проп только ради общей сигнатуры
+   * с ChannelSidebar/SidebarBottomBar. */
+  voiceTopic: string | null
   voiceStatus: VoiceStatus
   user: User
   onLeaveVoice: () => void
@@ -240,6 +248,8 @@ export default function HomeSidebar({
 
       <SidebarBottomBar
         voice={voice}
+        voiceRoster={voiceRoster}
+        voiceTopic={voiceTopic}
         voiceStatus={voiceStatus}
         user={user}
         onLeaveVoice={onLeaveVoice}
