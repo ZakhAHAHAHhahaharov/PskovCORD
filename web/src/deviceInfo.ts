@@ -31,3 +31,10 @@ export function describeUserAgent(ua: string): string {
             : 'браузер'
   return `${browser} · ${os}`
 }
+
+/** Грубая проверка "это телефон/планшет" — используется, чтобы показывать
+ * кнопку встроенного сканера QR только там, где сканировать вообще имеет
+ * смысл (см. SettingsModal). */
+export function isMobileDevice(): boolean {
+  return /Android|iPhone|iPad|iPod/.test(navigator.userAgent)
+}

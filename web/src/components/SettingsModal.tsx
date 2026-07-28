@@ -14,12 +14,14 @@ import {
   ChevronLeft,
   Trash2,
   Loader2,
+  QrCode,
 } from 'lucide-react'
 import { useSettings, DEFAULT_SETTINGS, ThemeChoice } from '../settings'
 import { useAuth } from '../auth'
 import { useEscToClose } from '../modalStack'
-import { describeUserAgent } from '../deviceInfo'
+import { describeUserAgent, isMobileDevice } from '../deviceInfo'
 import { api, Session } from '../api'
+import QrScannerModal from './QrScannerModal'
 
 const APP_NAME: string = import.meta.env.VITE_APP_NAME || 'PskovCord'
 
@@ -709,9 +711,24 @@ export default function SettingsModal({
   // трогаем, подкатегория-владелец (см. каждый detailView) остаётся
   // подсвеченной, как и была.
   const [detailView, setDetailView] = useState<null | 'sessions'>(null)
-  const [activeModal, setActiveModal] = useState<null | 'username' | 'password'>(null)
+  const [activeModal, setActiveModal] = useState<null | 'username' | 'password' | 'qrScanner'>(
+    null,
+  )
   const contentRef = useRef<HTMLDivElement>(null)
   const sectionRefs = useRef<Record<string, HTMLDivElement | null>>({})
+
+  // Кнопка «Сканировать QR» имеет смысл только на телефоне/планшете с
+  // камерой — enumerateDevices() до выдачи разрешения всё равно возвращает
+  // kind у устройств, так что определить наличие камеры можно без запроса
+  // доступа заранее.
+  const [canScanQr, setCanScanQr] = useState(false)
+  useEffect(() => {
+    if (!isMobileDevice() || !navigator.mediaDevices?.enumerateDevices) return
+    navigator.mediaDevices
+      .enumerateDevices()
+      .then((devices) => setCanScanQr(devices.some((d) => d.kind === 'videoinput')))
+      .catch(() => {})
+  }, [])
 
   const currentCategory = CATEGORIES.find((c) => c.id === activeCategory)!
 
@@ -800,6 +817,14 @@ export default function SettingsModal({
             ))}
 
             <div className="settings-sidebar-pinned">
+              {canScanQr && (
+                <button
+                  className="settings-sidebar-item"
+                  onClick={() => setActiveModal('qrScanner')}
+                >
+                  <QrCode size={16} /> Сканировать QR
+                </button>
+              )}
               <button
                 className="settings-sidebar-item"
                 onClick={() =>
@@ -938,6 +963,7 @@ export default function SettingsModal({
         onClick и закрыл заодно и Настройки целиком. */}
     {activeModal === 'username' && <UsernameChangeModal onClose={() => setActiveModal(null)} />}
     {activeModal === 'password' && <PasswordChangeModal onClose={() => setActiveModal(null)} />}
+    {activeModal === 'qrScanner' && <QrScannerModal onClose={() => setActiveModal(null)} />}
     </>
   )
 }
