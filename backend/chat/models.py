@@ -259,6 +259,15 @@ class ServerInvite(models.Model):
     LINK = "link"
     KIND_CHOICES = [(DIRECT, "Личное приглашение"), (LINK, "Ссылка")]
 
+    # Только для DIRECT — LINK всегда остаётся "pending" (у него нет
+    # адресата, который мог бы принять/отклонить именно эту строку).
+    PENDING = "pending"
+    ACCEPTED = "accepted"
+    DECLINED = "declined"
+    STATUS_CHOICES = [
+        (PENDING, "Ожидает"), (ACCEPTED, "Принято"), (DECLINED, "Отклонено"),
+    ]
+
     server = models.ForeignKey(
         Server, on_delete=models.CASCADE, related_name="invites")
     created_by = models.ForeignKey(
@@ -271,16 +280,23 @@ class ServerInvite(models.Model):
         blank=True, related_name="received_server_invites")
     # Только для LINK — короткий непредсказуемый токен в самой ссылке.
     code = models.CharField(max_length=16, blank=True, default="")
+    # DIRECT больше не удаляется по решению — приглашение живёт как карточка
+    # в переписке (см. ConversationMessage.server_invite) и должно после
+    # принятия/отклонения продолжать показывать своё состояние там.
+    status = models.CharField(
+        max_length=10, choices=STATUS_CHOICES, default=PENDING)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         ordering = ["-created_at", "id"]
         constraints = [
-            # Не больше одного ЛИЧНОГО приглашения от сервера этому человеку
-            # разом — иначе повторные "Пригласить" плодили бы дубли в списке.
+            # Не больше одного АКТИВНОГО (pending) личного приглашения от
+            # сервера этому человеку разом — иначе повторные "Пригласить"
+            # плодили бы дубли. Решённые (accepted/declined) остаются в
+            # истории и не мешают пригласить снова.
             models.UniqueConstraint(
                 fields=["server", "invited_user"],
-                condition=models.Q(kind="direct"),
+                condition=models.Q(kind="direct", status="pending"),
                 name="unique_direct_server_invite",
             ),
             # Код ссылки уникален глобально (это и есть весь секрет ссылки).
@@ -447,6 +463,15 @@ class ConversationMessage(models.Model):
     reply_to = models.ForeignKey(
         "self", null=True, blank=True, on_delete=models.SET_NULL,
         related_name="replies")
+    # Личное приглашение на сервер, пришедшее КАРТОЧКОЙ прямо в переписку с
+    # пригласившим — вместо отдельной вкладки "Приглашения" (см.
+    # chat.views._send_invite_message). SET_NULL, а не CASCADE: удаление
+    # ServerInvite не должно рвать историю сообщений — такое приглашение
+    # само никогда не удаляется (см. ServerInvite.status), но на будущее
+    # это безопаснее, чем каскадом стирать чужую переписку.
+    server_invite = models.ForeignKey(
+        "ServerInvite", null=True, blank=True, on_delete=models.SET_NULL,
+        related_name="conversation_messages")
     created_at = models.DateTimeField(auto_now_add=True)
     edited_at = models.DateTimeField(null=True, blank=True)
 

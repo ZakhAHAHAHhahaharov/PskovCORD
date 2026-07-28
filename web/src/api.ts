@@ -175,12 +175,24 @@ export interface Server {
   member_count: number
 }
 
+export type ServerInviteStatus = 'pending' | 'accepted' | 'declined'
+
 /** Личное приглашение на сервер — то, что видит ПРИГЛАШЁННЫЙ (см. api.myServerInvites). */
 export interface ServerInviteEntry {
   id: number
   server: { id: number; name: string; icon: string }
   created_by: User
   created_at: string
+  status: ServerInviteStatus
+}
+
+/** Приглашение, встроенное карточкой в сообщение диалога (см.
+ * ChatMessageBase.server_invite) — вместо отдельной вкладки «Приглашения»
+ * на домашнем экране (см. HomeSidebar/ServerInviteCard). */
+export interface ConversationServerInvite {
+  id: number
+  status: ServerInviteStatus
+  server: { id: number; name: string; icon: string; member_count: number }
 }
 
 export interface ServerJoinRequestEntry {
@@ -245,6 +257,10 @@ export interface ChatMessageBase {
   reply_to: ChatMessageReplyBase | null
   attachments: Attachment[]
   reactions: MessageReaction[]
+  /** Только у ConversationMessage — приглашение на сервер, пришедшее
+   * карточкой в переписку (см. ConversationServerInvite). У серверных
+   * сообщений (Message) всегда undefined. */
+  server_invite?: ConversationServerInvite | null
   created_at: string
   edited_at: string | null
 }
@@ -706,14 +722,13 @@ export const api = {
 
   /** Личное приглашение конкретному человеку — работает даже для сервера
    * «только по приглашению» (сам факт приглашения от участника — уже
-   * разрешение, см. backend). */
+   * разрешение, см. backend). Само приглашение адресат получает карточкой
+   * в переписке (см. ChatMessageBase.server_invite), а не отсюда. */
   inviteToServer: (serverId: number, userId: number): Promise<ServerInviteEntry> =>
     req(`/api/servers/${serverId}/invites`, {
       method: 'POST',
       body: JSON.stringify({ user_id: userId }),
     }),
-  /** Приглашения, адресованные МНЕ — для вкладки «Приглашения» в HomeSidebar. */
-  myServerInvites: (): Promise<ServerInviteEntry[]> => req('/api/invites'),
   acceptServerInvite: (inviteId: number): Promise<Server> =>
     req(`/api/invites/${inviteId}`, { method: 'POST' }),
   declineServerInvite: (inviteId: number) =>

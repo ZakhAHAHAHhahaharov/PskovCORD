@@ -32,10 +32,10 @@ from . import emoji as emoji_keys, mute_vote, presence, roles, sfu, turn
 from .consumers import GatewayConsumer
 from .middleware import JWTAuthMiddleware
 from .models import (
-    Attachment, Channel, Conversation, ConversationParticipant,
-    MAX_ATTACHMENT_BYTES, MAX_REACTIONS_PER_MESSAGE, Membership, Message,
-    Reaction, Role, Server, ServerBan, ServerInvite, ServerJoinRequest,
-    dm_room,
+    Attachment, Channel, Conversation, ConversationMessage,
+    ConversationParticipant, MAX_ATTACHMENT_BYTES, MAX_REACTIONS_PER_MESSAGE,
+    Membership, Message, Reaction, Role, Server, ServerBan, ServerInvite,
+    ServerJoinRequest, dm_room,
 )
 from .permissions import can_dm
 
@@ -2423,7 +2423,12 @@ class ServerInviteTests(APITestCase):
         self.assertEqual(accept.status_code, 200)
         self.assertTrue(
             Membership.objects.filter(user=self.friend, server=self.server).exists())
-        self.assertFalse(ServerInvite.objects.filter(id=invite_id).exists())
+        # Приглашение остаётся карточкой в переписке (см. ConversationMessage.
+        # server_invite) — теперь принятое, а не удалённое.
+        invite = ServerInvite.objects.get(id=invite_id)
+        self.assertEqual(invite.status, ServerInvite.ACCEPTED)
+        # Больше не отдаётся списком "Приглашения" — он уже решён.
+        self.assertEqual(len(self.client.get("/api/invites").data), 0)
 
     def test_invite_duplicate_is_idempotent(self):
         self.client.force_authenticate(self.member)
@@ -2473,7 +2478,52 @@ class ServerInviteTests(APITestCase):
         self.client.force_authenticate(self.friend)
         resp = self.client.delete(f"/api/invites/{invite['id']}")
         self.assertEqual(resp.status_code, 204)
-        self.assertFalse(ServerInvite.objects.filter(id=invite["id"]).exists())
+        self.assertEqual(
+            ServerInvite.objects.get(id=invite["id"]).status, ServerInvite.DECLINED)
+
+    def test_invite_arrives_as_dm_card_not_separate_list(self):
+        """Приглашение больше не отдельная вкладка — это карточка сервера
+        прямо в переписке с пригласившим (см. HomeSidebar/ServerInviteCard)."""
+        self.client.force_authenticate(self.member)
+        invite = self.client.post(
+            f"/api/servers/{self.server.id}/invites",
+            {"user_id": self.friend.id}, format="json").data
+
+        conversation = Conversation.objects.get(
+            kind=Conversation.DM,
+            dm_key=Conversation.build_dm_key(self.member.id, self.friend.id))
+        message = ConversationMessage.objects.get(conversation=conversation)
+        self.assertEqual(message.author_id, self.member.id)
+        self.assertEqual(message.server_invite_id, invite["id"])
+
+        self.client.force_authenticate(self.friend)
+        card = self.client.get(
+            f"/api/conversations/{conversation.id}/messages").data[0]["server_invite"]
+        self.assertEqual(card["status"], "pending")
+        self.assertEqual(card["server"]["id"], self.server.id)
+        self.assertEqual(card["server"]["member_count"], 2)
+
+        accept = self.client.post(f"/api/invites/{invite['id']}")
+        self.assertEqual(accept.status_code, 200)
+        card_after = self.client.get(
+            f"/api/conversations/{conversation.id}/messages").data[0]["server_invite"]
+        self.assertEqual(card_after["status"], "accepted")
+
+    def test_can_reinvite_after_decline(self):
+        self.client.force_authenticate(self.member)
+        first = self.client.post(
+            f"/api/servers/{self.server.id}/invites",
+            {"user_id": self.friend.id}, format="json").data
+
+        self.client.force_authenticate(self.friend)
+        self.client.delete(f"/api/invites/{first['id']}")
+
+        self.client.force_authenticate(self.member)
+        second = self.client.post(
+            f"/api/servers/{self.server.id}/invites",
+            {"user_id": self.friend.id}, format="json")
+        self.assertEqual(second.status_code, 201)
+        self.assertNotEqual(second.data["id"], first["id"])
 
     def test_link_is_stable_across_requests(self):
         self.client.force_authenticate(self.owner)
