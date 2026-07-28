@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, MouseEvent as ReactMouseEvent } from 'react'
 import {
+  ChevronLeft,
   Maximize2,
   Minimize2,
   Monitor,
@@ -18,6 +19,7 @@ import ScreenShareButton from './ScreenShareButton'
 import { ProfilePopupUser } from './MiniProfilePopup'
 import { useSettings } from '../settings'
 import { useVoice } from '../voice'
+import { useLongPress } from '../hooks/useLongPress'
 
 /** Зазор между тайлами сетки — используется и в CSS (.voice-stage-grid gap),
  * и здесь при расчёте ширины тайла, оба места обязаны совпадать. */
@@ -128,6 +130,12 @@ function ParticipantTile({
   /** Правый клик — контекстное меню участника (см. AppShell), нет у себя самого. */
   onContextMenu?: (e: ReactMouseEvent) => void
 }) {
+  // Long-press — тач-аналог правого клика выше, тот же колбэк: он читает
+  // только .clientX/.clientY (см. AppShell.openParticipantContextMenu), так
+  // что синтетическая точка долгого тапа годится один в один.
+  const longPress = useLongPress((point) => {
+    onContextMenu?.(point as unknown as ReactMouseEvent)
+  })
   return (
     <div
       className="participant-tile"
@@ -145,6 +153,7 @@ function ParticipantTile({
             }
           : undefined
       }
+      {...(onContextMenu ? longPress : {})}
     >
       <button
         type="button"
@@ -272,6 +281,8 @@ export default function VoiceStage({
   isConnected,
   onJoin,
   onLeave,
+  isMobile,
+  onBack,
 }: {
   /** Опаque id комнаты — Channel.id для сервера, Conversation.id для
    * личного/группового звонка (см. AppShell.VoiceRoom). Используется только
@@ -308,6 +319,11 @@ export default function VoiceStage({
   isConnected: boolean
   onJoin: () => void
   onLeave: () => void
+  /** Мобильный layout — только для этого рендерится кнопка "назад" ниже
+   * (см. AppShell.isMobile/goBackMobile); сам VoiceStage не знает ширину
+   * вьюпорта. */
+  isMobile?: boolean
+  onBack?: () => void
 }) {
   const {
     speakingUserIds,
@@ -543,6 +559,11 @@ export default function VoiceStage({
   if (!isConnected) {
     return (
       <div className="voice-stage voice-stage-landing">
+        {isMobile && (
+          <button className="chat-back-btn voice-stage-back-btn" title="Назад к списку" onClick={onBack}>
+            <ChevronLeft size={20} />
+          </button>
+        )}
         <VoiceLanding roomName={roomName} roster={roster} onJoin={onJoin} onOpenProfile={onOpenProfile} />
       </div>
     )
@@ -554,8 +575,20 @@ export default function VoiceStage({
       className={`voice-stage ${isFullscreen ? 'is-fullscreen' : ''} ${!showControls ? 'controls-hidden' : ''}`}
       onMouseMove={handleStageMouseMove}
       onMouseLeave={handleStageMouseLeave}
+      // Тулбар управления (мик/камера/демка/повесить трубку) на десктопе
+      // прячется без движения мыши (см. handleStageMouseMove/scheduleHideControls
+      // выше) — на тач-устройстве mousemove никогда не приходит от тапа, и
+      // без этого клик тулбар был бы недостижим. Клик работает и мышью
+      // (просто лишний повод показать тулбар), отдельной ветки под isMobile
+      // не нужно.
+      onClick={handleStageMouseMove}
     >
       <header className="voice-stage-header">
+        {isMobile && (
+          <button className="chat-back-btn" title="Назад к списку" onClick={onBack}>
+            <ChevronLeft size={20} />
+          </button>
+        )}
         <span className="voice-stage-title">
           <Monitor size={16} /> {roomName}
         </span>
@@ -600,9 +633,12 @@ export default function VoiceStage({
               </div>
             )}
 
-            {/* Подпись и кнопки — в левом нижнем углу, поверх видео (как и у
-                тайлов в сетке); отдельной «шапки» сверху больше нет.
-                stopPropagation — иначе клик по кнопке свернул бы весь тайл. */}
+            {/* Подпись и «перестать смотреть» — в левом нижнем углу, поверх
+                видео (как и у тайлов в сетке); отдельной «шапки» сверху нет.
+                Открыть-в-окне/полноэкран уехали в правый нижний угол, а
+                «Показать участников» — наверх, над voice-controls-bar (см.
+                .voice-stage-participants-toggle ниже). stopPropagation —
+                иначе клик по кнопке свернул бы весь тайл. */}
             <div
               className="voice-stage-expanded-overlay"
               onClick={(e) => e.stopPropagation()}
@@ -619,33 +655,8 @@ export default function VoiceStage({
                   nameOf(expanded.userId)
                 )}
               </span>
-              <div className="voice-stage-expanded-actions">
-                {expanded.mode === 'screen' && (
-                  <button
-                    className={`icon-btn ${filmstripOpen ? 'active' : ''}`}
-                    title={filmstripOpen ? 'Скрыть участников' : 'Показать участников'}
-                    onClick={() => setFilmstripOpen((v) => !v)}
-                  >
-                    <Users size={16} />
-                  </button>
-                )}
-                {expanded.mode === 'screen' && pipSupported && expandedStream && (
-                  <button
-                    className="icon-btn"
-                    title="Открыть в отдельном окне"
-                    onClick={handleTogglePip}
-                  >
-                    <PictureInPicture2 size={16} />
-                  </button>
-                )}
-                <button
-                  className="icon-btn"
-                  title={isFullscreen ? 'Выйти из полноэкранного режима' : 'На весь экран'}
-                  onClick={toggleFullscreen}
-                >
-                  {isFullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
-                </button>
-                {expanded.mode === 'screen' && expanded.userId !== selfUserId && (
+              {expanded.mode === 'screen' && expanded.userId !== selfUserId && (
+                <div className="voice-stage-expanded-actions">
                   <button
                     className="icon-btn"
                     title="Перестать смотреть"
@@ -656,8 +667,33 @@ export default function VoiceStage({
                   >
                     <X size={16} />
                   </button>
-                )}
-              </div>
+                </div>
+              )}
+            </div>
+
+            {/* Открыть в отдельном окне / на весь экран — в правом нижнем
+                углу демонстрации (не зависят от того, звонок это или
+                участник — полноэкранный режим есть у обоих). */}
+            <div
+              className="voice-stage-expanded-corner"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {expanded.mode === 'screen' && pipSupported && expandedStream && (
+                <button
+                  className="icon-btn"
+                  title="Открыть в отдельном окне"
+                  onClick={handleTogglePip}
+                >
+                  <PictureInPicture2 size={16} />
+                </button>
+              )}
+              <button
+                className="icon-btn"
+                title={isFullscreen ? 'Выйти из полноэкранного режима' : 'На весь экран'}
+                onClick={toggleFullscreen}
+              >
+                {isFullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+              </button>
             </div>
           </div>
 
@@ -695,6 +731,21 @@ export default function VoiceStage({
             </div>
           )
         })()
+      )}
+
+      {/* Наверху, над панелью отключения/прекращения демонстрации — а не в
+          углу самой демки: это переключатель ленты участников, а не свойство
+          видео (в отличие от открыть-в-окне/полноэкран рядом с ним). */}
+      {expanded?.mode === 'screen' && (
+        <button
+          className={`voice-stage-participants-toggle ${filmstripOpen ? 'active' : ''} ${
+            showControls ? 'visible' : ''
+          }`}
+          title={filmstripOpen ? 'Скрыть участников' : 'Показать участников'}
+          onClick={() => setFilmstripOpen((v) => !v)}
+        >
+          <Users size={16} />
+        </button>
       )}
 
       <div className={`voice-controls-bar ${showControls ? 'visible' : ''}`}>

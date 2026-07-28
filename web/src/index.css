@@ -1204,17 +1204,39 @@ input {
      от НИЖНЕГО края строки — так же, как сам .status-menu-popup растёт
      вверх от триггера — и не утыкается в низ экрана длинным содержимым. */
   bottom: 0;
-  max-height: calc(100vh - 24px);
-  overflow-y: auto;
   width: 240px;
   background: var(--modal-bg);
   border-radius: 8px;
   box-shadow: 0 8px 16px rgba(0, 0, 0, 0.32);
+  z-index: 55;
+  /* overflow НЕ ставим здесь (см. .status-flyout-scroll) — иначе он обрежет
+     ::before-мост ниже, который специально торчит за левый край. */
+}
+
+/* Мост наведения через зазор до триггера: псевдоэлемент — часть самого
+   .status-flyout, поэтому курсор над ним не считается покинувшим DOM-
+   поддерево флаута, и обёртка-триггер (.status-row-wrap) не получает
+   mouseleave, пока курсор физически не уйдёт за пределы всей группы. */
+.status-flyout::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -8px;
+  width: 8px;
+}
+
+/* Скролл — во внутренней обёртке, а не на самом .status-flyout: overflow-y
+   не может стоять отдельно от overflow-x (CSS вычисляет "visible" другой
+   оси как "auto"), а auto по X обрезал бы ::before-мост выше, который
+   специально выходит за левый край элемента. */
+.status-flyout-scroll {
+  max-height: calc(100vh - 24px);
+  overflow-y: auto;
   padding: 6px;
   display: flex;
   flex-direction: column;
   gap: 2px;
-  z-index: 55;
 }
 
 .status-flyout-item {
@@ -1448,6 +1470,42 @@ input {
 
 .voice-controls-hangup:hover {
   background: #c8393c;
+}
+
+/* Переключатель ленты участников демонстрации — отдельной плавающей кнопкой
+   НАД voice-controls-bar (24px отступ снизу + его 42px высоты + зазор), а
+   не внутри неё: прячется/появляется вместе с панелью так же, по showControls. */
+.voice-stage-participants-toggle {
+  position: absolute;
+  left: 50%;
+  bottom: 78px;
+  transform: translateX(-50%);
+  z-index: 20;
+  width: 42px;
+  height: 42px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.72);
+  backdrop-filter: blur(12px);
+  color: #fff;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s ease;
+}
+
+.voice-stage-participants-toggle.visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.voice-stage-participants-toggle:hover {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.voice-stage-participants-toggle.active {
+  background: var(--blurple);
 }
 
 /* ---- экран-приглашение канала, к которому мы не подключены (VoiceLanding) ---- */
@@ -1760,9 +1818,26 @@ input {
   background: rgba(255, 255, 255, 0.15);
 }
 
-/* Лента миниатюр включена — кнопка «Участники» подсвечена. */
-.voice-stage-expanded-actions .icon-btn.active {
-  background: var(--blurple);
+/* Открыть-в-окне/полноэкран — зеркально overlay, в правом нижнем углу. */
+.voice-stage-expanded-corner {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.6);
+}
+
+.voice-stage-expanded-corner .icon-btn {
+  color: #fff;
+}
+
+.voice-stage-expanded-corner .icon-btn:hover {
+  background: rgba(255, 255, 255, 0.15);
 }
 
 /* Лента миниатюр под развёрнутой демонстрацией. Закрытая — нулевой высоты,
@@ -2258,6 +2333,11 @@ input {
 .modal {
   width: 440px;
   max-width: 92vw;
+  /* Раньше высота ничем не ограничивалась — на невысоких экранах модалки с
+     длинным контентом (списки в NewConversationModal/DiscoverModal) могли
+     обрезаться снизу без возможности проскроллить. */
+  max-height: 90vh;
+  overflow-y: auto;
   background: var(--modal-bg);
   border-radius: 8px;
   padding: 24px;
@@ -4653,10 +4733,75 @@ button.settings-row-clickable:hover .settings-row-label {
   width: 36px;
 }
 
-/* ---- вкладка «Приглашения» на домашнем экране ---- */
-.invite-row {
+/* ---- карточка приглашения на сервер прямо в сообщении диалога ---- */
+.invite-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: 420px;
+  margin-top: 6px;
+  padding: 10px 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--surface-2-border);
+  border-radius: 8px;
+}
+
+.invite-card-declined {
+  opacity: 0.6;
+}
+
+.invite-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
   flex: 1;
-  cursor: default;
+}
+
+.invite-card-title {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  color: var(--text-muted);
+}
+
+.invite-card-server {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-normal);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.invite-card-members {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.invite-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.invite-card-actions .btn-small {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 12px;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.invite-card-status {
+  font-size: 12px;
+  color: var(--text-muted);
+  white-space: nowrap;
 }
 
 /* ---- группировка списка участников по ролям ---- */
@@ -4697,4 +4842,177 @@ button.settings-row-clickable:hover .settings-row-label {
   border-radius: 6px;
   max-height: 160px;
   overflow-y: auto;
+}
+
+/* ===================================================================
+   МОБИЛЬНЫЙ АДАПТИВ — брейкпоинт синхронизирован с useIsMobile()
+   (web/src/hooks/useIsMobile.ts, по умолчанию тоже 768px).
+   =================================================================== */
+@media (max-width: 768px) {
+  /* ---- layout: nav-экран (рельса+сайдбар каналов) vs content-экран
+     (main.chat — текстовый чат или VoiceStage) на весь экран, между ними
+     slide-переход. Класс is-mobile/screen-* — на .app, см. AppShell.tsx. --- */
+  .app.is-mobile {
+    position: relative;
+    display: block;
+    overflow: hidden;
+  }
+
+  .app.is-mobile .server-rail,
+  .app.is-mobile .channel-sidebar {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    transform: translateX(0);
+    transition: transform 0.25s ease;
+  }
+
+  .app.is-mobile .server-rail {
+    left: 0;
+    width: 72px;
+  }
+
+  /* .channel-sidebar — общий класс и у ChannelSidebar, и у HomeSidebar (см.
+     HomeSidebar.tsx корневой className="channel-sidebar home-sidebar"). */
+  .app.is-mobile .channel-sidebar {
+    left: 72px;
+    right: 0;
+  }
+
+  .app.is-mobile main.chat {
+    position: absolute;
+    inset: 0;
+    left: 100%;
+    transition: transform 0.25s ease;
+  }
+
+  .app.is-mobile.screen-content .server-rail,
+  .app.is-mobile.screen-content .channel-sidebar {
+    transform: translateX(-100%);
+  }
+
+  .app.is-mobile.screen-content main.chat {
+    transform: translateX(-100%);
+  }
+
+  /* Список участников сервера (4-я колонка на ПК) на мобилке не показываем
+     совсем — в голосовом канале участники и так видны плитками VoiceStage,
+     для текстового канала это осознанный компромисс (см. план). */
+  .app.is-mobile .members-list {
+    display: none;
+  }
+
+  /* .sidebar-bottom на ПК намеренно 312px = 72px рельсы + 240px сайдбара
+     (см. комментарий у .channel-sidebar выше в файле) — на мобилке сайдбар
+     занимает не 240px, а (100vw - 72px), поэтому вместо фиксированной
+     ширины растягиваем от правого края рельсы до правого края экрана. */
+  .sidebar-bottom {
+    left: 72px;
+    right: 0;
+    width: auto;
+  }
+
+  /* ---- кнопка "назад" к списку каналов в шапке контента (см. .chat-header
+     и VoiceStage.tsx) — рендерится только при isMobile, поэтому стиль нужен
+     только под этим брейкпоинтом. ---- */
+  .chat-back-btn {
+    flex-shrink: 0;
+    width: 40px;
+    height: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 4px;
+    color: var(--text-normal);
+    margin-right: 4px;
+  }
+
+  .chat-back-btn:hover {
+    background: var(--channel-hover);
+  }
+
+  /* В voice-stage-landing (канал открыт, но мы ещё не подключены) шапки нет
+     — кнопка назад плавает поверх центрированного контента. */
+  .voice-stage-back-btn {
+    position: absolute;
+    top: 12px;
+    left: 12px;
+    z-index: 2;
+  }
+
+  /* ---- панель действий над сообщением — на тач нет :hover, показываем
+     всегда, а не по наведению (см. MessageList.tsx). ---- */
+  .message-actions {
+    display: flex;
+  }
+
+  .message-row .reaction-add {
+    opacity: 1;
+  }
+
+  /* ---- плитки участников VoiceStage — квадрат по умолчанию, а не 16:9 --- */
+  .participant-tile {
+    aspect-ratio: 1;
+  }
+
+  /* ---- resize-хэндл DM voice stage — драг тачем не поддерживаем (низкая
+     ценность фичи на маленьком экране), высоту фиксируем. Высота приходит
+     инлайн-стилем (style={{ height: dmVoiceStageHeight }} в AppShell.tsx) —
+     !important здесь и нужен, чтобы author-правило перебило inline. ---- */
+  .dm-voicestage-resize {
+    display: none;
+  }
+
+  .dm-voicestage-wrap {
+    height: 40vh !important;
+  }
+
+  /* ---- тап-таргеты покрупнее (десктопный визуальный размер не трогаем —
+     правки только под этим брейкпоинтом) ---- */
+  .composer-btn {
+    width: 40px;
+    height: 40px;
+  }
+
+  .staged-file-remove {
+    width: 32px;
+    height: 32px;
+  }
+
+  .message-action {
+    width: 36px;
+    height: 36px;
+  }
+
+  .icon-btn {
+    width: 40px;
+    height: 40px;
+  }
+
+  /* ---- модалка настроек — колонка (таб-строка сверху) вместо строки
+     (сайдбар слева + контент справа), иначе 208px сайдбара внутри
+     92vw-модалки на телефоне почти не оставляют места контенту. ---- */
+  .settings-body {
+    flex-direction: column;
+    height: auto;
+    max-height: 70vh;
+    overflow-y: auto;
+  }
+
+  .settings-sidebar {
+    width: 100%;
+    flex-direction: row;
+    overflow-x: auto;
+    overflow-y: visible;
+    border-right: none;
+    padding-right: 0;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--channel-hover);
+  }
+
+  /* ---- редактор ролей сервера — список ролей над редактором, а не рядом
+     (200px+1fr не оставлял бы редактору места на узком экране) ---- */
+  .srv-roles {
+    grid-template-columns: 1fr;
+  }
 }

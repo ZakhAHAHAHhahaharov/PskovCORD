@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState, MouseEvent as ReactMouseEvent } from 'react'
-import { Phone, PhoneOff } from 'lucide-react'
+import { ChevronLeft, Phone, PhoneOff } from 'lucide-react'
+import { useIsMobile } from '../hooks/useIsMobile'
 import {
   api, Channel, ChatMessageBase, Conversation, ConversationMessage, FriendsState, KnownPerson,
-  Member, Message, NotificationLevel, Role, Server, ServerInviteEntry, ServerMemberSettings,
+  Member, Message, NotificationLevel, Role, Server, ServerMemberSettings,
 } from '../api'
 import { useAuth } from '../auth'
 import { useGateway } from '../gateway'
@@ -85,6 +86,32 @@ interface IncomingCall {
 export default function AppShell() {
   const { user, logout } = useAuth()
   const gateway = useGateway()
+
+  // --- мобильный layout: список каналов (nav) vs открытый канал (content) ---
+  // На ПК оба видны разом (grid-колонки), на мобилке — по очереди, с
+  // системной кнопкой "назад" через history (см. navigateToContent/popstate
+  // ниже и .app.is-mobile в index.css).
+  const isMobile = useIsMobile()
+  const [mobileScreen, setMobileScreen] = useState<'nav' | 'content'>('nav')
+  const navigateToContent = useCallback(() => {
+    if (!isMobile) return
+    setMobileScreen((prev) => {
+      // Уже в content и просто переключились на другой канал/диалог — не
+      // плодим стек истории на каждый тап, иначе один "назад" не долистает
+      // до списка, если успел пооткрывать несколько каналов подряд.
+      if (prev === 'content') history.replaceState({ pskovcordMobile: true }, '')
+      else history.pushState({ pskovcordMobile: true }, '')
+      return 'content'
+    })
+  }, [isMobile])
+  useEffect(() => {
+    const onPopState = () => setMobileScreen('nav')
+    window.addEventListener('popstate', onPopState)
+    return () => window.removeEventListener('popstate', onPopState)
+  }, [])
+  const goBackMobile = useCallback(() => {
+    history.back()
+  }, [])
 
   const [servers, setServers] = useState<Server[]>([])
   const [serverId, setServerId] = useState<number | null>(null)
@@ -210,9 +237,6 @@ export default function AppShell() {
   } | null>(null)
   const [showServerInviteId, setShowServerInviteId] = useState<number | null>(null)
   const [showServerPrivacyId, setShowServerPrivacyId] = useState<number | null>(null)
-
-  // Приглашения на сервера, адресованные МНЕ (см. HomeSidebar «Приглашения»).
-  const [serverInvites, setServerInvites] = useState<ServerInviteEntry[]>([])
 
   const currentServer = servers.find((s) => s.id === serverId) || null
   const channels = currentServer?.channels || []
@@ -435,8 +459,10 @@ export default function AppShell() {
     })()
   }, [serverId])
 
-  // Диалоги/группы, друзья и приглашения на сервера — не завязаны на
-  // выбранный сервер, нужны сразу (бейджи, домашний экран в любой момент).
+  // Диалоги/группы и друзья — не завязаны на выбранный сервер, нужны сразу
+  // (бейджи, домашний экран в любой момент). Приглашения на сервера теперь
+  // приходят карточкой прямо в историю диалога (см. ConversationMessage.
+  // server_invite) — отдельно грузить их не нужно.
   useEffect(() => {
     ;(async () => {
       try {
@@ -448,11 +474,6 @@ export default function AppShell() {
         setFriends(await api.friends())
       } catch {
         setFriends({ friends: [], incoming: [], outgoing: [] })
-      }
-      try {
-        setServerInvites(await api.myServerInvites())
-      } catch {
-        setServerInvites([])
       }
     })()
   }, [])
@@ -551,13 +572,6 @@ export default function AppShell() {
           prev.has(d.message.channel) ? prev : new Set(prev).add(d.message.channel),
         )
       }
-    })
-    // Кто-то из участников сервера пригласил меня — сразу видно во вкладке
-    // «Приглашения» на домашнем экране (см. HomeSidebar).
-    const offServerInviteCreate = gateway.on('server_invite_create', (d) => {
-      setServerInvites((prev) =>
-        prev.some((i) => i.id === d.invite.id) ? prev : [...prev, d.invite],
-      )
     })
     // Подтверждение ПОВТОРНОЙ попытки: сообщение создала прошлая, эхо до нас
     // не дошло. Само сообщение доберётся обычным путём (перечитыванием
@@ -1007,7 +1021,6 @@ export default function AppShell() {
 
     return () => {
       offMsg()
-      offServerInviteCreate()
       offMsgAck()
       offMsgNack()
       offReactions()
@@ -1280,24 +1293,32 @@ export default function AppShell() {
     [serverId],
   )
 
-  const handleAcceptServerInvite = useCallback(async (invite: ServerInviteEntry) => {
+  // Приглашение теперь карточка прямо в сообщении диалога (см.
+  // ServerInviteCard/MessageList) — статус на ней обновится сам, живым
+  // dm_message_update от бэкенда (см. chat.views._broadcast_invite_message_update),
+  // отдельно патчить локальное состояние не нужно.
+  const handleAcceptServerInvite = useCallback(async (inviteId: number) => {
     try {
-      const server = await api.acceptServerInvite(invite.id)
+      const server = await api.acceptServerInvite(inviteId)
       setServers((prev) => (prev.some((s) => s.id === server.id) ? prev : [...prev, server]))
-      setServerInvites((prev) => prev.filter((i) => i.id !== invite.id))
+      selectServer(server)
+    } catch (e) {
+      alert((e as Error).message)
+    }
+  }, [selectServer])
+
+  const handleDeclineServerInvite = useCallback(async (inviteId: number) => {
+    try {
+      await api.declineServerInvite(inviteId)
     } catch (e) {
       alert((e as Error).message)
     }
   }, [])
 
-  const handleDeclineServerInvite = useCallback(async (invite: ServerInviteEntry) => {
-    try {
-      await api.declineServerInvite(invite.id)
-      setServerInvites((prev) => prev.filter((i) => i.id !== invite.id))
-    } catch (e) {
-      alert((e as Error).message)
-    }
-  }, [])
+  const handleOpenInvitedServer = useCallback((targetServerId: number) => {
+    const server = servers.find((s) => s.id === targetServerId)
+    if (server) selectServer(server)
+  }, [servers, selectServer])
 
   const handleCreateChannel = async (kind: 'text' | 'voice') => {
     if (serverId == null) return
@@ -1770,7 +1791,7 @@ export default function AppShell() {
 
   return (
     <VoiceProvider voice={voice} onStatus={handleVoiceStatus}>
-    <div className="app">
+    <div className={isMobile ? `app is-mobile screen-${mobileScreen}` : 'app'}>
       <ServerRail
         servers={servers}
         activeId={serverId}
@@ -1779,7 +1800,7 @@ export default function AppShell() {
         onDiscover={() => setShowDiscover(true)}
         onHome={handleOpenHome}
         homeNotificationCount={
-          friends.incoming.length + unreadConversationIds.size + serverInvites.length
+          friends.incoming.length + unreadConversationIds.size
         }
         unreadServerIds={unreadServerIds}
         mutedServerIds={mutedServerIds}
@@ -1790,7 +1811,10 @@ export default function AppShell() {
         <HomeSidebar
           conversations={conversations}
           activeConversationId={activeConversationId}
-          onSelectConversation={handleSelectConversation}
+          onSelectConversation={(c) => {
+            handleSelectConversation(c)
+            navigateToContent()
+          }}
           friends={friends}
           onOpenNewConversation={() => setShowNewConversation(true)}
           onSendFriendRequest={handleSendFriendRequest}
@@ -1805,9 +1829,6 @@ export default function AppShell() {
           onOpenSettings={() => setShowSettings(true)}
           onOpenProfile={() => setShowProfile(true)}
           onOpenUserProfile={openProfilePopup}
-          serverInvites={serverInvites}
-          onAcceptServerInvite={handleAcceptServerInvite}
-          onDeclineServerInvite={handleDeclineServerInvite}
         />
       ) : (
         <ChannelSidebar
@@ -1820,8 +1841,14 @@ export default function AppShell() {
           voiceTopic={voiceTopic}
           voiceStatus={voiceStatus}
           user={user!}
-          onSelectText={handleSelectChannel}
-          onJoinVoice={handleJoinVoice}
+          onSelectText={(c) => {
+            handleSelectChannel(c)
+            navigateToContent()
+          }}
+          onJoinVoice={(c) => {
+            handleJoinVoice(c)
+            navigateToContent()
+          }}
           onLeaveVoice={handleLeaveVoice}
           onCreateChannel={handleCreateChannel}
           onOpenSettings={() => setShowSettings(true)}
@@ -1838,6 +1865,11 @@ export default function AppShell() {
           activeConversation ? (
             <>
               <header className="chat-header">
+                {isMobile && (
+                  <button className="chat-back-btn" title="Назад к списку" onClick={goBackMobile}>
+                    <ChevronLeft size={20} />
+                  </button>
+                )}
                 <span className="hash">@</span>
                 <span className="chat-header-name">{conversationDisplayName(activeConversation)}</span>
                 {voice?.room.kind === 'conversation' && voice.room.id === activeConversation.id ? (
@@ -1900,6 +1932,9 @@ export default function AppShell() {
                 onToggleReaction={handleToggleDmReaction}
                 onRetry={(nonce) => outbox.retry(nonce)}
                 onDiscard={(nonce) => outbox.discard(nonce)}
+                onAcceptServerInvite={handleAcceptServerInvite}
+                onDeclineServerInvite={handleDeclineServerInvite}
+                onOpenInvitedServer={handleOpenInvitedServer}
               />
               <MessageInput
                 channelName={conversationDisplayName(activeConversation)}
@@ -1934,10 +1969,17 @@ export default function AppShell() {
             isConnected={voice?.room.kind === 'channel' && voice.room.id === currentChannel.id}
             onJoin={() => handleJoinVoice(currentChannel)}
             onLeave={handleLeaveVoice}
+            isMobile={isMobile}
+            onBack={goBackMobile}
           />
         ) : currentChannel && currentChannel.kind === 'text' ? (
           <>
             <header className="chat-header">
+              {isMobile && (
+                <button className="chat-back-btn" title="Назад к списку" onClick={goBackMobile}>
+                  <ChevronLeft size={20} />
+                </button>
+              )}
               <span className="hash">#</span>
               <span className="chat-header-name">{currentChannel.name}</span>
             </header>
