@@ -435,6 +435,11 @@ class QRStatusView(APIView):
             data["access"] = qr.access_token
             data["refresh"] = qr.refresh_token
             data["user"] = MeSerializer(qr.user).data
+            # Этот GET выполняет сам браузер ПК — самое подходящее место
+            # завести ему и Django-сессию (см. LoginView/RegisterView), иначе
+            # вход по QR не пускал бы в /adminpskordpro/ и молча оставлял бы
+            # старую sessionid-куку от прошлого пользователя на этом ПК.
+            django_login(request, qr.user)
             qr.delete()
         elif qr.status == QRLoginRequest.DENIED:
             qr.delete()
