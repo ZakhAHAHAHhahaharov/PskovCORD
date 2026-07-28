@@ -165,7 +165,11 @@ export default function ChannelSidebar({
                   {inChannel.map((m) => {
                     const speaking = speakingUserIds.has(m.id)
                     const mic = micStateOf(m)
-                    const canOpenMenu = isMyVoiceChannel && m.id !== user.id && onParticipantContextMenu
+                    const canOpenMenu =
+                      isMyVoiceChannel &&
+                      voiceStatus === 'connected' &&
+                      m.id !== user.id &&
+                      onParticipantContextMenu
                     return (
                       <button
                         key={m.id}

@@ -1,11 +1,10 @@
 import {
-  Wifi, WifiOff, Loader2, PhoneOff, Mic, Headphones, Monitor, Circle, Settings, Volume2,
+  Wifi, WifiOff, Loader2, PhoneOff, Mic, Headphones, Circle, Settings, Volume2,
 } from 'lucide-react'
 import { User } from '../api'
 import MicButton from './MicButton'
 import StatusMenu from './StatusMenu'
 import DeafenButton from './DeafenButton'
-import ScreenShareButton from './ScreenShareButton'
 import { useVoice } from '../voice'
 import { VoiceState } from './AppShell'
 import { VoiceStatus } from './VoiceProvider'
@@ -90,7 +89,6 @@ export default function SidebarBottomBar({
             <>
               <MicButton />
               <DeafenButton />
-              <ScreenShareButton />
             </>
           ) : (
             <>
@@ -99,9 +97,6 @@ export default function SidebarBottomBar({
               </button>
               <button className="icon-btn" title="Звук (войдите в голосовой канал)" disabled>
                 <Headphones size={17} />
-              </button>
-              <button className="icon-btn" title="Демонстрация экрана (войдите в голосовой канал)" disabled>
-                <Monitor size={17} />
               </button>
             </>
           )}

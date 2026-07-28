@@ -61,6 +61,16 @@ export class SfuClient {
   private readonly availableScreenProducers = new Map<number, Set<string>>()
   private readonly watchedScreenUsers = new Set<number>()
   private readonly pending = new Map<number, Pending>()
+  // producerId'ы, на которые consume() уже запущен, но ещё не завершился —
+  // без этого набора параллельный вызов consumeMic/consumeScreen для того же
+  // producerId (например, он уже был в снимке getProducers() при connect(),
+  // и тут же прилетело живое newProducer-уведомление на него же) запускал
+  // recvTransport.consume() дважды одновременно. Второй вызов ломал SDP
+  // recv-транспорта (несовпадение числа m-line у транссиверов) и Chrome
+  // ронял вкладку с DOMException "Index or size is negative or greater than
+  // the allowed amount" — воспроизводилось именно при входе в канал, где уже
+  // есть другой участник.
+  private readonly consumingProducerIds = new Set<string>()
   private nextReqId = 1
   private closed = false
 
@@ -290,6 +300,8 @@ export class SfuClient {
 
   private async consumeMic(producerId: string, userId: number) {
     if (this.closed || !this.recvTransport) return
+    if (this.isAlreadyConsuming(producerId)) return
+    this.consumingProducerIds.add(producerId)
     try {
       const consumer = await this.doConsume(producerId)
       this.consumers.set(consumer.id, consumer)
@@ -302,15 +314,25 @@ export class SfuClient {
       this.recomputeMicStream(userId)
     } catch {
       // Один неудавшийся consume не должен ронять весь голос.
+    } finally {
+      this.consumingProducerIds.delete(producerId)
     }
+  }
+
+  /** true, если producerId уже consume'ится (в процессе) или уже consume'ен
+   * (есть готовый consumer) — см. комментарий у consumingProducerIds. */
+  private isAlreadyConsuming(producerId: string): boolean {
+    if (this.consumingProducerIds.has(producerId)) return true
+    for (const consumer of this.consumers.values()) {
+      if (consumer.producerId === producerId) return true
+    }
+    return false
   }
 
   private async consumeScreen(producerId: string, userId: number) {
     if (this.closed || !this.recvTransport) return
-    // Уже consume'или именно этот producer (например, повторный newProducer).
-    for (const consumer of this.consumers.values()) {
-      if (consumer.producerId === producerId) return
-    }
+    if (this.isAlreadyConsuming(producerId)) return
+    this.consumingProducerIds.add(producerId)
     try {
       const consumer = await this.doConsume(producerId)
       this.consumers.set(consumer.id, consumer)
@@ -323,6 +345,8 @@ export class SfuClient {
       this.recomputeScreenStream(userId)
     } catch {
       // Не смогли подключить один из треков демонстрации — не фатально.
+    } finally {
+      this.consumingProducerIds.delete(producerId)
     }
   }
 
@@ -486,6 +510,7 @@ export class SfuClient {
     for (const c of this.consumers.values()) c.close()
     this.consumers.clear()
     this.consumerMeta.clear()
+    this.consumingProducerIds.clear()
     this.availableScreenProducers.clear()
     this.watchedScreenUsers.clear()
     this.micProducer?.close()
