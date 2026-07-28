@@ -90,7 +90,8 @@ export default function AppShell() {
   // --- мобильный layout: список каналов (nav) vs открытый канал (content) ---
   // На ПК оба видны разом (grid-колонки), на мобилке — по очереди, с
   // системной кнопкой "назад" через history (см. navigateToContent/popstate
-  // ниже и .app.is-mobile в index.css).
+  // ниже и @media (max-width: 768px) в index.css — раскладка целиком на
+  // CSS, isMobile здесь нужен только для истории браузера и кнопки назад).
   const isMobile = useIsMobile()
   const [mobileScreen, setMobileScreen] = useState<'nav' | 'content'>('nav')
   const navigateToContent = useCallback(() => {
@@ -1791,7 +1792,16 @@ export default function AppShell() {
 
   return (
     <VoiceProvider voice={voice} onStatus={handleVoiceStatus}>
-    <div className={isMobile ? `app is-mobile screen-${mobileScreen}` : 'app'}>
+    {/* screen-* всегда в className, не только при isMobile: сама раскладка
+        (nav vs content, слайд) целиком на CSS-медиа-запросе в index.css —
+        реальная ширина вьюпорта решает, применится ли она вообще. Если
+        завязать это ЕЩЁ и на JS isMobile (matchMedia), два источника
+        истины могут разойтись (гонка при первом рендере и т.п.) — тогда
+        класса не будет вовсе, и мобильный layout целиком откатится на
+        десктопную grid-сетку, где main обязательно виден рядом с
+        сайдбаром. isMobile ниже используется только для вещей, которые
+        JS ДОЛЖЕН явно знать (кнопка назад, история браузера). */}
+    <div className={`app screen-${mobileScreen}`}>
       {/* На ПК — display:contents (см. index.css), обёртка "исчезает" из
           layout'а: ServerRail и сайдбар остаются прямыми grid-items .app,
           как раньше. На мобилке становится реальным flex-контейнером —

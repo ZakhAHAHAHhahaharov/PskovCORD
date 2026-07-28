@@ -96,6 +96,12 @@ export default function MessageList({
     messageId: number
     anchor: EmojiPickerAnchor
   } | null>(null)
+  // Панель действий (реакции/ответ/редактировать/удалить) на десктопе
+  // видна по :hover — на тач-устройстве такого нет вообще, а показывать её
+  // сразу под КАЖДЫМ сообщением слишком шумно. Двойной тап по конкретному
+  // сообщению открывает панель только для него; повторный двойной тап —
+  // либо по нему же, либо по другому — закрывает/переключает.
+  const [mobileActiveKey, setMobileActiveKey] = useState<string | number | null>(null)
 
   // Автопрокрутка вниз — только если мы и так стояли внизу. Раньше список
   // прыгал к последнему сообщению безусловно, и читать историю во время
@@ -132,12 +138,16 @@ export default function MessageList({
           : isAuthor
             ? 'delivered'
             : null
+        const rowKey = m.pendingNonce ?? m.id
         return (
           <div
-            key={m.pendingNonce ?? m.id}
+            key={rowKey}
             className={`message-row ${editingId === m.id ? 'editing' : ''} ${
               pending ? 'message-pending' : ''
-            } ${m.deliveryStatus === 'failed' ? 'message-failed' : ''}`}
+            } ${m.deliveryStatus === 'failed' ? 'message-failed' : ''} ${
+              mobileActiveKey === rowKey ? 'mobile-actions-active' : ''
+            }`}
+            onDoubleClick={() => setMobileActiveKey((prev) => (prev === rowKey ? null : rowKey))}
           >
             <button
               type="button"
