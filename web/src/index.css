@@ -4964,6 +4964,29 @@ button.settings-row-clickable:hover .settings-row-label {
     z-index: 2;
   }
 
+  /* ---- настройки — полноэкранный "слой" вместо центрированной модалки,
+     закрывается так же "назад", как и переход в канал (см.
+     AppShell.openMobileSettings/closeSettings, SettingsModal.tsx). ---- */
+  .settings-overlay {
+    padding: 0;
+    align-items: stretch;
+    justify-content: stretch;
+  }
+
+  .settings-overlay .settings-modal {
+    width: 100%;
+    max-width: 100%;
+    height: 100%;
+    max-height: 100%;
+    border-radius: 0;
+  }
+
+  .settings-overlay .modal-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
   /* ---- панель действий над сообщением — на тач нет :hover. Показываем не
      всегда (было шумно — висело под каждым сообщением сразу), а по
      двойному тапу на конкретном сообщении (см. MessageList.tsx
@@ -5017,11 +5040,15 @@ button.settings-row-clickable:hover .settings-row-label {
 
   /* ---- модалка настроек — колонка (таб-строка сверху) вместо строки
      (сайдбар слева + контент справа), иначе 208px сайдбара внутри
-     92vw-модалки на телефоне почти не оставляют места контенту. ---- */
+     92vw-модалки на телефоне почти не оставляют места контенту. Высота —
+     flex:1 вместо фиксированного max-height: модалка сама теперь на весь
+     экран (.settings-overlay/.settings-modal выше), а не центрированный
+     блок с интринсик-высотой — max-height оставлял бы пустое место снизу. */
   .settings-body {
     flex-direction: column;
     height: auto;
-    max-height: 70vh;
+    flex: 1;
+    min-height: 0;
     overflow-y: auto;
   }
 
@@ -5034,6 +5061,14 @@ button.settings-row-clickable:hover .settings-row-label {
     padding-right: 0;
     padding-bottom: 8px;
     border-bottom: 1px solid var(--channel-hover);
+  }
+
+  /* .settings-body теперь flex-column (см. выше) — .settings-content
+     растягивается по ЭТОЙ (вертикальной) оси через тот же flex:1, что и на
+     ПК по горизонтальной, но для корректного скролла внутри колонки нужен
+     ещё и min-height:0 (min-width:0 в базовом правиле тут не помогает). */
+  .settings-content {
+    min-height: 0;
   }
 
   /* ---- редактор ролей сервера — список ролей над редактором, а не рядом
