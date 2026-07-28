@@ -5,6 +5,9 @@ from . import views
 urlpatterns = [
     path("config", views.config_view, name="config"),
 
+    # Загрузка вложения — отдельно от отправки сообщения, см. AttachmentUpload.
+    path("attachments", views.AttachmentUpload.as_view(), name="attachment-upload"),
+
     path("servers", views.ServerListCreate.as_view(), name="server-list"),
     path("servers/discover", views.ServerDiscover.as_view(), name="server-discover"),
     path("servers/<int:server_id>", views.ServerDetail.as_view(), name="server-detail"),

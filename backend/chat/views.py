@@ -1,3 +1,5 @@
+from datetime import timedelta
+
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
 from django.conf import settings
@@ -8,6 +10,7 @@ from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
+from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -15,16 +18,18 @@ from rest_framework.views import APIView
 from accounts.models import Friendship
 from accounts.serializers import UserSerializer
 
-from . import presence, roles, sfu
+from . import presence, roles, sfu, uploads
 from .models import (
-    Channel, Conversation, ConversationMessage, ConversationParticipant,
-    Membership, Message, Role, Server, ServerBan, ServerJoinRequest, dm_room,
+    Attachment, Channel, Conversation, ConversationMessage,
+    ConversationParticipant, Membership, Message, Role, Server, ServerBan,
+    ServerJoinRequest, MAX_ATTACHMENT_BYTES, dm_room,
 )
 from .permissions import are_friends, can_dm
 from .serializers import (
-    ChannelSerializer, ConversationMessageSerializer, ConversationSerializer,
-    MessageSerializer, RoleSerializer, ServerBanSerializer,
-    ServerJoinRequestSerializer, ServerSerializer, ServerUpdateSerializer,
+    AttachmentSerializer, ChannelSerializer, ConversationMessageSerializer,
+    ConversationSerializer, MessageSerializer, RoleSerializer,
+    ServerBanSerializer, ServerJoinRequestSerializer, ServerSerializer,
+    ServerUpdateSerializer,
 )
 
 User = get_user_model()
@@ -274,45 +279,71 @@ class ServerListCreate(APIView):
 
 
 class ServerDiscover(APIView):
-    """Список всех серверов (дружеский масштаб) — чтобы можно было вступить."""
+    """Поиск серверов, куда можно вступить: GET /api/servers/discover?q=...
+
+    Приватный сервер (Server.is_private) в выдачу не попадает вообще — ни
+    строкой, ни именем. Раньше он показывался всем, просто с вычищенными
+    описанием и тегами, то есть «приватность» сводилась к сокрытию витрины:
+    сам факт существования сервера, его название, значок и число участников
+    видел любой, а по access_mode=public в него ещё и можно было вступить
+    прямо из поиска. Теперь приватный сервер виден в этой ручке только своим —
+    попасть в него можно лишь зная о нём извне.
+
+    q — подстрока имени или «особенности» (tags). Пустой q отдаёт весь список,
+    как раньше: на дружеском масштабе это нормальная витрина.
+    """
+
+    # Отдаём не больше этого за раз — на случай, если инстанс однажды
+    # перестанет быть «дружеским масштабом»: без лимита ручка вернула бы все
+    # сервера сразу.
+    MAX_RESULTS = 100
 
     def get(self, request):
+        my_server_ids = set(
+            Membership.objects.filter(user=request.user).values_list(
+                "server_id", flat=True)
+        )
         # Раньше здесь было два N+1 сразу: memberships.count() и is_member() —
         # по отдельному запросу на каждый сервер в списке. Теперь счётчик
         # приезжает аннотацией, а членство — одним множеством.
         servers = Server.objects.annotate(
             member_total=Count("memberships", distinct=True)
-        ).order_by("-created_at")
+        ).filter(
+            # Приватные — только те, где мы уже состоим (иначе список «куда
+            # вступить» скрывал бы от человека его же собственные сервера).
+            Q(is_private=False) | Q(id__in=my_server_ids)
+        )
+
+        query = (request.query_params.get("q") or "").strip()
+        if query:
+            # tags — JSONField со списком строк; icontains по нему сравнивает
+            # текстовое представление, чего для «найти по особенности» ровно
+            # достаточно и не требует ни отдельной таблицы, ни GIN-индекса.
+            servers = servers.filter(
+                Q(name__icontains=query) | Q(tags__icontains=query))
+
+        servers = servers.order_by("-created_at")[:self.MAX_RESULTS]
+
         my_requests = set(
             ServerJoinRequest.objects.filter(user=request.user).values_list(
                 "server_id", flat=True)
         )
-        my_server_ids = set(
-            Membership.objects.filter(user=request.user).values_list(
-                "server_id", flat=True)
-        )
-        data = []
-        for s in servers:
-            member = s.id in my_server_ids
-            entry = {
+        return Response([
+            {
                 "id": s.id,
                 "name": s.name,
                 "icon": s.icon,
                 "member_count": s.member_total,
-                "is_member": member,
+                "is_member": s.id in my_server_ids,
                 "is_private": s.is_private,
                 "access_mode": s.access_mode,
                 "age_restricted": s.age_restricted,
                 "request_pending": s.id in my_requests,
+                "description": s.description,
+                "tags": s.tags,
             }
-            # Приватный сервер показывает посторонним только имя и значок —
-            # описание/особенности видят лишь участники (см. Server.is_private).
-            if s.is_private and not member:
-                entry.update({"description": "", "tags": []})
-            else:
-                entry.update({"description": s.description, "tags": s.tags})
-            data.append(entry)
-        return Response(data)
+            for s in servers
+        ])
 
 
 class ServerDetail(APIView):
@@ -972,7 +1003,9 @@ class ConversationMessages(APIView):
         conversation = get_object_or_404(Conversation, id=conversation_id)
         if not is_participant(request.user, conversation):
             return Response({"detail": "Нет доступа."}, status=403)
-        qs = conversation.messages.select_related("author", "reply_to__author")
+        qs = conversation.messages.select_related(
+            "author", "reply_to__author"
+        ).prefetch_related("attachments", "reactions")
         messages = _paginate_messages(request, qs)
         return Response(ConversationMessageSerializer(messages, many=True).data)
 
@@ -1032,7 +1065,9 @@ class ChannelMessages(APIView):
         denied = _require_channel_access(request, channel)
         if denied:
             return denied
-        qs = channel.messages.select_related("author", "reply_to__author")
+        qs = channel.messages.select_related(
+            "author", "reply_to__author"
+        ).prefetch_related("attachments", "reactions")
         messages = _paginate_messages(request, qs)
         return Response(MessageSerializer(messages, many=True).data)
 
@@ -1070,6 +1105,75 @@ class VoiceCredentials(APIView):
             "sfu_token": token,
             "ttl": ttl,
         })
+
+
+class AttachmentUpload(APIView):
+    """POST /api/attachments (multipart, поле `file`) — загрузить вложение.
+
+    Загрузка отделена от отправки сообщения намеренно. Файл уезжает обычным
+    HTTP-запросом (виден прогресс, работает докачка/отмена, не блокируется
+    WebSocket), а сообщение потом отправляется по gateway лёгким JSON'ом со
+    списком id — см. chat.consumers._bind_attachments. Загнать 25 МБ в
+    WS-фрейм означало бы забить единственный сокет клиента, по которому идут
+    ещё и presence, и голосовая мета.
+
+    Ручка не спрашивает, в какой канал файл предназначен: на этой стадии он
+    ещё ничей. Правами он накрывается в момент привязки к сообщению —
+    отправить его можно только туда, куда сам отправитель имеет право писать.
+    """
+
+    parser_classes = [MultiPartParser, FormParser]
+
+    # Не привязанные ни к какому сообщению загрузки старше этого срока —
+    # мусор: человек выбрал файл и передумал отправлять. Чистим лениво, при
+    # следующей загрузке того же пользователя (см. _sweep_orphans) — заводить
+    # ради этого cron/Celery в проекте, где их нет, несоразмерно.
+    ORPHAN_TTL = timedelta(hours=6)
+
+    def post(self, request):
+        uploaded = request.FILES.get("file")
+        if uploaded is None:
+            return Response({"detail": "Нужен файл в поле file."}, status=400)
+        if uploaded.size == 0:
+            return Response({"detail": "Файл пустой."}, status=400)
+        if uploaded.size > MAX_ATTACHMENT_BYTES:
+            limit_mb = MAX_ATTACHMENT_BYTES // (1024 * 1024)
+            return Response(
+                {"detail": f"Файл слишком большой (макс. {limit_mb} МБ)."},
+                status=400,
+            )
+
+        self._sweep_orphans(request.user)
+
+        # Тип определяем по содержимому и «обеззараживаем» — см. chat.uploads,
+        # там же про то, почему заголовку Content-Type верить нельзя.
+        content_type, width, height = uploads.sniff(uploaded)
+        attachment = Attachment(
+            uploaded_by=request.user,
+            original_name=(uploaded.name or "file")[:255],
+            content_type=content_type,
+            size=uploaded.size,
+            width=width,
+            height=height,
+        )
+        attachment.file.save(uploaded.name or "file", uploaded, save=False)
+        attachment.save()
+        return Response(AttachmentSerializer(attachment).data, status=201)
+
+    def _sweep_orphans(self, user):
+        # Поштучно, а не queryset.delete(): файлы с диска убирает post_delete
+        # (см. chat.models._cleanup_attachment_file), а он для каждого объекта
+        # всё равно вызывается отдельно — зато так очевидно, что чистится и
+        # строка, и сам файл.
+        cutoff = timezone.now() - self.ORPHAN_TTL
+        stale = Attachment.objects.filter(
+            uploaded_by=user,
+            message__isnull=True,
+            conversation_message__isnull=True,
+            created_at__lt=cutoff,
+        )
+        for attachment in stale:
+            attachment.delete()
 
 
 @api_view(["GET"])

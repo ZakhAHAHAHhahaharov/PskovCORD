@@ -7,8 +7,8 @@ from accounts.serializers import (
 
 from . import presence, roles
 from .models import (
-    Channel, Conversation, ConversationMessage, Message, Role, Server,
-    ServerBan, ServerJoinRequest, dm_room,
+    Attachment, Channel, Conversation, ConversationMessage, Message, Role,
+    Server, ServerBan, ServerJoinRequest, dm_room,
 )
 
 # Значок сервера жмётся клиентом до 512x512 (ServerSettingsModal.ICON_SIZE) —
@@ -178,6 +178,48 @@ class ServerBanSerializer(serializers.ModelSerializer):
         fields = ["id", "user", "banned_by", "reason", "created_at"]
 
 
+class AttachmentSerializer(serializers.ModelSerializer):
+    url = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Attachment
+        fields = ["id", "url", "original_name", "content_type", "size",
+                  "width", "height"]
+
+    def get_url(self, obj):
+        """Путь относительно корня (`/media/...`), а не абсолютный URL.
+
+        Абсолютный пришлось бы собирать из request.build_absolute_uri, а
+        сериализатор работает и без request — тем же объектом сообщение
+        рассылается по WebSocket (см. chat.consumers). Домен подставляет
+        клиент: тот же base, что у API (см. web/src/api.ts mediaUrl).
+        """
+        return obj.file.url if obj.file else ""
+
+
+def reactions_payload(reactions) -> list:
+    """[{"emoji": ..., "count": N, "user_ids": [...]}, ...] в порядке первого
+    появления эмодзи.
+
+    user_ids, а не готовый флаг «моя реакция»: ОДИН и тот же сериализованный
+    объект сообщения уходит broadcast'ом всем сразу (chat.consumers), так что
+    поля, зависящего от получателя, здесь быть не может в принципе. Клиент
+    сам сверяет список со своим id — заодно это даёт подсказку «кто поставил»
+    без отдельного запроса.
+
+    Принимает готовую последовательность, а не queryset: вызывающие отдают
+    сюда obj.reactions.all(), которая при prefetch_related уже в памяти (см.
+    chat.views — иначе на каждое сообщение в истории уходил бы свой запрос).
+    """
+    grouped: dict[str, list] = {}
+    for reaction in reactions:
+        grouped.setdefault(reaction.emoji, []).append(reaction.user_id)
+    return [
+        {"emoji": emoji, "count": len(user_ids), "user_ids": user_ids}
+        for emoji, user_ids in grouped.items()
+    ]
+
+
 class MessageReplySerializer(serializers.ModelSerializer):
     """Компактный превью сообщения, на которое отвечают — без вложенности."""
     author = UserSerializer(read_only=True)
@@ -190,12 +232,17 @@ class MessageReplySerializer(serializers.ModelSerializer):
 class MessageSerializer(serializers.ModelSerializer):
     author = UserSerializer(read_only=True)
     reply_to = MessageReplySerializer(read_only=True)
+    attachments = AttachmentSerializer(many=True, read_only=True)
+    reactions = serializers.SerializerMethodField()
 
     class Meta:
         model = Message
         fields = ["id", "channel", "author", "content", "reply_to",
-                  "created_at", "edited_at"]
+                  "attachments", "reactions", "created_at", "edited_at"]
         read_only_fields = ["author", "created_at", "edited_at"]
+
+    def get_reactions(self, obj):
+        return reactions_payload(obj.reactions.all())
 
 
 class ConversationMessageReplySerializer(serializers.ModelSerializer):
@@ -209,12 +256,17 @@ class ConversationMessageReplySerializer(serializers.ModelSerializer):
 class ConversationMessageSerializer(serializers.ModelSerializer):
     author = UserSerializer(read_only=True)
     reply_to = ConversationMessageReplySerializer(read_only=True)
+    attachments = AttachmentSerializer(many=True, read_only=True)
+    reactions = serializers.SerializerMethodField()
 
     class Meta:
         model = ConversationMessage
         fields = ["id", "conversation", "author", "content", "reply_to",
-                  "created_at", "edited_at"]
+                  "attachments", "reactions", "created_at", "edited_at"]
         read_only_fields = ["author", "created_at", "edited_at"]
+
+    def get_reactions(self, obj):
+        return reactions_payload(obj.reactions.all())
 
 
 class ConversationSerializer(serializers.ModelSerializer):

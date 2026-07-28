@@ -7,8 +7,11 @@ import asyncio
 import base64
 import hashlib
 import hmac
+import io
 import json
+import re
 import time
+from pathlib import Path
 
 import jwt
 from asgiref.sync import sync_to_async
@@ -16,17 +19,20 @@ from channels.db import database_sync_to_async
 from channels.testing import WebsocketCommunicator
 from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import IntegrityError
 from django.test import TestCase, TransactionTestCase
+from PIL import Image as PILImage
 from rest_framework.test import APIClient, APITestCase
 from rest_framework_simplejwt.tokens import AccessToken
 
-from . import mute_vote, presence, roles, sfu, turn
+from . import emoji as emoji_keys, mute_vote, presence, roles, sfu, turn
 from .consumers import GatewayConsumer
 from .middleware import JWTAuthMiddleware
 from .models import (
-    Channel, Conversation, ConversationParticipant, Membership, Message, Role,
-    Server, ServerJoinRequest, dm_room,
+    Attachment, Channel, Conversation, ConversationParticipant,
+    MAX_ATTACHMENT_BYTES, MAX_REACTIONS_PER_MESSAGE, Membership, Message,
+    Reaction, Role, Server, ServerJoinRequest, dm_room,
 )
 
 User = get_user_model()
@@ -635,27 +641,55 @@ class ServerAccessTests(APITestCase):
         )
         self.assertEqual(resp.status_code, 400)
 
-    def test_private_server_hides_description_from_outsiders(self):
+    def test_private_server_is_absent_from_discover_for_outsiders(self):
+        """Приватный сервер не виден в поиске вообще — ни строкой, ни именем.
+
+        Раньше он показывался всем с вычищенными description/tags, то есть имя,
+        значок и число участников были публичны, а при access_mode=public в
+        него можно было ещё и вступить прямо из выдачи.
+        """
         self.server.is_private = True
         self.server.description = "секретное описание"
         self.server.tags = ["тайна"]
         self.server.save(update_fields=["is_private", "description", "tags"])
 
         self.client.force_authenticate(self.outsider)
-        entry = next(
-            s for s in self.client.get("/api/servers/discover").data
-            if s["id"] == self.server.id
-        )
-        self.assertEqual(entry["name"], self.server.name)  # имя видно всем
-        self.assertEqual(entry["description"], "")
-        self.assertEqual(entry["tags"], [])
+        ids = [s["id"] for s in self.client.get("/api/servers/discover").data]
+        self.assertNotIn(self.server.id, ids)
 
+        # Свой же приватный сервер владелец в списке видит — иначе выдача
+        # скрывала бы от человека его собственные сервера.
         self.client.force_authenticate(self.owner)
         entry = next(
             s for s in self.client.get("/api/servers/discover").data
             if s["id"] == self.server.id
         )
         self.assertEqual(entry["description"], "секретное описание")
+
+    def test_private_server_not_found_by_search_query(self):
+        """Точный поиск по имени приватного сервера тоже ничего не находит —
+        иначе «нет в списке» обходилось бы одним угаданным словом."""
+        self.server.is_private = True
+        self.server.save(update_fields=["is_private"])
+
+        self.client.force_authenticate(self.outsider)
+        resp = self.client.get("/api/servers/discover", {"q": self.server.name})
+        self.assertEqual([s["id"] for s in resp.data], [])
+
+    def test_discover_search_filters_by_name_and_tags(self):
+        public = Server.objects.create(name="Лампово о рыбалке", owner=self.owner)
+        public.tags = ["рыбалка", "оффтоп"]
+        public.save(update_fields=["tags"])
+
+        self.client.force_authenticate(self.outsider)
+        by_name = self.client.get("/api/servers/discover", {"q": "лампово"})
+        self.assertIn(public.id, [s["id"] for s in by_name.data])
+
+        by_tag = self.client.get("/api/servers/discover", {"q": "рыбалка"})
+        self.assertIn(public.id, [s["id"] for s in by_tag.data])
+
+        nothing = self.client.get("/api/servers/discover", {"q": "заведомо нет такого"})
+        self.assertEqual(list(nothing.data), [])
 
     def test_server_profile_validation(self):
         self.client.force_authenticate(self.owner)
@@ -1748,3 +1782,451 @@ class MuteVoteClaimTests(TestCase):
         ]
         self.assertEqual(len(results), 1)
         presence.clear_forced_mute(target.id)
+
+
+class AttachmentUploadTests(APITestCase):
+    """Загрузка вложений: лимиты и — главное — определение типа по
+    СОДЕРЖИМОМУ, а не по имени файла или заголовку запроса."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(username="uploader", password="pw12345")
+        self.client.force_authenticate(self.user)
+
+    @staticmethod
+    def _png_bytes(width=4, height=3):
+        buffer = io.BytesIO()
+        PILImage.new("RGB", (width, height), "red").save(buffer, format="PNG")
+        return buffer.getvalue()
+
+    def test_image_upload_detects_type_and_size(self):
+        upload = SimpleUploadedFile(
+            "картинка.png", self._png_bytes(8, 5), content_type="image/png")
+        resp = self.client.post("/api/attachments", {"file": upload}, format="multipart")
+        self.assertEqual(resp.status_code, 201)
+        self.assertEqual(resp.data["content_type"], "image/png")
+        self.assertEqual(resp.data["width"], 8)
+        self.assertEqual(resp.data["height"], 5)
+        self.assertEqual(resp.data["original_name"], "картинка.png")
+        self.assertTrue(resp.data["url"].startswith("/media/attachments/"))
+
+    def test_html_disguised_as_image_is_not_served_as_image(self):
+        """Файл с картиночным именем и заголовком, но HTML внутри, не должен
+        получить встраиваемый content_type: иначе он открывался бы документом
+        на нашем же origin — stored-XSS с доступом к токенам в localStorage."""
+        upload = SimpleUploadedFile(
+            "innocent.png",
+            b"<html><script>alert(document.cookie)</script></html>",
+            content_type="image/png",
+        )
+        resp = self.client.post("/api/attachments", {"file": upload}, format="multipart")
+        self.assertEqual(resp.status_code, 201)
+        self.assertEqual(resp.data["content_type"], "application/octet-stream")
+
+    def test_svg_is_never_embeddable(self):
+        """SVG — это XML-документ, который браузер исполняет вместе с его
+        <script>. Расширение честное, но встраивать такое нельзя."""
+        upload = SimpleUploadedFile(
+            "logo.svg",
+            b'<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>',
+            content_type="image/svg+xml",
+        )
+        resp = self.client.post("/api/attachments", {"file": upload}, format="multipart")
+        self.assertEqual(resp.data["content_type"], "application/octet-stream")
+
+    def test_oversized_file_rejected(self):
+        oversized = SimpleUploadedFile(
+            "big.bin", b"\0" * (MAX_ATTACHMENT_BYTES + 1),
+            content_type="application/octet-stream")
+        resp = self.client.post("/api/attachments", {"file": oversized}, format="multipart")
+        self.assertEqual(resp.status_code, 400)
+
+    def test_empty_and_missing_file_rejected(self):
+        self.assertEqual(
+            self.client.post("/api/attachments", {}, format="multipart").status_code, 400)
+        empty = SimpleUploadedFile("empty.txt", b"", content_type="text/plain")
+        self.assertEqual(
+            self.client.post(
+                "/api/attachments", {"file": empty}, format="multipart").status_code,
+            400,
+        )
+
+    def test_upload_requires_authentication(self):
+        self.client.force_authenticate(None)
+        upload = SimpleUploadedFile("a.png", self._png_bytes(), content_type="image/png")
+        resp = self.client.post("/api/attachments", {"file": upload}, format="multipart")
+        self.assertEqual(resp.status_code, 401)
+
+
+class EmojiKeyTests(TestCase):
+    """Реакцией может быть только эмодзи — иначе счётчик реакций
+    превращается во второй чат из произвольных строк."""
+
+    def test_plain_emoji_accepted(self):
+        for key in ("🔥", "👍", "❤️", "🎉"):
+            self.assertEqual(emoji_keys.normalize(key), key)
+
+    def test_composite_emoji_accepted(self):
+        # Составные последовательности: семья через ZWJ и клавишная кнопка.
+        self.assertEqual(emoji_keys.normalize("👨‍👩‍👧"), "👨‍👩‍👧")
+        self.assertEqual(emoji_keys.normalize("1️⃣"), "1️⃣")
+
+    def test_text_rejected(self):
+        for key in ("ХАХАХА", "lol", "привет мир", "12345", "", "   "):
+            self.assertIsNone(emoji_keys.normalize(key))
+
+    def test_emoji_with_text_rejected(self):
+        # Символ эмодзи внутри есть, но это всё равно фраза, а не реакция.
+        self.assertIsNone(emoji_keys.normalize("огонь🔥"))
+        self.assertIsNone(emoji_keys.normalize("🔥 круто"))
+
+    def test_overlong_and_wrong_types_rejected(self):
+        self.assertIsNone(emoji_keys.normalize("🔥" * 40))
+        self.assertIsNone(emoji_keys.normalize(None))
+        self.assertIsNone(emoji_keys.normalize(42))
+
+    def test_custom_emoji_key_rejected_while_feature_absent(self):
+        # PLACEHOLDER-ветка: модели кастомных эмодзи ещё нет, поэтому ссылки
+        # на них не принимаются — иначе копились бы реакции, которые нечем
+        # отрисовать (см. chat/emoji.py).
+        self.assertIsNone(emoji_keys.normalize("custom:42"))
+
+    def test_every_emoji_offered_by_the_picker_is_accepted(self):
+        """Каждый эмодзи из каталога фронта должен проходить валидацию здесь.
+
+        Проверка через границу языков нужна потому, что расхождение тут
+        абсолютно немое: пикер показывает символ, человек по нему кликает,
+        сервер молча отклоняет ключ — и реакция просто не появляется, без
+        единого сообщения об ошибке. Поймать это иначе можно только руками,
+        перещёлкав все несколько сотен эмодзи.
+        """
+        catalog = (
+            Path(settings.BASE_DIR).parent / "web" / "src" / "emoji.ts"
+        ).read_text(encoding="utf-8")
+        # Записи каталога имеют вид  e('😀', 'улыбка', ...)  — берём первый
+        # аргумент, сам символ.
+        chars = re.findall(r"^\s*e\('([^']+)'", catalog, re.MULTILINE)
+        self.assertGreater(len(chars), 200, "каталог эмодзи не разобрался")
+
+        rejected = [char for char in chars if emoji_keys.normalize(char) is None]
+        self.assertEqual(rejected, [], f"пикер предлагает {len(rejected)} эмодзи, "
+                                       "которые сервер не примет как реакцию")
+
+    def test_quick_reactions_are_accepted(self):
+        """Быстрые реакции из ховер-меню — тот же список, отдельной строкой:
+        по ним кликают чаще всего."""
+        catalog = (
+            Path(settings.BASE_DIR).parent / "web" / "src" / "emoji.ts"
+        ).read_text(encoding="utf-8")
+        block = re.search(
+            r"QUICK_REACTIONS = \[(.*?)\]", catalog, re.DOTALL).group(1)
+        chars = re.findall(r"'([^']+)'", block)
+        self.assertTrue(chars)
+        for char in chars:
+            self.assertIsNotNone(
+                emoji_keys.normalize(char), f"быстрая реакция {char} отклоняется")
+
+
+class ReactionAndDeliveryTests(TransactionTestCase):
+    """Реакции, привязка вложений к сообщению и подтверждение доставки —
+    всё через gateway, ровно так, как это делает настоящий клиент."""
+
+    def setUp(self):
+        presence._r.flushdb()
+        self.owner = User.objects.create_user(username="rx_owner", password="pw12345")
+        self.member = User.objects.create_user(username="rx_member", password="pw12345")
+        self.outsider = User.objects.create_user(username="rx_out", password="pw12345")
+        self.server = Server.objects.create(name="s", owner=self.owner)
+        for u in (self.owner, self.member):
+            Membership.objects.create(user=u, server=self.server)
+        self.channel = Channel.objects.create(
+            server=self.server, name="general", kind=Channel.TEXT, position=0)
+
+    def tearDown(self):
+        presence._r.flushdb()
+
+    async def _connect(self, user):
+        token = str(AccessToken.for_user(user))
+        comm = WebsocketCommunicator(
+            JWTAuthMiddleware(GatewayConsumer.as_asgi()),
+            f"/ws/gateway?token={token}")
+        connected, _ = await comm.connect()
+        self.assertTrue(connected)
+        return comm
+
+    @staticmethod
+    async def _receive_until(comm, op, timeout=2, max_messages=10):
+        for _ in range(max_messages):
+            msg = await comm.receive_json_from(timeout=timeout)
+            if msg.get("op") == op:
+                return msg
+        raise AssertionError(f"op={op!r} не пришёл за {max_messages} сообщений")
+
+    async def _send(self, comm, content, **extra):
+        await comm.send_json_to({
+            "op": "send_message", "channel_id": self.channel.id,
+            "content": content, **extra,
+        })
+        return await self._receive_until(comm, "message_create")
+
+    # --- подтверждение доставки ---
+    async def test_nonce_is_echoed_back_for_delivery_confirmation(self):
+        ws = await self._connect(self.member)
+        echo = await self._send(ws, "привет", nonce="n-1")
+        self.assertEqual(echo["nonce"], "n-1")
+        await ws.disconnect()
+
+    async def test_retry_with_same_nonce_does_not_duplicate_message(self):
+        """Ретрай — это повтор ТОЙ ЖЕ попытки: клиент не дождался эха и
+        отправил снова. Без дедупликации по nonce в канале появлялось бы по
+        два одинаковых сообщения на каждый мигнувший коннект."""
+        ws = await self._connect(self.member)
+        await self._send(ws, "дубль?", nonce="n-dup")
+
+        await ws.send_json_to({
+            "op": "send_message", "channel_id": self.channel.id,
+            "content": "дубль?", "nonce": "n-dup",
+        })
+        ack = await self._receive_until(ws, "message_ack")
+        self.assertEqual(ack["nonce"], "n-dup")
+
+        count = await sync_to_async(
+            Message.objects.filter(channel=self.channel).count)()
+        self.assertEqual(count, 1)
+        await ws.disconnect()
+
+    async def test_send_without_access_is_nacked(self):
+        """Раньше неудачная отправка молча ничего не делала, и сообщение
+        навсегда висело бы в статусе «отправляется»."""
+        ws = await self._connect(self.outsider)
+        await ws.send_json_to({
+            "op": "send_message", "channel_id": self.channel.id,
+            "content": "меня тут нет", "nonce": "n-deny",
+        })
+        nack = await self._receive_until(ws, "message_nack")
+        self.assertEqual(nack["nonce"], "n-deny")
+        await ws.disconnect()
+
+    async def test_empty_message_without_attachments_is_nacked(self):
+        ws = await self._connect(self.member)
+        await ws.send_json_to({
+            "op": "send_message", "channel_id": self.channel.id,
+            "content": "   ", "nonce": "n-empty",
+        })
+        nack = await self._receive_until(ws, "message_nack")
+        self.assertEqual(nack["nonce"], "n-empty")
+        await ws.disconnect()
+
+    # --- вложения ---
+    @database_sync_to_async
+    def _make_attachment(self, user):
+        buffer = io.BytesIO()
+        PILImage.new("RGB", (2, 2), "blue").save(buffer, format="PNG")
+        payload = buffer.getvalue()
+        attachment = Attachment(
+            uploaded_by=user, original_name="pic.png",
+            content_type="image/png", size=len(payload), width=2, height=2)
+        attachment.file.save(
+            "pic.png", SimpleUploadedFile("pic.png", payload), save=False)
+        attachment.save()
+        return attachment
+
+    async def test_attachment_is_bound_to_message(self):
+        attachment = await self._make_attachment(self.member)
+        ws = await self._connect(self.member)
+        echo = await self._send(ws, "", attachment_ids=[str(attachment.id)])
+        self.assertEqual(len(echo["message"]["attachments"]), 1)
+        self.assertEqual(echo["message"]["attachments"][0]["original_name"], "pic.png")
+        await ws.disconnect()
+
+    async def test_message_with_only_attachment_is_allowed(self):
+        """Картинка без подписи — нормальное сообщение; проверка «пусто»
+        должна смотреть и на текст, и на вложения."""
+        attachment = await self._make_attachment(self.member)
+        ws = await self._connect(self.member)
+        echo = await self._send(ws, "", attachment_ids=[str(attachment.id)])
+        self.assertEqual(echo["message"]["content"], "")
+        await ws.disconnect()
+
+    async def test_cannot_attach_someone_elses_upload(self):
+        """Иначе чужой файл прикреплялся бы к своему сообщению по одному лишь
+        известному id."""
+        foreign = await self._make_attachment(self.owner)
+        ws = await self._connect(self.member)
+        echo = await self._send(ws, "чужое", attachment_ids=[str(foreign.id)])
+        self.assertEqual(echo["message"]["attachments"], [])
+        await ws.disconnect()
+
+    async def test_attachment_cannot_be_reused_in_second_message(self):
+        """Один файл — одно сообщение: иначе вложение «переезжало» бы из
+        старого сообщения в новое, исчезая из первого."""
+        attachment = await self._make_attachment(self.member)
+        ws = await self._connect(self.member)
+        await self._send(ws, "раз", attachment_ids=[str(attachment.id)], nonce="a1")
+        second = await self._send(
+            ws, "два", attachment_ids=[str(attachment.id)], nonce="a2")
+        self.assertEqual(second["message"]["attachments"], [])
+        await ws.disconnect()
+
+    # --- реакции ---
+    async def test_reaction_add_toggle_and_counter(self):
+        member_ws = await self._connect(self.member)
+        owner_ws = await self._connect(self.owner)
+        sent = await self._send(member_ws, "оцените")
+        await self._receive_until(owner_ws, "message_create")
+        message_id = sent["message"]["id"]
+
+        # Рассылка уходит в группу СЕРВЕРА, то есть и автору действия тоже.
+        # Вычитываем её у обоих сокетов после каждого шага — иначе следующая
+        # проверка достала бы из очереди эхо предыдущего действия и увидела
+        # устаревший счётчик.
+        async def react(sender, op, emoji):
+            await sender.send_json_to({
+                "op": op, "message_id": message_id, "emoji": emoji})
+            mine = await self._receive_until(member_ws, "message_reactions")
+            theirs = await self._receive_until(owner_ws, "message_reactions")
+            self.assertEqual(mine["reactions"], theirs["reactions"])
+            return mine
+
+        seen = await react(member_ws, "add_reaction", "🔥")
+        self.assertEqual(seen["message_id"], message_id)
+        self.assertEqual(seen["reactions"], [
+            {"emoji": "🔥", "count": 1, "user_ids": [self.member.id]}])
+
+        # Второй человек той же реакцией — счётчик растёт, строка остаётся одна.
+        seen = await react(owner_ws, "add_reaction", "🔥")
+        self.assertEqual(len(seen["reactions"]), 1)
+        self.assertEqual(seen["reactions"][0]["count"], 2)
+        self.assertCountEqual(
+            seen["reactions"][0]["user_ids"], [self.member.id, self.owner.id])
+
+        # Снятие своей реакции уменьшает счётчик, чужая остаётся.
+        seen = await react(member_ws, "remove_reaction", "🔥")
+        self.assertEqual(seen["reactions"], [
+            {"emoji": "🔥", "count": 1, "user_ids": [self.owner.id]}])
+
+        await member_ws.disconnect()
+        await owner_ws.disconnect()
+
+    async def test_same_reaction_twice_is_idempotent(self):
+        """Двойной клик или вторая вкладка не должны давать счётчик 2 от
+        одного человека — на уровне БД это закрыто unique-констрейнтом."""
+        ws = await self._connect(self.member)
+        sent = await self._send(ws, "тест")
+        message_id = sent["message"]["id"]
+        for _ in range(2):
+            await ws.send_json_to({
+                "op": "add_reaction", "message_id": message_id, "emoji": "👍"})
+            seen = await self._receive_until(ws, "message_reactions")
+        self.assertEqual(seen["reactions"][0]["count"], 1)
+        await ws.disconnect()
+
+    async def test_one_user_can_place_all_twenty_reactions(self):
+        """Лимит — на число РАЗНЫХ эмодзи у сообщения, а не на человека:
+        один пользователь волен поставить все 20 сам."""
+        ws = await self._connect(self.member)
+        sent = await self._send(ws, "все двадцать")
+        message_id = sent["message"]["id"]
+        pool = ["🔥", "👍", "🎉", "😂", "😮", "😢", "💯", "🚀", "🐱", "🍕",
+                "⚽", "🎮", "🌈", "⭐", "🍀", "🎁", "🏆", "🥁", "🦄", "🐸"]
+        self.assertEqual(len(pool), MAX_REACTIONS_PER_MESSAGE)
+
+        for char in pool:
+            await ws.send_json_to({
+                "op": "add_reaction", "message_id": message_id, "emoji": char})
+            await self._receive_until(ws, "message_reactions")
+
+        count = await sync_to_async(
+            Reaction.objects.filter(
+                message_id=message_id, user=self.member).count)()
+        self.assertEqual(count, MAX_REACTIONS_PER_MESSAGE)
+        await ws.disconnect()
+
+    async def test_reaction_limit_blocks_next_distinct_emoji(self):
+        ws = await self._connect(self.member)
+        sent = await self._send(ws, "лимит")
+        message_id = sent["message"]["id"]
+
+        @database_sync_to_async
+        def fill():
+            pool = ["🔥", "👍", "🎉", "😂", "😮", "😢", "💯", "🚀", "🐱", "🍕",
+                    "⚽", "🎮", "🌈", "⭐", "🍀", "🎁", "🏆", "🥁", "🦄", "🐸"]
+            Reaction.objects.bulk_create([
+                Reaction(message_id=message_id, user=self.owner, emoji=char)
+                for char in pool
+            ])
+
+        await fill()
+        await ws.send_json_to({
+            "op": "add_reaction", "message_id": message_id, "emoji": "🍏"})
+        self.assertTrue(await ws.receive_nothing(timeout=0.3))
+
+        exists = await sync_to_async(
+            Reaction.objects.filter(message_id=message_id, emoji="🍏").exists)()
+        self.assertFalse(exists)
+        await ws.disconnect()
+
+    async def test_existing_reaction_still_joinable_at_limit(self):
+        """Упёршись в 20 разных, присоединиться к УЖЕ стоящей реакции всё ещё
+        можно: ограничение на ширину ленты, а не на число участников."""
+        ws = await self._connect(self.member)
+        sent = await self._send(ws, "лимит, но не для всех")
+        message_id = sent["message"]["id"]
+
+        @database_sync_to_async
+        def fill():
+            pool = ["🔥", "👍", "🎉", "😂", "😮", "😢", "💯", "🚀", "🐱", "🍕",
+                    "⚽", "🎮", "🌈", "⭐", "🍀", "🎁", "🏆", "🥁", "🦄", "🐸"]
+            Reaction.objects.bulk_create([
+                Reaction(message_id=message_id, user=self.owner, emoji=char)
+                for char in pool
+            ])
+
+        await fill()
+        await ws.send_json_to({
+            "op": "add_reaction", "message_id": message_id, "emoji": "🔥"})
+        seen = await self._receive_until(ws, "message_reactions")
+        fire = next(r for r in seen["reactions"] if r["emoji"] == "🔥")
+        self.assertEqual(fire["count"], 2)
+        await ws.disconnect()
+
+    async def test_outsider_cannot_react(self):
+        member_ws = await self._connect(self.member)
+        sent = await self._send(member_ws, "не для чужих")
+        message_id = sent["message"]["id"]
+
+        outsider_ws = await self._connect(self.outsider)
+        await outsider_ws.send_json_to({
+            "op": "add_reaction", "message_id": message_id, "emoji": "🔥"})
+        self.assertTrue(await member_ws.receive_nothing(timeout=0.3))
+
+        exists = await sync_to_async(
+            Reaction.objects.filter(message_id=message_id).exists)()
+        self.assertFalse(exists)
+
+        await member_ws.disconnect()
+        await outsider_ws.disconnect()
+
+    async def test_non_emoji_reaction_rejected(self):
+        ws = await self._connect(self.member)
+        sent = await self._send(ws, "текст вместо эмодзи")
+        message_id = sent["message"]["id"]
+        await ws.send_json_to({
+            "op": "add_reaction", "message_id": message_id, "emoji": "ХАХАХА"})
+        self.assertTrue(await ws.receive_nothing(timeout=0.3))
+        await ws.disconnect()
+
+    async def test_deleting_message_removes_its_reactions(self):
+        ws = await self._connect(self.member)
+        sent = await self._send(ws, "удалю")
+        message_id = sent["message"]["id"]
+        await ws.send_json_to({
+            "op": "add_reaction", "message_id": message_id, "emoji": "🔥"})
+        await self._receive_until(ws, "message_reactions")
+
+        await ws.send_json_to({"op": "delete_message", "message_id": message_id})
+        await self._receive_until(ws, "message_delete")
+
+        left = await sync_to_async(
+            Reaction.objects.filter(message_id=message_id).count)()
+        self.assertEqual(left, 0)
+        await ws.disconnect()

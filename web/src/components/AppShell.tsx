@@ -7,6 +7,9 @@ import {
 import { useAuth } from '../auth'
 import { useGateway } from '../gateway'
 import {
+  outbox, pendingAsMessage, usePendingMessages, OutboxTarget,
+} from '../outbox'
+import {
   playJoinSound,
   playLeaveSound,
   playScreenShareRequestSound,
@@ -19,7 +22,7 @@ import HomeSidebar from './HomeSidebar'
 import NewConversationModal from './NewConversationModal'
 import IncomingCallBanner from './IncomingCallBanner'
 import MessageList from './MessageList'
-import MessageInput, { MessageInputPrefill } from './MessageInput'
+import MessageInput, { MessageInputPrefill, OutgoingMessage } from './MessageInput'
 import MembersList from './MembersList'
 import VoiceProvider, { VoiceStatus } from './VoiceProvider'
 import VoiceStage, { VoiceRosterMember } from './VoiceStage'
@@ -167,6 +170,35 @@ export default function AppShell() {
   const currentServer = servers.find((s) => s.id === serverId) || null
   const channels = currentServer?.channels || []
   const currentChannel = channels.find((c) => c.id === channelId) || null
+
+  // --- очередь исходящих (статусы доставки, ретраи, черновики) -----------
+  // Транспорт ставится отдельно от самой очереди: outbox живёт вне React (его
+  // таймеры ретраев не должны умирать при переключении канала), поэтому
+  // способ «как отправить» ему передаётся снаружи.
+  useEffect(() => {
+    outbox.setTransport((message) => {
+      const opts = {
+        replyTo: message.replyTo,
+        attachmentIds: message.attachments.map((a) => a.id),
+        nonce: message.nonce,
+      }
+      if (message.target.kind === 'channel') {
+        gateway.sendMessage(message.target.id, message.content, opts)
+      } else {
+        gateway.dmSendMessage(message.target.id, message.content, opts)
+      }
+    })
+    return () => outbox.setTransport(null)
+  }, [gateway])
+
+  const channelTarget: OutboxTarget | null =
+    currentChannel?.kind === 'text' ? { kind: 'channel', id: currentChannel.id } : null
+  const conversationTarget: OutboxTarget | null =
+    activeConversationId != null
+      ? { kind: 'conversation', id: activeConversationId }
+      : null
+  const pendingChannelMessages = usePendingMessages(channelTarget)
+  const pendingDmMessages = usePendingMessages(conversationTarget)
   // Модерация чата — по праву роли (владельцу chat/roles.py выдаёт всё).
   const canDeleteMessages = !!currentServer?.my_permissions?.delete_messages
   const activeConversation = conversations.find((c) => c.id === activeConversationId) || null
@@ -292,11 +324,30 @@ export default function AppShell() {
   // Realtime-события gateway.
   useEffect(() => {
     const offMsg = gateway.on('message_create', (d) => {
+      // Эхо собственной отправки: nonce закрывает статус «отправляется» и
+      // убирает оптимистичную копию из очереди — настоящее сообщение
+      // добавляется тут же строкой ниже (см. outbox.ack).
+      if (d.nonce) outbox.ack(d.nonce)
       if (d.message.channel === channelId) {
         setMessages((prev) =>
           prev.some((m) => m.id === d.message.id) ? prev : [...prev, d.message],
         )
       }
+    })
+    // Подтверждение ПОВТОРНОЙ попытки: сообщение создала прошлая, эхо до нас
+    // не дошло. Само сообщение доберётся обычным путём (перечитыванием
+    // истории на "ready"), здесь важно лишь снять статус «отправляется».
+    const offMsgAck = gateway.on('message_ack', (d) => {
+      if (d.nonce) outbox.ack(d.nonce)
+    })
+    const offMsgNack = gateway.on('message_nack', (d) => {
+      if (d.nonce) outbox.nack(d.nonce, d.reason)
+    })
+    const offReactions = gateway.on('message_reactions', (d) => {
+      if (d.channel_id !== channelId) return
+      setMessages((prev) =>
+        prev.map((m) => (m.id === d.message_id ? { ...m, reactions: d.reactions } : m)),
+      )
     })
     const offMsgDelete = gateway.on('message_delete', (d) => {
       if (d.channel_id !== channelId) return
@@ -488,7 +539,14 @@ export default function AppShell() {
     })
 
     // --- домашний экран: диалоги/группы/друзья/звонки ---------------------
+    const offDmReactions = gateway.on('dm_message_reactions', (d) => {
+      if (d.conversation_id !== activeConversationId) return
+      setDmMessages((prev) =>
+        prev.map((m) => (m.id === d.message_id ? { ...m, reactions: d.reactions } : m)),
+      )
+    })
     const offDmMsg = gateway.on('dm_message_create', (d) => {
+      if (d.nonce) outbox.ack(d.nonce)
       if (d.message.conversation === activeConversationId) {
         setDmMessages((prev) =>
           prev.some((m) => m.id === d.message.id) ? prev : [...prev, d.message],
@@ -616,6 +674,10 @@ export default function AppShell() {
     // раньше не добирал никогда: они не появлялись до переключения канала.
     // Курсор after=<последний известный id> закрывает ровно этот разрыв.
     const offReady = gateway.on('ready', () => {
+      // Сокет снова жив — немедленно повторяем всё, что висит неотправленным,
+      // не дожидаясь их собственных таймеров ретрая. Дубля не будет: сервер
+      // узнаёт попытку по nonce (см. chat/consumers.py).
+      outbox.flush()
       void (async () => {
         const lastMessage = messagesRef.current[messagesRef.current.length - 1]
         if (channelId != null && lastMessage) {
@@ -694,6 +756,10 @@ export default function AppShell() {
 
     return () => {
       offMsg()
+      offMsgAck()
+      offMsgNack()
+      offReactions()
+      offDmReactions()
       offMsgDelete()
       offMsgUpdate()
       offPresence()
@@ -851,11 +917,37 @@ export default function AppShell() {
     )
   }
 
-  const handleSend = (content: string) => {
+  // Отправка идёт не напрямую в сокет, а через очередь: та рисует сообщение
+  // сразу, ждёт подтверждения, при молчании повторяет, а окончательно
+  // провалившееся кладёт в черновики (см. outbox.ts).
+  const handleSend = (message: OutgoingMessage) => {
     if (channelId == null) return
-    gateway.sendMessage(channelId, content, replyTarget?.id ?? null)
+    outbox.enqueue({
+      target: { kind: 'channel', id: channelId },
+      content: message.content,
+      replyTo: replyTarget?.id ?? null,
+      attachments: message.attachments,
+    })
     setReplyTarget(null)
   }
+
+  // Реакции переключаются по факту «стоит ли она уже у меня» — его считает
+  // MessageList из user_ids, отдельно этот флаг нигде не хранится.
+  const handleToggleReaction = useCallback(
+    (messageId: number, emoji: string, mine: boolean) => {
+      if (mine) gateway.removeReaction(messageId, emoji)
+      else gateway.addReaction(messageId, emoji)
+    },
+    [gateway],
+  )
+
+  const handleToggleDmReaction = useCallback(
+    (messageId: number, emoji: string, mine: boolean) => {
+      if (mine) gateway.dmRemoveReaction(messageId, emoji)
+      else gateway.dmAddReaction(messageId, emoji)
+    },
+    [gateway],
+  )
 
   const handleDeleteMessage = (messageId: number) => {
     gateway.deleteMessage(messageId)
@@ -970,9 +1062,14 @@ export default function AppShell() {
     }
   }
 
-  const handleSendDm = (content: string) => {
+  const handleSendDm = (message: OutgoingMessage) => {
     if (activeConversationId == null) return
-    gateway.dmSendMessage(activeConversationId, content, dmReplyTarget?.id ?? null)
+    outbox.enqueue({
+      target: { kind: 'conversation', id: activeConversationId },
+      content: message.content,
+      replyTo: dmReplyTarget?.id ?? null,
+      attachments: message.attachments,
+    })
     setDmReplyTarget(null)
   }
 
@@ -1126,7 +1223,12 @@ export default function AppShell() {
       setConversations((prev) => (prev.some((c) => c.id === conv.id) ? prev : [conv, ...prev]))
       setServerId(null)
       setActiveConversationId(conv.id)
-      gateway.dmSendMessage(conv.id, content)
+      // Через ту же очередь, что и обычная отправка: сообщение из мини-профиля
+      // ничем не отличается и должно так же ретраиться и попадать в черновики.
+      outbox.enqueue({
+        target: { kind: 'conversation', id: conv.id },
+        content,
+      })
       setProfilePopup(null)
     } catch (e) {
       alert('Не удалось отправить сообщение: ' + (e as Error).message)
@@ -1378,7 +1480,12 @@ export default function AppShell() {
                 </div>
               )}
               <MessageList
-                messages={dmMessages}
+                // Неотправленные дописываются в конец ленты: у них ещё нет id
+                // на сервере, но человек должен видеть, что он написал.
+                messages={[
+                  ...dmMessages,
+                  ...pendingDmMessages.map((p) => pendingAsMessage(p, user!)),
+                ]}
                 currentUserId={user!.id}
                 canModerate={false}
                 editingId={dmEditTarget?.id ?? null}
@@ -1386,6 +1493,9 @@ export default function AppShell() {
                 onEditRequest={handleDmEditRequest}
                 onReply={handleDmReplyRequest}
                 onOpenProfile={openProfilePopup}
+                onToggleReaction={handleToggleDmReaction}
+                onRetry={(nonce) => outbox.retry(nonce)}
+                onDiscard={(nonce) => outbox.discard(nonce)}
               />
               <MessageInput
                 channelName={conversationDisplayName(activeConversation)}
@@ -1428,7 +1538,10 @@ export default function AppShell() {
               <span className="chat-header-name">{currentChannel.name}</span>
             </header>
             <MessageList
-              messages={messages}
+              messages={[
+                ...messages,
+                ...pendingChannelMessages.map((p) => pendingAsMessage(p, user!)),
+              ]}
               currentUserId={user!.id}
               canModerate={canDeleteMessages}
               editingId={editTarget?.id ?? null}
@@ -1436,6 +1549,9 @@ export default function AppShell() {
               onEditRequest={handleEditRequest}
               onReply={handleReplyRequest}
               onOpenProfile={openProfilePopup}
+              onToggleReaction={handleToggleReaction}
+              onRetry={(nonce) => outbox.retry(nonce)}
+              onDiscard={(nonce) => outbox.discard(nonce)}
             />
             <MessageInput
               channelName={currentChannel.name}

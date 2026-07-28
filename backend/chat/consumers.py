@@ -6,9 +6,12 @@ GatewayConsumer — единственный WebSocket на клиента (по
     ws://host/ws/gateway?token=<access>
 
 Операции клиент -> сервер (JSON, поле "op"):
-    {"op": "send_message", "channel_id": <id>, "content": "...", "reply_to": <id|null>}
+    {"op": "send_message", "channel_id": <id>, "content": "...", "reply_to": <id|null>,
+     "attachment_ids": ["<uuid>", ...], "nonce": "<строка клиента>"}
     {"op": "delete_message", "message_id": <id>}
     {"op": "edit_message", "message_id": <id>, "content": "..."}
+    {"op": "add_reaction", "message_id": <id>, "emoji": "🔥"}
+    {"op": "remove_reaction", "message_id": <id>, "emoji": "🔥"}
     {"op": "voice_join",   "channel_id": <id>}
     {"op": "voice_leave"}
     {"op": "voice_mute_update", "muted": bool, "deafened": bool}
@@ -29,9 +32,12 @@ GatewayConsumer — единственный WebSocket на клиента (по
     {"op": "set_status", "status": "online" | "dnd" | "invisible"}
     {"op": "ping"}  — хартбит, см. presence.heartbeat/chat.heartbeat_sweep
 
-    {"op": "dm_send_message", "conversation_id": <id>, "content": "...", "reply_to": <id|null>}
+    {"op": "dm_send_message", "conversation_id": <id>, "content": "...", "reply_to": <id|null>,
+     "attachment_ids": ["<uuid>", ...], "nonce": "<строка клиента>"}
     {"op": "dm_delete_message", "message_id": <id>}
     {"op": "dm_edit_message", "message_id": <id>, "content": "..."}
+    {"op": "dm_add_reaction", "message_id": <id>, "emoji": "🔥"}
+    {"op": "dm_remove_reaction", "message_id": <id>, "emoji": "🔥"}
     {"op": "dm_voice_join", "conversation_id": <id>}
     (voice_leave/voice_mute_update/voice_screen_share_update — те же клиентские
      op'ы, что и для голосовых каналов серверов: presence не различает
@@ -40,9 +46,17 @@ GatewayConsumer — единственный WebSocket на клиента (по
 
 События сервер -> клиент:
     {"op": "ready", "user": {...}}
-    {"op": "message_create", "message": {...}}
+    {"op": "message_create", "message": {...}, "nonce": "<строка клиента>"|null}
     {"op": "message_update", "message": {...}}
     {"op": "message_delete", "message_id": <id>, "channel_id": <id>}
+    {"op": "message_nack", "nonce": "<строка клиента>", "reason": "..."}
+    {"op": "message_ack", "nonce": "<строка клиента>", "message_id": <id>} —
+     только на ПОВТОРНУЮ попытку с уже известным nonce: сообщение создано
+     прошлой попыткой, второе создавать нельзя, а клиенту нужно закрыть
+     статус «отправляется». Обычная (первая) отправка подтверждается самим
+     message_create с тем же nonce, отдельного ack не шлётся.
+    {"op": "message_reactions", "message_id": <id>, "channel_id": <id>,
+     "reactions": [{"emoji": "🔥", "count": <int>, "user_ids": [<id>, ...]}, ...]}
     {"op": "presence_update", "user_id": <id>, "online": bool, "status": "online"|"dnd"|"offline"}
     {"op": "voice_state_update", "user_id": <id>, "channel_id": <id|null>}
     {"op": "voice_peers", "channel_id": <id>, "peer_ids": [<id>, ...],
@@ -74,9 +88,11 @@ GatewayConsumer — единственный WebSocket на клиента (по
     {"op": "profile_update", "user_id": <id>, "username": "...",
      "avatar_color": "#RRGGBB", "avatar_image": "data:image/...;base64,..."|""}
 
-    {"op": "dm_message_create", "message": {...}}
+    {"op": "dm_message_create", "message": {...}, "nonce": "<строка клиента>"|null}
     {"op": "dm_message_update", "message": {...}}
     {"op": "dm_message_delete", "message_id": <id>, "conversation_id": <id>}
+    {"op": "dm_message_reactions", "message_id": <id>, "conversation_id": <id>,
+     "reactions": [...]}  — та же форма, что и message_reactions
     {"op": "dm_voice_state_update", "user_id": <id>, "conversation_id": <id>, "in_call": bool}
     {"op": "dm_voice_peers", "conversation_id": <id>, "peer_ids": [<id>, ...],
      "peer_flags": {...}}
@@ -129,6 +145,37 @@ voice_call_state — момент начала текущего разговор
 может только тот, кто сейчас сам в этом канале (voice_topic_update без
 target-канала — сервер сам берёт канал из presence отправителя).
 
+nonce — идентификатор ПОПЫТКИ отправки, придуманный клиентом. Он едет
+обратно в message_create/dm_message_create и в message_nack, и решает две
+задачи разом:
+
+  * статус доставки. Клиент рисует своё сообщение сразу («отправляется») и
+    ждёт эхо со своим nonce — только оно означает «доставлено». Без этого
+    единственным подтверждением был бы факт, что ws.send() не бросил
+    исключение, а он не значит ничего: сокет мог оборваться в тот же миг.
+  * дедупликация при ретрае. Клиент переотправляет сообщение, не получив
+    эха (см. web/src/outbox.ts), и без nonce повтор создавал бы второе
+    сообщение — сервер узнаёт попытку по nonce и отдаёт уже созданное,
+    ничего не дублируя.
+
+Сам nonce нигде не хранится дольше окна дедупликации (см. _recent_nonces) —
+это не идентификатор сообщения, а метка попытки.
+
+attachment_ids — id уже ЗАГРУЖЕННЫХ файлов (POST /api/attachments, см.
+chat.views.AttachmentUpload). По WebSocket едут только id: сокет у клиента
+один, и через него же идут presence и голосовая мета — 25 МБ в одном фрейме
+блокировали бы их все. Привязать можно только собственную загрузку, ещё не
+привязанную ни к какому сообщению (chat.consumers._bind_attachments).
+
+add_reaction/remove_reaction — поставить/снять свою реакцию. Ставить может
+любой, кто ВИДИТ сообщение (для канала — участник сервера с view_channels,
+для лички — участник беседы); отдельного права под это нет. Разных эмодзи на
+одном сообщении не больше MAX_REACTIONS_PER_MESSAGE; ограничение на
+сообщение, а не на человека — один пользователь волен поставить все 20 сам.
+В ответ рассылается message_reactions с ПОЛНЫМ актуальным набором реакций
+этого сообщения, а не дельтой: набор маленький, а дельты пришлось бы
+применять по порядку, который в распределённой рассылке не гарантирован.
+
 delete_message — удалить сообщение может автор ИЛИ владелец сервера (админ).
 edit_message — редактировать может ТОЛЬКО автор, даже владелец сервера не
 может править чужие сообщения (может только удалить).
@@ -151,12 +198,24 @@ from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
 from django.utils import timezone
 
-from . import mute_vote, presence, roles
+from django.db import transaction
+
+from . import emoji as emoji_keys, mute_vote, presence, roles
 from .models import (
-    Channel, ConversationMessage, ConversationParticipant,
-    Membership, Message, dm_conversation_id, dm_room, is_dm_room,
+    Attachment, Channel, ConversationMessage, ConversationParticipant,
+    MAX_ATTACHMENTS_PER_MESSAGE, MAX_REACTIONS_PER_MESSAGE, Membership,
+    Message, Reaction, dm_conversation_id, dm_room, is_dm_room,
 )
-from .serializers import ConversationMessageSerializer, MessageSerializer
+from .serializers import (
+    ConversationMessageSerializer, MessageSerializer, reactions_payload,
+)
+
+# Сколько недавних nonce'ов помнит соединение, чтобы узнать повторную попытку
+# отправки (см. докстринг модуля). Ретрай приходит секунды спустя и почти
+# всегда следующим же сообщением, так что глубина нужна символическая — но не
+# единица: между исходной попыткой и её ретраем клиент мог успеть отправить
+# что-то ещё.
+NONCE_MEMORY = 50
 
 
 class GatewayConsumer(AsyncWebsocketConsumer):
@@ -188,6 +247,13 @@ class GatewayConsumer(AsyncWebsocketConsumer):
         query = parse_qs(self.scope.get("query_string", b"").decode())
         device_id = (query.get("device_id") or [None])[0]
         self.connection_id = device_id or uuid.uuid4().hex
+
+        # nonce уже отправленных сообщений -> id созданного сообщения. Нужен,
+        # чтобы ретрай (клиент не дождался эха и отправил повторно) не создал
+        # второе сообщение — см. докстринг модуля. Живёт в памяти соединения:
+        # ретрай приходит по тому же сокету секунды спустя, а после разрыва
+        # клиент и так перечитывает историю по REST (см. AppShell, "ready").
+        self._recent_nonces: dict[str, int] = {}
 
         await self.accept()
 
@@ -256,6 +322,14 @@ class GatewayConsumer(AsyncWebsocketConsumer):
             await self._handle_delete_message(data)
         elif op == "edit_message":
             await self._handle_edit_message(data)
+        elif op == "add_reaction":
+            await self._handle_reaction(data, add=True, dm=False)
+        elif op == "remove_reaction":
+            await self._handle_reaction(data, add=False, dm=False)
+        elif op == "dm_add_reaction":
+            await self._handle_reaction(data, add=True, dm=True)
+        elif op == "dm_remove_reaction":
+            await self._handle_reaction(data, add=False, dm=True)
         elif op == "voice_join":
             await self._handle_voice_join(data)
         elif op == "voice_leave":
@@ -297,19 +371,80 @@ class GatewayConsumer(AsyncWebsocketConsumer):
                 await self._broadcast_presence(True)
 
     # --- операции -----------------------------------------------------------
+    def _read_nonce(self, data):
+        """nonce как его прислал клиент — строка ограниченной длины или None.
+
+        Тип проверяем: значение уходит ключом в словарь и обратно в JSON, и
+        принимать сюда что угодно (список, объект) незачем.
+        """
+        nonce = data.get("nonce")
+        if not isinstance(nonce, str) or not nonce:
+            return None
+        return nonce[:64]
+
+    def _read_attachment_ids(self, data):
+        raw = data.get("attachment_ids")
+        if not isinstance(raw, list):
+            return []
+        return [str(item) for item in raw[:MAX_ATTACHMENTS_PER_MESSAGE]]
+
+    def _remember_nonce(self, nonce, message_id):
+        if not nonce:
+            return
+        self._recent_nonces[nonce] = message_id
+        while len(self._recent_nonces) > NONCE_MEMORY:
+            # dict в Python помнит порядок вставки — самый старый идёт первым.
+            self._recent_nonces.pop(next(iter(self._recent_nonces)))
+
+    async def _nack(self, nonce, reason):
+        """Сказать отправителю, что сообщение НЕ создано.
+
+        Без этого клиенту оставалось бы только ждать таймаута: раньше любая
+        неудачная отправка (нет прав, канала не существует) молча ничего не
+        делала, и сообщение навсегда зависало в состоянии «отправляется».
+        """
+        if not nonce:
+            return
+        await self._send({"op": "message_nack", "nonce": nonce, "reason": reason})
+
     async def _handle_send(self, data):
         channel_id = data.get("channel_id")
         content = (data.get("content") or "").strip()
-        if not channel_id or not content:
+        attachment_ids = self._read_attachment_ids(data)
+        nonce = self._read_nonce(data)
+        if not channel_id:
+            await self._nack(nonce, "Канал не указан.")
+            return
+        # Пустое сообщение без вложений отправлять нечего, но сообщение из
+        # одних вложений — нормально (см. Message.content).
+        if not content and not attachment_ids:
+            await self._nack(nonce, "Пустое сообщение.")
+            return
+        if nonce and nonce in self._recent_nonces:
+            # Ретрай уже доставленного: сообщение создано, эхо просто не
+            # дошло. Повторяем ответ, ничего не создавая заново.
+            await self._send({
+                "op": "message_ack",
+                "nonce": nonce,
+                "message_id": self._recent_nonces[nonce],
+            })
             return
         result = await self._create_message(
-            channel_id, content[:4000], data.get("reply_to"))
+            channel_id, content[:4000], data.get("reply_to"), attachment_ids)
         if not result:
+            await self._nack(nonce, "Нет доступа к каналу.")
             return
+        self._remember_nonce(nonce, result["data"]["id"])
         await self.channel_layer.group_send(
             f"server_{result['server_id']}",
             {"type": "broadcast", "payload": {
-                "op": "message_create", "message": result["data"]}},
+                "op": "message_create", "message": result["data"],
+                # nonce уходит всем, но нужен только автору — остальные его
+                # игнорируют (см. web/src/outbox.ts). Отдельным личным
+                # событием его слать нельзя: тогда автор получал бы «создано»
+                # и «доставлено» двумя гонящимися сообщениями.
+                "nonce": nonce,
+            }},
         )
 
     async def _handle_delete_message(self, data):
@@ -343,18 +478,34 @@ class GatewayConsumer(AsyncWebsocketConsumer):
         )
 
     async def _handle_dm_send(self, data):
+        """Полный аналог _handle_send для лички/группы — см. комментарии там."""
         conversation_id = data.get("conversation_id")
         content = (data.get("content") or "").strip()
-        if not conversation_id or not content:
+        attachment_ids = self._read_attachment_ids(data)
+        nonce = self._read_nonce(data)
+        if not conversation_id:
+            await self._nack(nonce, "Диалог не указан.")
+            return
+        if not content and not attachment_ids:
+            await self._nack(nonce, "Пустое сообщение.")
+            return
+        if nonce and nonce in self._recent_nonces:
+            await self._send({
+                "op": "message_ack",
+                "nonce": nonce,
+                "message_id": self._recent_nonces[nonce],
+            })
             return
         result = await self._create_dm_message(
-            conversation_id, content[:4000], data.get("reply_to"))
+            conversation_id, content[:4000], data.get("reply_to"), attachment_ids)
         if not result:
+            await self._nack(nonce, "Нет доступа к диалогу.")
             return
+        self._remember_nonce(nonce, result["id"])
         await self.channel_layer.group_send(
             f"conversation_{conversation_id}",
             {"type": "broadcast", "payload": {
-                "op": "dm_message_create", "message": result}},
+                "op": "dm_message_create", "message": result, "nonce": nonce}},
         )
 
     async def _handle_dm_delete_message(self, data):
@@ -386,6 +537,40 @@ class GatewayConsumer(AsyncWebsocketConsumer):
             {"type": "broadcast", "payload": {
                 "op": "dm_message_update", "message": result["data"]}},
         )
+
+    async def _handle_reaction(self, data, add: bool, dm: bool):
+        """Поставить/снять свою реакцию — общий обработчик для четырёх оп'ов.
+
+        Канал и личка отличаются только тем, куда смотрит FK и куда уходит
+        рассылка; вся остальная механика (валидация ключа, лимит разных
+        эмодзи, идемпотентность) у них общая, поэтому ветвление точечное, а
+        не двумя копиями метода.
+        """
+        message_id = data.get("message_id")
+        emoji = emoji_keys.normalize(data.get("emoji"))
+        if not message_id or not emoji:
+            return
+        result = await self._toggle_reaction(message_id, emoji, add, dm)
+        if not result:
+            return
+        if dm:
+            await self.channel_layer.group_send(
+                f"conversation_{result['conversation_id']}",
+                {"type": "broadcast", "payload": {
+                    "op": "dm_message_reactions",
+                    "message_id": message_id,
+                    "conversation_id": result["conversation_id"],
+                    "reactions": result["reactions"],
+                }})
+            return
+        await self.channel_layer.group_send(
+            f"server_{result['server_id']}",
+            {"type": "broadcast", "payload": {
+                "op": "message_reactions",
+                "message_id": message_id,
+                "channel_id": result["channel_id"],
+                "reactions": result["reactions"],
+            }})
 
     async def _kick_other_devices(self):
         """Один аккаунт — один голосовой звонок одновременно, будь то канал
@@ -837,8 +1022,38 @@ class GatewayConsumer(AsyncWebsocketConsumer):
                 "server_id", flat=True)
         )
 
+    def _bind_attachments(self, attachment_ids, **owner):
+        """Привязать ранее загруженные файлы к только что созданному сообщению.
+
+        Забрать можно только СВОЮ загрузку, ещё не привязанную ни к какому
+        сообщению: без первого условия чужой файл прикреплялся бы к своему
+        сообщению по одному лишь известному id, без второго — один и тот же
+        файл переезжал бы из старого сообщения в новое (и исчезал из старого).
+
+        select_for_update держит строки до конца транзакции: две параллельные
+        отправки с одним id иначе обе прошли бы фильтр и вторая перетёрла бы
+        привязку первой. Вызывается только внутри transaction.atomic().
+        """
+        if not attachment_ids:
+            return
+        owned = list(
+            Attachment.objects.select_for_update().filter(
+                id__in=attachment_ids,
+                uploaded_by=self.user,
+                message__isnull=True,
+                conversation_message__isnull=True,
+            )
+        )
+        if not owned:
+            return
+        for attachment in owned:
+            for field, value in owner.items():
+                setattr(attachment, field, value)
+        Attachment.objects.bulk_update(owned, list(owner))
+
     @database_sync_to_async
-    def _create_message(self, channel_id, content, reply_to_id=None):
+    def _create_message(self, channel_id, content, reply_to_id=None,
+                        attachment_ids=None):
         try:
             channel = Channel.objects.select_related("server").get(id=channel_id)
         except Channel.DoesNotExist:
@@ -856,8 +1071,18 @@ class GatewayConsumer(AsyncWebsocketConsumer):
             # иначе можно было бы подсунуть id из чужого канала.
             reply_to = Message.objects.filter(
                 id=reply_to_id, channel_id=channel_id).first()
-        msg = Message.objects.create(
-            channel=channel, author=self.user, content=content, reply_to=reply_to)
+        # Транзакция: сообщение и его вложения должны появиться вместе. Иначе
+        # при сбое между ними в канал уезжало бы пустое сообщение без файлов,
+        # ради которых его и отправляли.
+        with transaction.atomic():
+            msg = Message.objects.create(
+                channel=channel, author=self.user, content=content,
+                reply_to=reply_to)
+            self._bind_attachments(attachment_ids, message=msg)
+        # Сериализация уже ПОСЛЕ коммита: msg.attachments — обратная связь без
+        # prefetch, то есть отдельный запрос в момент обращения, и внутри
+        # транзакции он бы отработал так же. Но так payload гарантированно
+        # описывает то, что реально лежит в БД к моменту рассылки.
         return {"server_id": channel.server_id, "data": MessageSerializer(msg).data}
 
     @database_sync_to_async
@@ -957,7 +1182,8 @@ class GatewayConsumer(AsyncWebsocketConsumer):
         )
 
     @database_sync_to_async
-    def _create_dm_message(self, conversation_id, content, reply_to_id=None):
+    def _create_dm_message(self, conversation_id, content, reply_to_id=None,
+                           attachment_ids=None):
         if not ConversationParticipant.objects.filter(
             user=self.user, conversation_id=conversation_id
         ).exists():
@@ -967,10 +1193,70 @@ class GatewayConsumer(AsyncWebsocketConsumer):
             # Только сообщение из ЭТОГО ЖЕ диалога — как и в _create_message.
             reply_to = ConversationMessage.objects.filter(
                 id=reply_to_id, conversation_id=conversation_id).first()
-        msg = ConversationMessage.objects.create(
-            conversation_id=conversation_id, author=self.user,
-            content=content, reply_to=reply_to)
+        with transaction.atomic():
+            msg = ConversationMessage.objects.create(
+                conversation_id=conversation_id, author=self.user,
+                content=content, reply_to=reply_to)
+            self._bind_attachments(attachment_ids, conversation_message=msg)
         return ConversationMessageSerializer(msg).data
+
+    @database_sync_to_async
+    def _toggle_reaction(self, message_id, emoji, add: bool, dm: bool):
+        """Поставить/снять реакцию. None — операция не состоялась (нет
+        сообщения, нет доступа, упёрлись в лимит) и рассылать нечего.
+
+        Идемпотентна: повторное «поставить» уже стоящую реакцию (двойной клик,
+        две вкладки) не ошибка — get_or_create просто ничего не меняет, и
+        актуальный набор всё равно уезжает всем, приводя клиентов к общему
+        состоянию.
+        """
+        if dm:
+            msg = ConversationMessage.objects.filter(id=message_id).first()
+            if msg is None:
+                return None
+            # Реакцию может ставить любой участник беседы — как и читать её.
+            if not ConversationParticipant.objects.filter(
+                user=self.user, conversation_id=msg.conversation_id
+            ).exists():
+                return None
+            owner = {"conversation_message": msg}
+        else:
+            msg = Message.objects.select_related("channel__server").filter(
+                id=message_id).first()
+            if msg is None:
+                return None
+            server = msg.channel.server
+            if not Membership.objects.filter(
+                user=self.user, server=server
+            ).exists():
+                return None
+            # Право ровно то же, что нужно, чтобы сообщение вообще видеть.
+            # Отдельного «можно ставить реакции» нет: реакция — это чтение с
+            # обратной связью, а не сообщение (send_messages не требуется).
+            if not roles.permissions_for(self.user, server).get("view_channels"):
+                return None
+            owner = {"message": msg}
+
+        if add:
+            # Лимит считаем по РАЗНЫМ эмодзи и только когда добавляется новый:
+            # 21-й человек, ставящий уже существующую реакцию, ни во что не
+            # упирается — ограничение на ширину ленты, а не на число людей.
+            existing = set(
+                Reaction.objects.filter(**owner).values_list("emoji", flat=True))
+            if emoji not in existing and len(existing) >= MAX_REACTIONS_PER_MESSAGE:
+                return None
+            Reaction.objects.get_or_create(user=self.user, emoji=emoji, **owner)
+        else:
+            Reaction.objects.filter(user=self.user, emoji=emoji, **owner).delete()
+
+        payload = {"reactions": reactions_payload(
+            Reaction.objects.filter(**owner).order_by("created_at", "id"))}
+        if dm:
+            payload["conversation_id"] = msg.conversation_id
+        else:
+            payload["channel_id"] = msg.channel_id
+            payload["server_id"] = msg.channel.server_id
+        return payload
 
     @database_sync_to_async
     def _delete_dm_message(self, message_id):
