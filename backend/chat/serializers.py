@@ -7,8 +7,8 @@ from accounts.serializers import (
 
 from . import presence, roles
 from .models import (
-    Attachment, Channel, Conversation, ConversationMessage, Message, Role,
-    Server, ServerBan, ServerJoinRequest, dm_room,
+    Attachment, Channel, Conversation, ConversationMessage, Membership,
+    Message, Role, Server, ServerBan, ServerInvite, ServerJoinRequest, dm_room,
 )
 
 # Значок сервера жмётся клиентом до 512x512 (ServerSettingsModal.ICON_SIZE) —
@@ -57,16 +57,68 @@ class ChannelSerializer(serializers.ModelSerializer):
 
 
 class RoleSerializer(serializers.ModelSerializer):
+    # Кто может пинговать ЭТУ роль (@ИмяРоли) — см. Role.mentionable_by.
+    # queryset сужается до ролей ТОГО ЖЕ сервера в __init__ (нужен server в
+    # context) — без этого можно было бы сослаться на роль чужого сервера.
+    # Пустой queryset() по умолчанию — предохранитель: если вызывающий забыл
+    # передать context, любой переданный id просто не пройдёт валидацию,
+    # вместо того чтобы молча принять роль откуда угодно.
+    mentionable_by = serializers.PrimaryKeyRelatedField(
+        many=True, required=False, queryset=Role.objects.none())
+
     class Meta:
         model = Role
         fields = ["id", "name", "color", "position", "is_default",
+                  "mention_permission", "mentionable_by",
                   *roles.PERMISSION_NAMES]
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        server = self.context.get("server")
+        if server is not None:
+            # many=True оборачивает поле в ManyRelatedField — сам queryset,
+            # который реально смотрит to_internal_value(), живёт на
+            # child_relation, а не на обёртке; поставить его на обёртку —
+            # завести атрибут, который никто не читает, и queryset молча
+            # останется прежним (Role.objects.none() из объявления поля).
+            self.fields["mentionable_by"].child_relation.queryset = (
+                Role.objects.filter(server=server))
 
     def validate_name(self, value):
         value = (value or "").strip()
         if not value:
             raise serializers.ValidationError("Нужно название роли.")
         return value
+
+
+def membership_settings_payload(membership: Membership) -> dict:
+    """Личные настройки уведомлений/приватности участника для его сервера —
+    общая форма и для ServerSerializer.my_settings (отдаётся со списком
+    серверов сразу), и для ответа chat.views.MyServerSettings (после PATCH).
+    Единое место, чтобы оба не разъехались по набору полей."""
+    return {
+        "notification_level": membership.notification_level,
+        "muted": membership.is_muted(),
+        "muted_until": membership.muted_until,
+        "muted_forever": membership.muted_forever,
+        "ignore_at_here": membership.ignore_at_here,
+        "suppress_role_mentions": membership.suppress_role_mentions,
+        "allow_dms_from_server": membership.allow_dms_from_server,
+    }
+
+
+def _default_membership_settings_payload() -> dict:
+    """Тот же контракт для не-участника/анонимного запроса — например, когда
+    ServerSerializer сериализуется без request в контексте (рассылка по WS)."""
+    return {
+        "notification_level": Membership.NOTIFY_ALL,
+        "muted": False,
+        "muted_until": None,
+        "muted_forever": False,
+        "ignore_at_here": False,
+        "suppress_role_mentions": False,
+        "allow_dms_from_server": True,
+    }
 
 
 class ServerSerializer(serializers.ModelSerializer):
@@ -76,6 +128,9 @@ class ServerSerializer(serializers.ModelSerializer):
     # контексте (например, при рассылке через WS) прав нет — фронт в таких
     # местах и так использует уже загруженный объект сервера.
     my_permissions = serializers.SerializerMethodField()
+    # Личные настройки уведомлений/мьюта/приватности запрашивающего — та же
+    # логика "без request — нейтральный дефолт", что и у my_permissions.
+    my_settings = serializers.SerializerMethodField()
     member_count = serializers.SerializerMethodField()
 
     class Meta:
@@ -84,7 +139,7 @@ class ServerSerializer(serializers.ModelSerializer):
             "id", "name", "owner", "created_at", "channels", "icon",
             "banner_gradient", "banner_image", "description", "tags",
             "is_private", "access_mode", "age_restricted", "rules",
-            "my_permissions", "member_count",
+            "my_permissions", "my_settings", "member_count",
         ]
         read_only_fields = ["owner", "created_at"]
 
@@ -93,6 +148,22 @@ class ServerSerializer(serializers.ModelSerializer):
         if request is None:
             return roles.no_permissions()
         return roles.permissions_for(request.user, obj)
+
+    def get_my_settings(self, obj):
+        request = self.context.get("request")
+        if request is None or not request.user or not request.user.is_authenticated:
+            return _default_membership_settings_payload()
+        # Предпочитаем контекст, собранный одним пайплайном на весь список
+        # серверов (см. chat.views.server_context) — без него на каждый
+        # сервер уходил бы отдельный запрос Membership.
+        cache = self.context.get("my_memberships")
+        membership = (
+            cache.get(obj.id) if cache is not None
+            else Membership.objects.filter(user=request.user, server=obj).first()
+        )
+        if membership is None:
+            return _default_membership_settings_payload()
+        return membership_settings_payload(membership)
 
     def get_member_count(self, obj):
         # Предпочитаем аннотацию из queryset'а (см. chat.views) — без неё на
@@ -176,6 +247,44 @@ class ServerBanSerializer(serializers.ModelSerializer):
     class Meta:
         model = ServerBan
         fields = ["id", "user", "banned_by", "reason", "created_at"]
+
+
+class MembershipSettingsSerializer(serializers.ModelSerializer):
+    """PATCH /api/servers/<id>/settings — только «плоские» настройки.
+
+    Заглушение (muted_until/muted_forever) сюда намеренно не входит: это не
+    поле, а ДЕЙСТВИЕ ("заглушить на 30 минут" / "навсегда" / "снять"),
+    которое chat.views.MyServerSettings разбирает из mute_minutes/
+    mute_forever/unmute и переводит в эти два поля сам — см. вьюху.
+    """
+
+    class Meta:
+        model = Membership
+        fields = [
+            "notification_level", "ignore_at_here", "suppress_role_mentions",
+            "allow_dms_from_server",
+        ]
+        extra_kwargs = {field: {"required": False} for field in fields}
+
+
+class ServerInviteSerializer(serializers.ModelSerializer):
+    """Личное приглашение — то, что видит ПРИГЛАШЁННЫЙ в списке "Приглашения"
+    (см. chat.views.MyServerInvites). Ссылки (kind=LINK) этим сериализатором
+    не отдаются — у них другой, более узкий ответ (см. ServerInviteLink)."""
+
+    created_by = UserSerializer(read_only=True)
+    server = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ServerInvite
+        fields = ["id", "server", "created_by", "created_at"]
+
+    def get_server(self, obj):
+        # Компактно и без контекста запроса: этому серверу приглашённый
+        # ещё не участник, полноценный ServerSerializer.my_permissions/
+        # my_settings ему тут ни к чему, а лишний вес (все каналы) — тем
+        # более.
+        return {"id": obj.server_id, "name": obj.server.name, "icon": obj.server.icon}
 
 
 class AttachmentSerializer(serializers.ModelSerializer):

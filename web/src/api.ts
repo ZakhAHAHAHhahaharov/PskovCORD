@@ -99,6 +99,12 @@ export type ServerPermission =
 
 export type ServerPermissions = Record<ServerPermission, boolean>
 
+/** Кто может пинговать роль (@ИмяРоли) — см. backend chat.models.Role. Не
+ * путать с manage_roles (управление самой ролью): это про то, чьё
+ * "@ИмяРоли" в тексте вообще СЧИТАЕТСЯ упоминанием участников роли, а не
+ * просто текстом (см. web/src/mentions.ts). */
+export type MentionPermission = 'everyone' | 'roles'
+
 export interface Role extends ServerPermissions {
   id: number
   name: string
@@ -106,6 +112,10 @@ export interface Role extends ServerPermissions {
   position: number
   /** Роль «для всех» (аналог @everyone) — её нельзя удалить и не нужно выдавать. */
   is_default: boolean
+  mention_permission: MentionPermission
+  /** id ролей, чьи участники вправе пинговать ЭТУ роль — используется только
+   * при mention_permission='roles'. */
+  mentionable_by: number[]
 }
 
 /** Как попасть на сервер — вкладка «Доступ» редактора. */
@@ -114,6 +124,30 @@ export type ServerAccessMode = 'invite' | 'request' | 'public'
 export interface ServerRule {
   title: string
   text: string
+}
+
+/** Ежемесячный/личный уровень уведомлений — как в Discord: все сообщения,
+ * только те, где меня упомянули, или ничего. */
+export type NotificationLevel = 'all' | 'mentions' | 'none'
+
+/** Личные настройки уведомлений/заглушения/приватности для ОДНОГО сервера —
+ * приезжают вместе со списком серверов (Server.my_settings), см. backend
+ * chat.serializers.membership_settings_payload. */
+export interface ServerMemberSettings {
+  notification_level: NotificationLevel
+  /** Заглушено ПРЯМО СЕЙЧАС — уже учитывает muted_until относительно
+   * времени ответа сервера; клиент досчитывает угасание таймером сам
+   * (см. AppShell useMutedState). */
+  muted: boolean
+  muted_until: string | null
+  muted_forever: boolean
+  /** Не поднимать уведомление на буквальные "@all"/"@here". */
+  ignore_at_here: boolean
+  /** Не поднимать уведомление на упоминание ролей, которые у меня есть. */
+  suppress_role_mentions: boolean
+  /** Разрешить ЛС от других участников этого сервера (доп. к глобальному
+   * accounts.dm_privacy — см. backend chat.permissions.can_dm). */
+  allow_dms_from_server: boolean
 }
 
 export interface Server {
@@ -136,7 +170,17 @@ export interface Server {
   rules: ServerRule[]
   /** Мои права на этом сервере — по ним прячутся кнопки редактора. */
   my_permissions: ServerPermissions
+  /** Мои личные настройки уведомлений на этом сервере. */
+  my_settings: ServerMemberSettings
   member_count: number
+}
+
+/** Личное приглашение на сервер — то, что видит ПРИГЛАШЁННЫЙ (см. api.myServerInvites). */
+export interface ServerInviteEntry {
+  id: number
+  server: { id: number; name: string; icon: string }
+  created_by: User
+  created_at: string
 }
 
 export interface ServerJoinRequestEntry {
@@ -633,6 +677,53 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ name, kind }),
     }),
+
+  /** Выйти самому (без исключения/бана) — владелец так выйти не может. */
+  leaveServer: (serverId: number) =>
+    req(`/api/servers/${serverId}/leave`, { method: 'DELETE' }),
+
+  serverSettings: (serverId: number): Promise<ServerMemberSettings> =>
+    req(`/api/servers/${serverId}/settings`),
+  /** Заглушение — mute_minutes ИЛИ mute_forever ИЛИ unmute, ровно один из
+   * трёх (см. backend chat.views.MyServerSettings); остальные поля — обычный
+   * partial-патч. */
+  updateServerSettings: (
+    serverId: number,
+    data: Partial<{
+      notification_level: NotificationLevel
+      ignore_at_here: boolean
+      suppress_role_mentions: boolean
+      allow_dms_from_server: boolean
+      mute_minutes: number
+      mute_forever: boolean
+      unmute: boolean
+    }>,
+  ): Promise<ServerMemberSettings> =>
+    req(`/api/servers/${serverId}/settings`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    }),
+
+  /** Личное приглашение конкретному человеку — работает даже для сервера
+   * «только по приглашению» (сам факт приглашения от участника — уже
+   * разрешение, см. backend). */
+  inviteToServer: (serverId: number, userId: number): Promise<ServerInviteEntry> =>
+    req(`/api/servers/${serverId}/invites`, {
+      method: 'POST',
+      body: JSON.stringify({ user_id: userId }),
+    }),
+  /** Приглашения, адресованные МНЕ — для вкладки «Приглашения» в HomeSidebar. */
+  myServerInvites: (): Promise<ServerInviteEntry[]> => req('/api/invites'),
+  acceptServerInvite: (inviteId: number): Promise<Server> =>
+    req(`/api/invites/${inviteId}`, { method: 'POST' }),
+  declineServerInvite: (inviteId: number) =>
+    req(`/api/invites/${inviteId}`, { method: 'DELETE' }),
+  /** Постоянная многоразовая ссылка сервера — одна на сервер, повторные
+   * вызовы отдают тот же код. */
+  serverInviteLink: (serverId: number): Promise<{ code: string }> =>
+    req(`/api/servers/${serverId}/invite-link`),
+  redeemServerInvite: (code: string): Promise<Server> =>
+    req('/api/invites/redeem', { method: 'POST', body: JSON.stringify({ code }) }),
 
   /** before — страница старше указанного сообщения (скролл вверх),
    *  after — то, что появилось после (добор пропущенного, когда WS лежал). */

@@ -22,14 +22,16 @@ from . import presence, roles, sfu, uploads
 from .models import (
     Attachment, Channel, Conversation, ConversationMessage,
     ConversationParticipant, Membership, Message, Role, Server, ServerBan,
-    ServerJoinRequest, MAX_ATTACHMENT_BYTES, dm_room,
+    ServerInvite, ServerJoinRequest, MAX_ATTACHMENT_BYTES, _invite_code,
+    dm_room,
 )
 from .permissions import are_friends, can_dm
 from .serializers import (
     AttachmentSerializer, ChannelSerializer, ConversationMessageSerializer,
-    ConversationSerializer, MessageSerializer, RoleSerializer,
-    ServerBanSerializer, ServerJoinRequestSerializer, ServerSerializer,
-    ServerUpdateSerializer,
+    ConversationSerializer, MembershipSettingsSerializer, MessageSerializer,
+    RoleSerializer, ServerBanSerializer, ServerInviteSerializer,
+    ServerJoinRequestSerializer, ServerSerializer, ServerUpdateSerializer,
+    membership_settings_payload,
 )
 
 User = get_user_model()
@@ -150,10 +152,10 @@ def _paginate_messages(request, queryset):
 
 
 def server_context(request, servers):
-    """Контекст для ServerSerializer: request (нужен для my_permissions) плюс
-    заранее собранные состояния звонков всех голосовых каналов — одним
-    пайплайном вместо двух обращений к Redis на каждый канал во время
-    сериализации (см. ChannelSerializer._state)."""
+    """Контекст для ServerSerializer: request (нужен для my_permissions/
+    my_settings) плюс заранее собранные состояния звонков всех голосовых
+    каналов — одним пайплайном вместо двух обращений к Redis на каждый канал
+    во время сериализации (см. ChannelSerializer._state)."""
     if isinstance(servers, Server):
         servers = [servers]
     voice_channel_ids = [
@@ -162,9 +164,20 @@ def server_context(request, servers):
         for channel in server.channels.all()
         if channel.kind == Channel.VOICE
     ]
+    my_memberships = {}
+    if request.user and request.user.is_authenticated:
+        # Одним запросом на весь список — без него my_settings делал бы
+        # отдельный Membership.objects.filter(...) на каждый сервер
+        # (см. ServerSerializer.get_my_settings).
+        my_memberships = {
+            m.server_id: m
+            for m in Membership.objects.filter(
+                user=request.user, server__in=servers)
+        }
     return {
         "request": request,
         "call_states": presence.call_states(voice_channel_ids),
+        "my_memberships": my_memberships,
     }
 
 
@@ -520,7 +533,7 @@ class ServerRoles(APIView):
         denied = _require_permission(request, server, "manage_roles")
         if denied:
             return denied
-        serializer = RoleSerializer(data=request.data)
+        serializer = RoleSerializer(data=request.data, context={"server": server})
         serializer.is_valid(raise_exception=True)
         denied = _require_role_hierarchy(request, server, serializer.validated_data)
         if denied:
@@ -538,7 +551,8 @@ class ServerRoleDetail(APIView):
         if denied:
             return denied
         role = get_object_or_404(Role, id=role_id, server=server)
-        serializer = RoleSerializer(role, data=request.data, partial=True)
+        serializer = RoleSerializer(
+            role, data=request.data, partial=True, context={"server": server})
         serializer.is_valid(raise_exception=True)
         denied = _require_role_hierarchy(
             request, server, serializer.validated_data, current_position=role.position)
@@ -652,6 +666,195 @@ class ServerBanDetail(APIView):
             return denied
         ServerBan.objects.filter(server=server, user_id=user_id).delete()
         return Response(status=204)
+
+
+class ServerLeave(APIView):
+    """DELETE /api/servers/<id>/leave — выйти самому (без исключения/бана).
+
+    Владелец выйти не может: сервер не может остаться без владельца, а
+    передачи владения/удаления сервера в проекте нет — значит и «выйти» для
+    него сейчас означает «сервер осиротеет», чего допускать нельзя. Кнопка
+    в UI для владельца задизейблена по той же причине (см. web
+    ServerContextMenu) — проверка здесь на случай прямого запроса мимо UI.
+    """
+
+    def delete(self, request, server_id):
+        server = get_object_or_404(Server, id=server_id)
+        if not is_member(request.user, server):
+            return Response({"detail": "Вы не участник сервера."}, status=403)
+        if server.owner_id == request.user.id:
+            return Response(
+                {"detail": "Владелец не может покинуть свой сервер."}, status=400)
+        Membership.objects.filter(server=server, user=request.user).delete()
+        _revoke_server_membership(server, request.user.id)
+        return Response(status=204)
+
+
+class MyServerSettings(APIView):
+    """GET/PATCH /api/servers/<id>/settings — ЛИЧНЫЕ настройки уведомлений,
+    заглушения и приватности запрашивающего на этом сервере.
+
+    Не требует никакого права сверх членства: это не модерация сервера, а
+    персональные предпочтения — каждый настраивает только себя (ровно как
+    accounts.MeView для профиля).
+    """
+
+    def get(self, request, server_id):
+        server = get_object_or_404(Server, id=server_id)
+        membership = get_object_or_404(Membership, server=server, user=request.user)
+        return Response(membership_settings_payload(membership))
+
+    # Верхняя граница на «заглушить на N минут» — месяц. Не техническое
+    # ограничение, а защита от опечатки в духе mute_minutes=99999999,
+    # которая на практике неотличима от muted_forever, но не показывает
+    # честный статус «навсегда» в UI.
+    MAX_MUTE_MINUTES = 60 * 24 * 30
+
+    def patch(self, request, server_id):
+        server = get_object_or_404(Server, id=server_id)
+        membership = get_object_or_404(Membership, server=server, user=request.user)
+        data = request.data
+
+        # Заглушение — это ДЕЙСТВИЕ (одно из трёх), а не поле для
+        # MembershipSettingsSerializer — см. её докстринг.
+        mute_ops = [k for k in ("mute_minutes", "mute_forever", "unmute") if k in data]
+        if len(mute_ops) > 1:
+            return Response(
+                {"detail": "Укажите только одно действие с заглушением."}, status=400)
+        if "mute_minutes" in data:
+            try:
+                minutes = int(data["mute_minutes"])
+            except (TypeError, ValueError):
+                return Response({"detail": "mute_minutes — целое число."}, status=400)
+            if not 0 < minutes <= self.MAX_MUTE_MINUTES:
+                return Response(
+                    {"detail": "Недопустимая длительность заглушения."}, status=400)
+            membership.muted_until = timezone.now() + timedelta(minutes=minutes)
+            membership.muted_forever = False
+        elif data.get("mute_forever"):
+            membership.muted_forever = True
+            membership.muted_until = None
+        elif "unmute" in data:
+            membership.muted_forever = False
+            membership.muted_until = None
+
+        serializer = MembershipSettingsSerializer(membership, data=data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        # save() пишет ВСЕ поля инстанса, включая muted_until/muted_forever,
+        # выставленные выше явно (это тот же объект membership, не копия).
+        serializer.save()
+        return Response(membership_settings_payload(membership))
+
+
+class ServerInvites(APIView):
+    """POST /api/servers/<id>/invites {"user_id"} — пригласить конкретного
+    человека напрямую. Может любой участник сервера — приглашать друзей на
+    свой сервер не требует прав модерации, это не изменение самого сервера.
+    Байпасит access_mode ЦЕЛИКОМ (в т.ч. «только по приглашению») — в этом и
+    смысл приглашения; бан по-прежнему блокирует."""
+
+    def post(self, request, server_id):
+        server = get_object_or_404(Server, id=server_id)
+        if not is_member(request.user, server):
+            return Response({"detail": "Вы не участник сервера."}, status=403)
+        target = get_object_or_404(User, id=request.data.get("user_id"))
+        if target.id == request.user.id:
+            return Response({"detail": "Нельзя пригласить самого себя."}, status=400)
+        if is_member(target, server):
+            return Response({"detail": "Этот пользователь уже на сервере."}, status=400)
+        if ServerBan.objects.filter(server=server, user=target).exists():
+            return Response({"detail": "Этот пользователь забанен на сервере."}, status=400)
+        invite, created = ServerInvite.objects.get_or_create(
+            server=server, invited_user=target, kind=ServerInvite.DIRECT,
+            defaults={"created_by": request.user},
+        )
+        if created:
+            _notify_user(target.id, {
+                "op": "server_invite_create",
+                "invite": ServerInviteSerializer(invite).data,
+            })
+        return Response(ServerInviteSerializer(invite).data, status=201 if created else 200)
+
+
+class MyServerInvites(APIView):
+    """GET /api/invites — личные приглашения, адресованные МНЕ. Ссылочные
+    приглашения (kind=LINK) сюда не попадают — они не адресные."""
+
+    def get(self, request):
+        qs = ServerInvite.objects.filter(
+            kind=ServerInvite.DIRECT, invited_user=request.user,
+        ).select_related("server", "created_by")
+        return Response(ServerInviteSerializer(qs, many=True).data)
+
+
+class ServerInviteDecision(APIView):
+    """POST — принять приглашение (сразу становишься участником, без
+    рассмотрения владельцем — сам факт приглашения от участника это
+    разрешение). DELETE — отклонить (приглашённым) или отозвать
+    (пригласившим) — симметрично FriendRequestDecline."""
+
+    def post(self, request, invite_id):
+        invite = get_object_or_404(
+            ServerInvite, id=invite_id, kind=ServerInvite.DIRECT,
+            invited_user=request.user)
+        server = invite.server
+        if ServerBan.objects.filter(server=server, user=request.user).exists():
+            invite.delete()
+            return Response({"detail": "Вы забанены на этом сервере."}, status=403)
+        Membership.objects.get_or_create(user=request.user, server=server)
+        invite.delete()
+        _grant_server_membership(server, request.user.id)
+        return Response(
+            ServerSerializer(server, context=server_context(request, server)).data)
+
+    def delete(self, request, invite_id):
+        get_object_or_404(
+            ServerInvite.objects.filter(
+                Q(invited_user=request.user) | Q(created_by=request.user)),
+            id=invite_id, kind=ServerInvite.DIRECT,
+        ).delete()
+        return Response(status=204)
+
+
+class ServerInviteLink(APIView):
+    """GET /api/servers/<id>/invite-link — постоянная многоразовая ссылка
+    сервера. Одна на сервер (get_or_create) — повторные запросы отдают ту же
+    ссылку, а не плодят новые коды."""
+
+    def get(self, request, server_id):
+        server = get_object_or_404(Server, id=server_id)
+        if not is_member(request.user, server):
+            return Response({"detail": "Вы не участник сервера."}, status=403)
+        invite, _created = ServerInvite.objects.get_or_create(
+            server=server, kind=ServerInvite.LINK,
+            defaults={"created_by": request.user, "code": _invite_code()},
+        )
+        return Response({"code": invite.code})
+
+
+class ServerInviteRedeem(APIView):
+    """POST /api/invites/redeem {"code"} — войти на сервер по ссылке.
+
+    Обладание кодом — это и есть авторизация (см. ServerInvite docstring):
+    access_mode сервера здесь не смотрим вовсе, только бан.
+    """
+
+    def post(self, request):
+        code = (request.data.get("code") or "").strip()
+        invite = ServerInvite.objects.filter(
+            kind=ServerInvite.LINK, code=code).select_related("server").first()
+        if invite is None:
+            return Response({"detail": "Ссылка недействительна."}, status=404)
+        server = invite.server
+        if is_member(request.user, server):
+            return Response(
+                ServerSerializer(server, context=server_context(request, server)).data)
+        if ServerBan.objects.filter(server=server, user=request.user).exists():
+            return Response({"detail": "Вы забанены на этом сервере."}, status=403)
+        Membership.objects.get_or_create(user=request.user, server=server)
+        _grant_server_membership(server, request.user.id)
+        return Response(
+            ServerSerializer(server, context=server_context(request, server)).data)
 
 
 class FriendsView(APIView):

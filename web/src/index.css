@@ -1896,6 +1896,11 @@ input {
 .message-row {
   position: relative;
   display: flex;
+  /* flex-start, а не дефолтный stretch: без этого кнопка-аватар растягивалась
+     на всю высоту строки (браузеры центрируют содержимое кнопки по умолчанию),
+     и на многострочном сообщении/картинке аватар оказывался на середине блока,
+     а не на уровне ника. */
+  align-items: flex-start;
   gap: 16px;
   padding: 6px 0;
 }
@@ -2022,7 +2027,7 @@ input {
   padding: 0 8px;
 }
 
-.message-input input {
+.message-input textarea {
   flex: 1;
   min-width: 0;
   background: transparent;
@@ -2030,10 +2035,19 @@ input {
   padding: 12px 8px;
   color: var(--text-normal);
   font-size: 15px;
+  font-family: inherit;
+  line-height: 1.375;
   outline: none;
+  /* Растёт вместе с текстом (см. MessageInput.autoGrow) — ручной resize
+     конфликтовал бы с автоматическим и торчал бы уголком поверх кнопок. */
+  resize: none;
+  /* После ~9 строк — свой скролл внутри поля, а не бесконечный рост
+     композера, отжимающий ленту сообщений за пределы экрана. */
+  max-height: 240px;
+  overflow-y: auto;
 }
 
-.message-input input::placeholder {
+.message-input textarea::placeholder {
   color: var(--text-faint);
 }
 
@@ -4379,4 +4393,305 @@ button.settings-row-clickable:hover .settings-row-label {
 
 .discover-search::placeholder {
   color: var(--text-faint);
+}
+
+/* ===================================================================
+   Уведомления серверов, контекстное меню, приватность, приглашения,
+   группировка списка участников по ролям
+   =================================================================== */
+
+/* ---- бейджи на пилюле сервера (ServerRail) ---- */
+.rail-pill-unread-dot {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #fff;
+  border: 2px solid var(--rail-bg);
+}
+
+.rail-pill-muted-badge {
+  position: absolute;
+  bottom: -2px;
+  right: -2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--surface-2);
+  color: var(--text-muted);
+  border: 2px solid var(--rail-bg);
+}
+
+/* ---- контекстное меню сервера ---- */
+.server-context-menu {
+  position: fixed;
+  z-index: 90;
+  width: 280px;
+  max-height: calc(100vh - 24px);
+  overflow-y: auto;
+}
+
+/* Подменю по наведению (заглушение/уведомления) — тот же визуальный язык,
+   что и .status-flyout (StatusMenu), но растёт от ВЕРХА строки-триггера
+   (top: 0), а не от низа: этот корневой попап сам top-anchored (растёт вниз
+   от точки правого клика), в отличие от status-menu-popup. */
+.server-menu-flyout {
+  top: 0;
+  bottom: auto;
+  width: 260px;
+}
+
+.server-flyout-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  border-radius: 4px;
+  font-size: 14px;
+  color: var(--text-normal);
+  text-align: left;
+}
+
+.server-flyout-item:hover {
+  background: var(--channel-hover);
+}
+
+.server-flyout-item.active {
+  background: var(--channel-active);
+  color: var(--heading-text);
+  font-weight: 600;
+}
+
+.server-flyout-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border-radius: 4px;
+  font-size: 13px;
+  color: var(--text-normal);
+  cursor: pointer;
+}
+
+.server-flyout-checkbox:hover {
+  background: var(--channel-hover);
+}
+
+.server-flyout-checkbox input {
+  accent-color: var(--blurple);
+}
+
+/* ---- настройки конфиденциальности сервера ---- */
+.privacy-modal {
+  position: relative;
+  width: 420px;
+}
+
+.privacy-modal-close {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  color: var(--text-muted);
+}
+
+.privacy-modal-close:hover {
+  background: var(--channel-hover);
+  color: var(--text-normal);
+}
+
+.privacy-modal-server {
+  font-size: 14px;
+  font-weight: 400;
+  color: var(--text-muted);
+}
+
+.privacy-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 0;
+  border-top: 1px solid var(--border-color);
+}
+
+.privacy-row-text {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.privacy-row-label {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-normal);
+}
+
+.privacy-row-hint {
+  font-size: 12px;
+  color: var(--text-muted);
+  max-width: 300px;
+}
+
+.privacy-modal-note {
+  margin-top: 16px;
+  font-size: 13px;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+/* Переключатель-пилюля — как на макете, не обычный checkbox. */
+.privacy-switch {
+  flex-shrink: 0;
+  position: relative;
+  display: inline-block;
+  width: 40px;
+  height: 24px;
+  cursor: pointer;
+}
+
+.privacy-switch input {
+  position: absolute;
+  opacity: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  cursor: pointer;
+}
+
+.privacy-switch-track {
+  position: absolute;
+  inset: 0;
+  border-radius: 12px;
+  background: var(--input-secondary-bg);
+  transition: background 0.15s;
+}
+
+.privacy-switch-track::before {
+  content: '';
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform 0.15s;
+}
+
+.privacy-switch input:checked + .privacy-switch-track {
+  background: var(--green);
+}
+
+.privacy-switch input:checked + .privacy-switch-track::before {
+  transform: translateX(16px);
+}
+
+.privacy-switch.disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* ---- модалка приглашения на сервер ---- */
+.invite-people-list {
+  max-height: 220px;
+}
+
+.invite-person-row {
+  justify-content: space-between;
+}
+
+.invite-person-row:disabled {
+  opacity: 0.7;
+  cursor: default;
+}
+
+.invite-person-action {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.invite-link-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 14px;
+}
+
+.invite-link-row {
+  display: flex;
+  gap: 6px;
+}
+
+.invite-link-row .field-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.invite-link-row .btn-small {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+}
+
+/* ---- вкладка «Приглашения» на домашнем экране ---- */
+.invite-row {
+  flex: 1;
+  cursor: default;
+}
+
+/* ---- группировка списка участников по ролям ---- */
+.member-category {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.member-category-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+/* ---- редактор роли: «кто может упоминать» ---- */
+.srv-mention-radio {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  font-size: 14px;
+  color: var(--text-normal);
+  cursor: pointer;
+}
+
+.srv-mention-radio input {
+  accent-color: var(--blurple);
+}
+
+.srv-mention-roles {
+  margin-top: 6px;
+  margin-left: 22px;
+  padding: 8px;
+  background: var(--surface-2);
+  border: 1px solid var(--surface-2-border);
+  border-radius: 6px;
+  max-height: 160px;
+  overflow-y: auto;
 }

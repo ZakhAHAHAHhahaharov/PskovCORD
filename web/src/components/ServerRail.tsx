@@ -1,4 +1,5 @@
 import { useState, MouseEvent as ReactMouseEvent } from 'react'
+import { BellOff } from 'lucide-react'
 import { Server } from '../api'
 
 const APP_NAME: string = import.meta.env.VITE_APP_NAME || 'PskovCord'
@@ -27,6 +28,9 @@ export default function ServerRail({
   onDiscover,
   onHome,
   homeNotificationCount,
+  unreadServerIds,
+  mutedServerIds,
+  onContextMenu,
 }: {
   servers: Server[]
   activeId: number | null
@@ -38,6 +42,14 @@ export default function ServerRail({
   /** Входящие заявки в друзья + диалоги с непрочитанными — общий счётчик
    * поверх домашней пилюли (см. AppShell). */
   homeNotificationCount: number
+  /** Сервера, где есть непрочитанный текстовый канал (см. AppShell
+   * computeNotice) — белая точка на пилюле, как в Discord. */
+  unreadServerIds: Set<number>
+  /** Сервера, заглушённые прямо сейчас (учитывает истечение muted_until) —
+   * приглушённый значок колокольчика поверх пилюли. */
+  mutedServerIds: Set<number>
+  /** Правый клик по пилюле сервера — контекстное меню (см. AppShell). */
+  onContextMenu: (s: Server, e: ReactMouseEvent) => void
 }) {
   const [hint, setHint] = useState<RailHint | null>(null)
 
@@ -80,11 +92,24 @@ export default function ServerRail({
           }
           onMouseLeave={hideHint}
           onClick={() => onSelect(s)}
+          onContextMenu={(e) => {
+            e.preventDefault()
+            hideHint()
+            onContextMenu(s, e)
+          }}
         >
           {s.icon ? (
             <img className="rail-pill-icon" src={s.icon} alt="" />
           ) : (
             serverInitials(s.name)
+          )}
+          {unreadServerIds.has(s.id) && !mutedServerIds.has(s.id) && (
+            <span className="rail-pill-unread-dot" />
+          )}
+          {mutedServerIds.has(s.id) && (
+            <span className="rail-pill-muted-badge" title="Заглушён">
+              <BellOff size={10} />
+            </span>
           )}
         </button>
       ))}

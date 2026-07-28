@@ -694,6 +694,61 @@ function RolesTab({
               </div>
             ))}
 
+            {!draft.is_default && (
+              <div className="srv-perm-group">
+                <div className="field-label">Кто может упоминать эту роль</div>
+                <p className="srv-hint">
+                  Сообщение с «@{draft.name}» поднимает уведомление участникам роли, только
+                  если у автора есть право её упоминать.
+                </p>
+                <label className="srv-mention-radio">
+                  <input
+                    type="radio"
+                    name={`mention-perm-${draft.id}`}
+                    checked={draft.mention_permission === 'everyone'}
+                    onChange={() => setDraft({ ...draft, mention_permission: 'everyone' })}
+                  />
+                  Все участники сервера
+                </label>
+                <label className="srv-mention-radio">
+                  <input
+                    type="radio"
+                    name={`mention-perm-${draft.id}`}
+                    checked={draft.mention_permission === 'roles'}
+                    onChange={() => setDraft({ ...draft, mention_permission: 'roles' })}
+                  />
+                  Только выбранные роли
+                </label>
+                {draft.mention_permission === 'roles' && (
+                  <div className="srv-mention-roles">
+                    {roles
+                      .filter((r) => r.id !== draft.id)
+                      .map((r) => (
+                        <label key={r.id} className="srv-member-row">
+                          <input
+                            type="checkbox"
+                            checked={draft.mentionable_by.includes(r.id)}
+                            onChange={(e) =>
+                              setDraft({
+                                ...draft,
+                                mentionable_by: e.target.checked
+                                  ? [...draft.mentionable_by, r.id]
+                                  : draft.mentionable_by.filter((id) => id !== r.id),
+                              })
+                            }
+                          />
+                          <span className="srv-role-dot" style={{ background: r.color }} />
+                          <span className="member-name">{r.name}</span>
+                        </label>
+                      ))}
+                    {roles.length <= 1 && (
+                      <p className="srv-hint">На сервере пока нет других ролей.</p>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+
             {error && <div className="login-error">{error}</div>}
             <button className="btn-primary" onClick={handleSave} disabled={saving}>
               {saving ? <Loader2 size={15} className="spin" /> : 'Сохранить роль'}
