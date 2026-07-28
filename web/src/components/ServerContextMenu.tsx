@@ -151,44 +151,46 @@ export default function ServerContextMenu({
 
           {muteFlyout.open && (
             <div className="status-flyout server-menu-flyout">
-              {settings.muted && (
-                <>
+              <div className="status-flyout-scroll">
+                {settings.muted && (
+                  <>
+                    <button
+                      type="button"
+                      className="server-flyout-item"
+                      onClick={() => {
+                        onUnmute()
+                        onClose()
+                      }}
+                    >
+                      <BellRing size={14} /> Включить уведомления
+                    </button>
+                    <div className="profile-popup-divider" />
+                  </>
+                )}
+                {MUTE_OPTIONS.map((o) => (
                   <button
+                    key={o.minutes}
                     type="button"
                     className="server-flyout-item"
                     onClick={() => {
-                      onUnmute()
+                      onMute(o.minutes)
                       onClose()
                     }}
                   >
-                    <BellRing size={14} /> Включить уведомления
+                    {o.label}
                   </button>
-                  <div className="profile-popup-divider" />
-                </>
-              )}
-              {MUTE_OPTIONS.map((o) => (
+                ))}
                 <button
-                  key={o.minutes}
                   type="button"
-                  className="server-flyout-item"
+                  className={`server-flyout-item ${settings.muted_forever ? 'active' : ''}`}
                   onClick={() => {
-                    onMute(o.minutes)
+                    onMute('forever')
                     onClose()
                   }}
                 >
-                  {o.label}
+                  До тех пор, пока не включу
                 </button>
-              ))}
-              <button
-                type="button"
-                className={`server-flyout-item ${settings.muted_forever ? 'active' : ''}`}
-                onClick={() => {
-                  onMute('forever')
-                  onClose()
-                }}
-              >
-                До тех пор, пока не включу
-              </button>
+              </div>
             </div>
           )}
         </div>
@@ -205,38 +207,40 @@ export default function ServerContextMenu({
 
           {notifyFlyout.open && (
             <div className="status-flyout server-menu-flyout">
-              {NOTIFICATION_LEVELS.map((o) => (
-                <button
-                  key={o.value}
-                  type="button"
-                  className={`server-flyout-item ${
-                    settings.notification_level === o.value ? 'active' : ''
-                  }`}
-                  onClick={() => onNotificationLevel(o.value)}
-                >
-                  {settings.notification_level === o.value && <Check size={13} />}
-                  {o.label}
-                </button>
-              ))}
+              <div className="status-flyout-scroll">
+                {NOTIFICATION_LEVELS.map((o) => (
+                  <button
+                    key={o.value}
+                    type="button"
+                    className={`server-flyout-item ${
+                      settings.notification_level === o.value ? 'active' : ''
+                    }`}
+                    onClick={() => onNotificationLevel(o.value)}
+                  >
+                    {settings.notification_level === o.value && <Check size={13} />}
+                    {o.label}
+                  </button>
+                ))}
 
-              <div className="profile-popup-divider" />
+                <div className="profile-popup-divider" />
 
-              <label className="server-flyout-checkbox">
-                <input
-                  type="checkbox"
-                  checked={settings.ignore_at_here}
-                  onChange={(e) => onToggleIgnoreAtHere(e.target.checked)}
-                />
-                Игнорировать @all и @here
-              </label>
-              <label className="server-flyout-checkbox">
-                <input
-                  type="checkbox"
-                  checked={settings.suppress_role_mentions}
-                  onChange={(e) => onToggleSuppressRoleMentions(e.target.checked)}
-                />
-                Отключить все @упоминания ролей
-              </label>
+                <label className="server-flyout-checkbox">
+                  <input
+                    type="checkbox"
+                    checked={settings.ignore_at_here}
+                    onChange={(e) => onToggleIgnoreAtHere(e.target.checked)}
+                  />
+                  Игнорировать @all и @here
+                </label>
+                <label className="server-flyout-checkbox">
+                  <input
+                    type="checkbox"
+                    checked={settings.suppress_role_mentions}
+                    onChange={(e) => onToggleSuppressRoleMentions(e.target.checked)}
+                  />
+                  Отключить все @упоминания ролей
+                </label>
+              </div>
             </div>
           )}
         </div>
