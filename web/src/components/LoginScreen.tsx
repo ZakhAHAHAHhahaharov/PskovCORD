@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useAuth } from '../auth'
 import QrLoginPanel from './QrLoginPanel'
+import PasswordInput from './PasswordInput'
 
 const APP_NAME: string = import.meta.env.VITE_APP_NAME || 'PskovCord'
 
@@ -50,9 +51,7 @@ export default function LoginScreen() {
           />
 
           <label className="field-label">Пароль</label>
-          <input
-            className="field-input"
-            type="password"
+          <PasswordInput
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             required
@@ -61,9 +60,7 @@ export default function LoginScreen() {
           {mode === 'register' && (
             <>
               <label className="field-label">Повтори пароль</label>
-              <input
-                className="field-input"
-                type="password"
+              <PasswordInput
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}
                 required

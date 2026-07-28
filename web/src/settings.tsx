@@ -19,7 +19,7 @@ export const DEFAULT_SETTINGS: Settings = {
   outputVolume: 1,
   micGain: 1,
   micThreshold: 0.035,
-  theme: 'system',
+  theme: 'dark',
 }
 
 const STORAGE_KEY = 'pskovcord:settings'

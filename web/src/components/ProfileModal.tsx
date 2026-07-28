@@ -8,6 +8,7 @@ import {
   buildGradient, fileToBannerDataUrl, fileToSquareDataUrl, parseGradient,
 } from '../images'
 import Avatar from './Avatar'
+import PasswordInput from './PasswordInput'
 
 const DM_PRIVACY_LABELS: Record<DmPrivacy, string> = {
   friends: 'Только друзья',
@@ -344,9 +345,7 @@ export default function ProfileModal({ onClose }: { onClose: () => void }) {
         {usernameDirty && (
           <>
             <div className="field-label">Текущий пароль — подтвердите смену имени</div>
-            <input
-              className="field-input"
-              type="password"
+            <PasswordInput
               autoComplete="current-password"
               value={usernameConfirmPassword}
               onChange={(e) => {
@@ -391,25 +390,19 @@ export default function ProfileModal({ onClose }: { onClose: () => void }) {
         <h3 className="profile-subtitle">Смена пароля</h3>
 
         <div className="field-label">Текущий пароль</div>
-        <input
-          className="field-input"
-          type="password"
+        <PasswordInput
           autoComplete="current-password"
           value={currentPassword}
           onChange={(e) => setCurrentPassword(e.target.value)}
         />
         <div className="field-label">Новый пароль</div>
-        <input
-          className="field-input"
-          type="password"
+        <PasswordInput
           autoComplete="new-password"
           value={newPassword}
           onChange={(e) => setNewPassword(e.target.value)}
         />
         <div className="field-label">Повторите новый пароль</div>
-        <input
-          className="field-input"
-          type="password"
+        <PasswordInput
           autoComplete="new-password"
           value={newPassword2}
           onChange={(e) => setNewPassword2(e.target.value)}

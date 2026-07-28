@@ -17,6 +17,7 @@ import ScreenShareButton from './ScreenShareButton'
 import { ProfilePopupUser } from './MiniProfilePopup'
 import { useSettings } from '../settings'
 import { useVoice } from '../voice'
+import { VoiceStatus } from './VoiceProvider'
 
 /** Один участник комнаты (голосовой канал сервера ИЛИ звонок в личке/группе)
  * — VoiceStage сам не знает, откуда взялся ростер (см. AppShell: для сервера
@@ -202,6 +203,7 @@ export default function VoiceStage({
   onOpenProfile,
   onParticipantContextMenu,
   isConnected,
+  voiceStatus,
   onJoin,
   onLeave,
 }: {
@@ -229,6 +231,12 @@ export default function VoiceStage({
    * стейт). false — канал просто выбран/открыт, но мы не в звонке: вместо
    * сетки участников показываем VoiceLanding с кнопкой "Присоединиться". */
   isConnected: boolean
+  /** Реальное состояние SFU-соединения (см. AppShell.voiceStatus) — в отличие
+   * от isConnected (мы просто в этой комнате) отражает, договорился ли уже
+   * WebRTC-транспорт. Голосование за мут / запрос демонстрации разрешены
+   * только при 'connected' — иначе можно словить состояние гонки в
+   * consume()/produce() ещё не устаканившегося соединения (см. SfuClient). */
+  voiceStatus: VoiceStatus
   onJoin: () => void
   onLeave: () => void
 }) {
@@ -462,7 +470,7 @@ export default function VoiceStage({
               onOpenProfile={onOpenProfile}
               onExpand={() => setExpanded({ userId: m.id, mode: 'participant' })}
               onContextMenu={
-                m.id !== selfUserId && onParticipantContextMenu
+                m.id !== selfUserId && onParticipantContextMenu && voiceStatus === 'connected'
                   ? (e) => onParticipantContextMenu(m, e)
                   : undefined
               }

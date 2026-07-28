@@ -740,9 +740,13 @@ export default function AppShell() {
 
   const handleStartMuteVote = useCallback(
     (userId: number) => {
+      // Контекстное меню открывается только для полностью подключённых
+      // (см. ChannelSidebar/VoiceStage), но перепроверяем на случай, если
+      // соединение отвалилось прямо между открытием меню и кликом.
+      if (voiceStatus !== 'connected') return
       gateway.voiceMuteVoteStart(userId)
     },
-    [gateway],
+    [gateway, voiceStatus],
   )
 
   const handleCastMuteVote = useCallback(
@@ -755,9 +759,10 @@ export default function AppShell() {
 
   const handleRequestScreenShare = useCallback(
     (userId: number) => {
+      if (voiceStatus !== 'connected') return
       gateway.voiceRequestScreenShare(userId)
     },
-    [gateway],
+    [gateway, voiceStatus],
   )
 
   const handleCreateServer = async () => {
@@ -1269,6 +1274,7 @@ export default function AppShell() {
                     // нужен (для звонка в личке/группе нет отдельного "canала"
                     // без входа, только сам звонок).
                     isConnected
+                    voiceStatus={voiceStatus}
                     onJoin={() => handleDmVoiceJoin(activeConversation.id)}
                     onLeave={handleLeaveVoice}
                   />
@@ -1318,6 +1324,7 @@ export default function AppShell() {
             onOpenProfile={openProfilePopup}
             onParticipantContextMenu={openParticipantContextMenu}
             isConnected={voice?.room.kind === 'channel' && voice.room.id === currentChannel.id}
+            voiceStatus={voiceStatus}
             onJoin={() => handleJoinVoice(currentChannel)}
             onLeave={handleLeaveVoice}
           />

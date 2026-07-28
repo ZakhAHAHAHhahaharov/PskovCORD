@@ -192,7 +192,7 @@ input {
   font-size: 28px;
   font-weight: 800;
   text-align: center;
-  color: #fff;
+  color: var(--text-normal);
   letter-spacing: 0.5px;
 }
 
@@ -223,6 +223,33 @@ input {
 
 .field-input:focus {
   border-color: var(--blurple);
+}
+
+.password-input-wrap {
+  position: relative;
+  display: flex;
+}
+
+.password-input-wrap .field-input {
+  flex: 1;
+  padding-right: 36px;
+}
+
+.password-toggle {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px;
+  border-radius: 4px;
+  color: var(--text-muted);
+}
+
+.password-toggle:hover {
+  color: var(--text-normal);
 }
 
 .btn-primary {

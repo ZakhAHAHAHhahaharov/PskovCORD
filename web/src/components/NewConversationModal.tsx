@@ -21,6 +21,7 @@ export default function NewConversationModal({
   const [selected, setSelected] = useState<Set<number>>(new Set())
   const [name, setName] = useState('')
   const [error, setError] = useState('')
+  const friends = people.filter((p) => p.is_friend)
 
   const toggle = (id: number) => {
     setError('')
@@ -63,12 +64,10 @@ export default function NewConversationModal({
 
         <div className="field-label">Кому написать</div>
         <div className="new-conversation-list">
-          {people.length === 0 && (
-            <div className="home-empty">
-              Пока никого нет — добавь друзей или зайди на общий сервер.
-            </div>
+          {friends.length === 0 && (
+            <div className="home-empty">Пока никого нет — сначала добавь друзей.</div>
           )}
-          {people.map((p) => (
+          {friends.map((p) => (
             <button
               key={p.id}
               type="button"
@@ -77,7 +76,7 @@ export default function NewConversationModal({
             >
               <Avatar name={p.username} color={p.avatar_color} image={p.avatar_image} size={28} />
               <span className="member-name">{p.username}</span>
-              {p.is_friend && <span className="member-voice">друг</span>}
+              <span className="member-voice">друг</span>
             </button>
           ))}
         </div>

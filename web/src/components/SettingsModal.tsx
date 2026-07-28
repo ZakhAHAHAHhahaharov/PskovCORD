@@ -22,6 +22,7 @@ import { useEscToClose } from '../modalStack'
 import { describeUserAgent, isMobileDevice } from '../deviceInfo'
 import { api, Session } from '../api'
 import QrScannerModal from './QrScannerModal'
+import PasswordInput from './PasswordInput'
 
 const APP_NAME: string = import.meta.env.VITE_APP_NAME || 'PskovCord'
 
@@ -355,9 +356,7 @@ function UsernameChangeModal({ onClose }: { onClose: () => void }) {
         <h2 className="modal-title">Изменить имя пользователя</h2>
 
         <div className="field-label">Текущий пароль</div>
-        <input
-          className="field-input"
-          type="password"
+        <PasswordInput
           autoComplete="current-password"
           value={password}
           onChange={(e) => setPassword(e.target.value)}
@@ -421,26 +420,20 @@ function PasswordChangeModal({ onClose }: { onClose: () => void }) {
         <h2 className="modal-title">Смена пароля</h2>
 
         <div className="field-label">Текущий пароль</div>
-        <input
-          className="field-input"
-          type="password"
+        <PasswordInput
           autoComplete="current-password"
           value={current}
           onChange={(e) => setCurrent(e.target.value)}
           autoFocus
         />
         <div className="field-label">Новый пароль</div>
-        <input
-          className="field-input"
-          type="password"
+        <PasswordInput
           autoComplete="new-password"
           value={next}
           onChange={(e) => setNext(e.target.value)}
         />
         <div className="field-label">Повторите новый пароль</div>
-        <input
-          className="field-input"
-          type="password"
+        <PasswordInput
           autoComplete="new-password"
           value={next2}
           onChange={(e) => setNext2(e.target.value)}
