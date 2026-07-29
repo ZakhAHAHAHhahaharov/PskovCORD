@@ -32,7 +32,7 @@ class ChannelSerializer(serializers.ModelSerializer):
     class Meta:
         model = Channel
         fields = ["id", "server", "name", "kind", "position",
-                  "call_started_at", "topic"]
+                  "call_started_at", "topic", "status"]
         read_only_fields = ["server"]
 
     def _state(self, obj):
@@ -104,6 +104,7 @@ def membership_settings_payload(membership: Membership) -> dict:
         "ignore_at_here": membership.ignore_at_here,
         "suppress_role_mentions": membership.suppress_role_mentions,
         "allow_dms_from_server": membership.allow_dms_from_server,
+        "pinned_channel_ids": membership.pinned_channel_ids,
     }
 
 
@@ -118,6 +119,7 @@ def _default_membership_settings_payload() -> dict:
         "ignore_at_here": False,
         "suppress_role_mentions": False,
         "allow_dms_from_server": True,
+        "pinned_channel_ids": [],
     }
 
 
@@ -262,9 +264,21 @@ class MembershipSettingsSerializer(serializers.ModelSerializer):
         model = Membership
         fields = [
             "notification_level", "ignore_at_here", "suppress_role_mentions",
-            "allow_dms_from_server",
+            "allow_dms_from_server", "pinned_channel_ids",
         ]
         extra_kwargs = {field: {"required": False} for field in fields}
+
+    def validate_pinned_channel_ids(self, value):
+        if not isinstance(value, list) or not all(isinstance(v, int) for v in value):
+            raise serializers.ValidationError("Список id каналов (целые числа).")
+        # Закрепить можно только реальный канал СВОЕГО ЖЕ сервера — иначе
+        # чужой/несуществующий id тихо осел бы в списке и ничего полезного не
+        # показывал (или, того хуже, ссылался бы на канал другого сервера).
+        server = self.instance.server
+        valid_ids = set(server.channels.values_list("id", flat=True))
+        if not set(value).issubset(valid_ids):
+            raise serializers.ValidationError("Один из каналов не найден на этом сервере.")
+        return value
 
 
 class ServerInviteSerializer(serializers.ModelSerializer):
@@ -276,10 +290,11 @@ class ServerInviteSerializer(serializers.ModelSerializer):
 
     created_by = UserSerializer(read_only=True)
     server = serializers.SerializerMethodField()
+    channel = serializers.SerializerMethodField()
 
     class Meta:
         model = ServerInvite
-        fields = ["id", "server", "created_by", "created_at", "status"]
+        fields = ["id", "server", "channel", "created_by", "created_at", "status"]
 
     def get_server(self, obj):
         # Компактно и без контекста запроса: этому серверу приглашённый
@@ -287,6 +302,11 @@ class ServerInviteSerializer(serializers.ModelSerializer):
         # my_settings ему тут ни к чему, а лишний вес (все каналы) — тем
         # более.
         return {"id": obj.server_id, "name": obj.server.name, "icon": obj.server.icon}
+
+    def get_channel(self, obj):
+        if obj.channel_id is None:
+            return None
+        return {"id": obj.channel_id, "name": obj.channel.name}
 
 
 class ConversationServerInviteSerializer(serializers.ModelSerializer):
@@ -296,10 +316,11 @@ class ConversationServerInviteSerializer(serializers.ModelSerializer):
     member_count, чтобы карточка сама показывала, куда зовут."""
 
     server = serializers.SerializerMethodField()
+    channel = serializers.SerializerMethodField()
 
     class Meta:
         model = ServerInvite
-        fields = ["id", "status", "server"]
+        fields = ["id", "status", "server", "channel"]
 
     def get_server(self, obj):
         return {
@@ -308,6 +329,11 @@ class ConversationServerInviteSerializer(serializers.ModelSerializer):
             "icon": obj.server.icon,
             "member_count": obj.server.memberships.count(),
         }
+
+    def get_channel(self, obj):
+        if obj.channel_id is None:
+            return None
+        return {"id": obj.channel_id, "name": obj.channel.name}
 
 
 class AttachmentSerializer(serializers.ModelSerializer):

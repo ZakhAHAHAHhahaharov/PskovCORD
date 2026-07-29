@@ -40,6 +40,8 @@ urlpatterns = [
     path("servers/<int:server_id>/bans/<int:user_id>",
          views.ServerBanDetail.as_view(), name="server-ban-detail"),
 
+    path("channels/<int:channel_id>",
+         views.ChannelDetail.as_view(), name="channel-detail"),
     path("channels/<int:channel_id>/messages",
          views.ChannelMessages.as_view(), name="channel-messages"),
     path("channels/<int:channel_id>/voice-members",
@@ -48,6 +50,7 @@ urlpatterns = [
          views.VoiceCredentials.as_view(), name="voice-credentials"),
 
     path("invites", views.MyServerInvites.as_view(), name="my-server-invites"),
+    path("invites/preview", views.InvitePreview.as_view(), name="invite-preview"),
     path("invites/redeem",
          views.ServerInviteRedeem.as_view(), name="server-invite-redeem"),
     path("invites/<int:invite_id>",

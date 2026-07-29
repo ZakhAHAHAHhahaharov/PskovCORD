@@ -183,6 +183,12 @@ class Membership(models.Model):
     # .can_dm). При dm_privacy=NOBODY это исключение не действует — «никто»
     # значит никто, даже через сервер.
     allow_dms_from_server = models.BooleanField(default=True)
+    # Закреплённые каналы ЭТОГО пользователя на сервере — правый клик по
+    # голосовому каналу → "Закрепить вверху" (см. chat.roles/views —
+    # порядок списка и есть порядок закрепления, новый пин встаёт первым;
+    # см. web/src/components/ChannelSidebar.tsx сортировку). Чисто личная
+    # раскладка, не влияет ни на кого другого — как заглушение/уведомления.
+    pinned_channel_ids = models.JSONField(default=list, blank=True)
 
     class Meta:
         unique_together = ("user", "server")
@@ -289,6 +295,13 @@ class ServerInvite(models.Model):
         blank=True, related_name="received_server_invites")
     # Только для LINK — короткий непредсказуемый токен в самой ссылке.
     code = models.CharField(max_length=16, blank=True, default="")
+    # Приглашение зовёт не просто на сервер, а сразу в конкретный голосовой
+    # канал (правый клик по каналу → "Пригласить в голосовой чат"/"Копировать
+    # ссылку", см. chat.views.ChannelInviteLink/ChannelInvites). null — это
+    # обычное серверное приглашение, как раньше.
+    channel = models.ForeignKey(
+        "Channel", on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="invites")
     # DIRECT больше не удаляется по решению — приглашение живёт как карточка
     # в переписке (см. ConversationMessage.server_invite) и должно после
     # принятия/отклонения продолжать показывать своё состояние там.
@@ -302,11 +315,19 @@ class ServerInvite(models.Model):
             # Не больше одного АКТИВНОГО (pending) личного приглашения от
             # сервера этому человеку разом — иначе повторные "Пригласить"
             # плодили бы дубли. Решённые (accepted/declined) остаются в
-            # истории и не мешают пригласить снова.
+            # истории и не мешают пригласить снова. Только для ОБЩИХ
+            # (channel=null) приглашений — приглашение в конкретный канал
+            # ниже своя отдельная пара, чтобы оба вида могли сосуществовать
+            # (позвал на сервер вообще, потом отдельно — в конкретный канал).
             models.UniqueConstraint(
                 fields=["server", "invited_user"],
-                condition=models.Q(kind="direct", status="pending"),
+                condition=models.Q(kind="direct", status="pending", channel__isnull=True),
                 name="unique_direct_server_invite",
+            ),
+            models.UniqueConstraint(
+                fields=["server", "invited_user", "channel"],
+                condition=models.Q(kind="direct", status="pending", channel__isnull=False),
+                name="unique_direct_channel_invite",
             ),
             # Код ссылки уникален глобально (это и есть весь секрет ссылки).
             models.UniqueConstraint(
@@ -335,6 +356,12 @@ class Channel(models.Model):
     name = models.CharField(max_length=100)
     kind = models.CharField(max_length=10, choices=KIND_CHOICES, default=TEXT)
     position = models.PositiveIntegerField(default=0)
+    # Персистентный статус канала (правый клик → "Установить статус канала",
+    # см. chat.views.ChannelDetail) — НЕ то же самое, что эфемерная тема
+    # звонка (presence.call_topic/voice_topic_update): та живёт только пока
+    # в голосовом канале кто-то есть и стирается вместе с последним ушедшим,
+    # этот виден всегда, пока его явно не поменяют/не очистят.
+    status = models.CharField(max_length=120, blank=True, default="")
 
     class Meta:
         ordering = ["position", "id"]

@@ -1,6 +1,7 @@
 import { ReactNode, useEffect } from 'react'
 import { useAuth } from '../auth'
 import { useGateway } from '../gateway'
+import { HiddenNamesCtx, useHiddenNamesState } from '../hiddenNames'
 import { useSettings } from '../settings'
 import { UserVolumeCtx, useUserVolumeState } from '../userVolume'
 import { useVoiceMesh, VoiceMeshCtx, VoiceStatus } from '../voice'
@@ -22,6 +23,7 @@ export default function VoiceProvider({
   const { outputVolume } = useSettings()
   const mesh = useVoiceMesh(voice, gateway, user?.id ?? null)
   const userVolume = useUserVolumeState()
+  const hiddenNames = useHiddenNamesState()
 
   useEffect(() => {
     if (voice) onStatus(mesh.status)
@@ -36,32 +38,38 @@ export default function VoiceProvider({
   }, [gateway])
 
   if (!voice) {
-    return <UserVolumeCtx.Provider value={userVolume}>{children}</UserVolumeCtx.Provider>
+    return (
+      <UserVolumeCtx.Provider value={userVolume}>
+        <HiddenNamesCtx.Provider value={hiddenNames}>{children}</HiddenNamesCtx.Provider>
+      </UserVolumeCtx.Provider>
+    )
   }
   return (
     <UserVolumeCtx.Provider value={userVolume}>
-      <VoiceMeshCtx.Provider value={mesh}>
-        {Array.from(mesh.remoteStreams.entries()).map(([uid, stream]) => (
-          <audio
-            key={uid}
-            autoPlay
-            muted={mesh.deafened}
-            ref={(el) => {
-              if (!el) return
-              el.srcObject = stream
-              // userVolume — 0..2 (буст громче обычного, см. userVolume.ts), но
-              // нативный HTMLMediaElement.volume принимает только 0..1 и КИДАЕТ
-              // DOMException "IndexSizeError" за пределами диапазона — именно
-              // так ронялась вся страница, стоило кому-то один раз поднять
-              // ползунок громкости конкретного участника выше 100% (буст
-              // персистится в localStorage, поэтому крash повторялся при
-              // каждом новом заходе в канал с этим человеком).
-              el.volume = Math.min(1, Math.max(0, outputVolume * userVolume.getUserVolume(uid)))
-            }}
-          />
-        ))}
-        {children}
-      </VoiceMeshCtx.Provider>
+      <HiddenNamesCtx.Provider value={hiddenNames}>
+        <VoiceMeshCtx.Provider value={mesh}>
+          {Array.from(mesh.remoteStreams.entries()).map(([uid, stream]) => (
+            <audio
+              key={uid}
+              autoPlay
+              muted={mesh.deafened}
+              ref={(el) => {
+                if (!el) return
+                el.srcObject = stream
+                // userVolume — 0..2 (буст громче обычного, см. userVolume.ts), но
+                // нативный HTMLMediaElement.volume принимает только 0..1 и КИДАЕТ
+                // DOMException "IndexSizeError" за пределами диапазона — именно
+                // так ронялась вся страница, стоило кому-то один раз поднять
+                // ползунок громкости конкретного участника выше 100% (буст
+                // персистится в localStorage, поэтому крash повторялся при
+                // каждом новом заходе в канал с этим человеком).
+                el.volume = Math.min(1, Math.max(0, outputVolume * userVolume.getUserVolume(uid)))
+              }}
+            />
+          ))}
+          {children}
+        </VoiceMeshCtx.Provider>
+      </HiddenNamesCtx.Provider>
     </UserVolumeCtx.Provider>
   )
 }

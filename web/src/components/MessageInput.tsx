@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Pencil, Plus, Smile, X } from 'lucide-react'
-import { Attachment, ChatMessageBase, uploadAttachment } from '../api'
+import { Attachment, ChatMessageBase, MentionCandidate, uploadAttachment } from '../api'
 import Avatar from './Avatar'
 import EmojiPicker, { EmojiPickerAnchor } from './EmojiPicker'
 
@@ -46,15 +46,6 @@ function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} Б`
   if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} КБ`
   return `${(bytes / (1024 * 1024)).toFixed(1)} МБ`
-}
-
-/** Минимум, нужный автокомплиту @упоминаний — и Member (ростер сервера), и
- * User (участники диалога/группы) ему удовлетворяют без адаптации. */
-export interface MentionCandidate {
-  id: number
-  username: string
-  avatar_color: string
-  avatar_image: string
 }
 
 const MENTION_RESULTS_LIMIT = 6

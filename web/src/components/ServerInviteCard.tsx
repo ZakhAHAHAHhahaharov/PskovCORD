@@ -22,12 +22,14 @@ export default function ServerInviteCard({
   onDecline: () => void
   onOpen: () => void
 }) {
-  const { server, status } = invite
+  const { server, channel, status } = invite
   return (
     <div className={`invite-card invite-card-${status}`}>
       <Avatar name={server.name} color="#5865f2" image={server.icon} size={40} />
       <div className="invite-card-body">
-        <span className="invite-card-title">Приглашение на сервер</span>
+        <span className="invite-card-title">
+          {channel ? `Приглашение в голосовой канал «${channel.name}»` : 'Приглашение на сервер'}
+        </span>
         <span className="invite-card-server">{server.name}</span>
         <span className="invite-card-members">
           <Users size={12} /> {server.member_count}{' '}

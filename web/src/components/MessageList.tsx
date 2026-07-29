@@ -1,10 +1,12 @@
 import {
-  Fragment, useCallback, useEffect, useRef, useState, MouseEvent as ReactMouseEvent,
+  Fragment, ReactNode, useCallback, useEffect, useRef, useState,
+  MouseEvent as ReactMouseEvent,
 } from 'react'
 import {
   AlertCircle, Check, Clock, Reply, Pencil, RotateCw, SmilePlus, Trash2,
 } from 'lucide-react'
-import { ChatMessageBase } from '../api'
+import { ChatMessageBase, MentionCandidate } from '../api'
+import { escapeRegExp, WORD_CHAR } from '../mentions'
 import { DeliveryStatus, DELIVERY_STATUS_PRESENTATION } from '../outbox'
 import { QUICK_REACTIONS } from '../emoji'
 import Avatar from './Avatar'
@@ -19,6 +21,56 @@ import { ProfilePopupUser } from './MiniProfilePopup'
  * "Отменить" — после этого DELETE уходит на сервер по-настоящему и отмены
  * уже не будет (см. startPendingDelete). */
 const PENDING_DELETE_MS = 10_000
+
+/** Разбивает текст сообщения на обычные куски и кликабельные "@Ник" —
+ * только для ников, которые реально есть среди mentionCandidates (ростер
+ * сервера/участники диалога), иначе любое случайное "@слово" в чужом
+ * сообщении подсвечивалось бы кнопкой в никуда. Граница токена — та же, что
+ * и при определении "упомянули ли меня" (см. web/src/mentions.ts) — то же
+ * "@Ник" не должно совпадать внутри "@Никита" или в середине email-адреса. */
+function renderMentions(
+  content: string,
+  candidates: MentionCandidate[],
+  onClick: (candidate: MentionCandidate, e: ReactMouseEvent) => void,
+): ReactNode {
+  if (candidates.length === 0) return content
+  const byName = new Map(candidates.map((c) => [c.username.toLowerCase(), c]))
+  const pattern = new RegExp(
+    `(^|[^${WORD_CHAR}@])@(${candidates.map((c) => escapeRegExp(c.username)).join('|')})(?![${WORD_CHAR}])`,
+    'gi',
+  )
+  const nodes: ReactNode[] = []
+  let lastIndex = 0
+  let match: RegExpExecArray | null
+  let key = 0
+  while ((match = pattern.exec(content))) {
+    const [, before, name] = match
+    const start = match.index + before.length
+    if (start > lastIndex) nodes.push(content.slice(lastIndex, start))
+    const candidate = byName.get(name.toLowerCase())
+    if (candidate) {
+      nodes.push(
+        <button
+          key={`mention-${key++}`}
+          type="button"
+          className="mention-pill"
+          onClick={(e) => {
+            e.stopPropagation()
+            onClick(candidate, e)
+          }}
+        >
+          @{name}
+        </button>,
+      )
+    } else {
+      nodes.push(`@${name}`)
+    }
+    lastIndex = start + 1 + name.length
+  }
+  if (lastIndex === 0) return content
+  if (lastIndex < content.length) nodes.push(content.slice(lastIndex))
+  return nodes
+}
 
 /** Сообщение в ленте. Неотправленные приходят сюда в той же форме, что и
  * настоящие (см. outbox.pendingAsMessage) — список не должен знать про два
@@ -95,6 +147,7 @@ export default function MessageList({
   onOpenProfile,
   onToggleReaction,
   resolveUsername,
+  mentionCandidates,
   onRetry,
   onDiscard,
   onAcceptServerInvite,
@@ -117,6 +170,10 @@ export default function MessageList({
   /** id участника → ник — для попапа со списком поставивших реакцию
    * (см. MessageReactions). Ростер сервера или участники диалога/группы. */
   resolveUsername: (userId: number) => string | undefined
+  /** Ростер сервера или участники диалога/группы — для рендера "@Ник" в
+   * тексте кликабельной кнопкой (см. renderMentions выше). Тот же набор,
+   * что и mentionCandidates у MessageInput (автокомплит при наборе). */
+  mentionCandidates: MentionCandidate[]
   /** Повторить отправку неотправленного сообщения (кнопка на «не доставлено»). */
   onRetry: (nonce: string) => void
   /** Выбросить неотправленное сообщение вместе с черновиком. */
@@ -281,7 +338,7 @@ export default function MessageList({
               </div>
               {m.content && (
                 <div className={`message-content ${pendingDelete ? 'message-content-deleting' : ''}`}>
-                  {m.content}
+                  {renderMentions(m.content, mentionCandidates, onOpenProfile)}
                 </div>
               )}
               <MessageAttachments attachments={m.attachments} />
