@@ -31,21 +31,38 @@ function EmojiGlyph({ emoji }: { emoji: string }) {
   return <span>{parsed.value}</span>
 }
 
-function tooltip(reaction: MessageReaction, mine: boolean): string {
-  const others = reaction.count - (mine ? 1 : 0)
-  if (mine && others === 0) return 'Вы поставили эту реакцию'
-  if (mine) return `Вы и ещё ${others}`
-  return `${reaction.count}`
+/** A, B и C — обычное перечисление через запятую с "и" перед последним, а не
+ * голый join(', ') — так подсказка читается как естественная фраза, а не
+ * как список из кода. */
+function joinNames(names: string[]): string {
+  if (names.length <= 1) return names[0] ?? ''
+  return `${names.slice(0, -1).join(', ')} и ${names[names.length - 1]}`
+}
+
+function tooltip(
+  reaction: MessageReaction,
+  currentUserId: number,
+  resolveUsername: (userId: number) => string | undefined,
+): string {
+  const names = reaction.user_ids.map((id) =>
+    id === currentUserId ? 'Вы' : resolveUsername(id) ?? 'кто-то',
+  )
+  return `Отреагировали: ${joinNames(names)}`
 }
 
 export default function MessageReactions({
   reactions,
   currentUserId,
+  resolveUsername,
   onToggle,
   onOpenPicker,
 }: {
   reactions: MessageReaction[]
   currentUserId: number
+  /** id участника → его ник, для попапа со списком поставивших реакцию —
+   * ростер сервера или участники диалога/группы, у кого эта конкретная
+   * лента сообщений (см. MessageList/AppShell). */
+  resolveUsername: (userId: number) => string | undefined
   /** Клик по реакции: поставить свою, если её нет, снять — если есть. */
   onToggle: (emoji: string, mine: boolean) => void
   /** Кнопка «+» — открыть пикер; получает якорь для позиционирования. */
@@ -61,8 +78,8 @@ export default function MessageReactions({
           <button
             key={reaction.emoji}
             type="button"
-            className={`reaction-pill ${mine ? 'mine' : ''}`}
-            title={tooltip(reaction, mine)}
+            className={`reaction-pill hover-tip ${mine ? 'mine' : ''}`}
+            data-tooltip={tooltip(reaction, currentUserId, resolveUsername)}
             onClick={() => onToggle(reaction.emoji, mine)}
           >
             <EmojiGlyph emoji={reaction.emoji} />

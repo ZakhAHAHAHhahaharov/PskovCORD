@@ -68,7 +68,7 @@ class RoleSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Role
-        fields = ["id", "name", "color", "position", "is_default",
+        fields = ["id", "name", "color", "position", "is_default", "is_owner_role",
                   "mention_permission", "mentionable_by",
                   *roles.PERMISSION_NAMES]
 

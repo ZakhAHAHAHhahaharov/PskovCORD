@@ -558,6 +558,94 @@ class ServerRolePermissionTests(APITestCase):
         self.assertEqual(list(self.membership.roles.values_list("id", flat=True)), [role.id])
 
 
+class OwnerRoleTests(APITestCase):
+    """Редактируемая роль "Владелец" (Role.is_owner_role) — владелец может
+    сознательно урезать себе часть прав, но не manage_server/manage_roles
+    (см. roles.OWNER_LOCKED_PERMISSIONS — иначе навсегда потерял бы доступ
+    к собственным настройкам, заступиться некому)."""
+
+    def setUp(self):
+        self.owner = User.objects.create_user(username="or_owner", password="pw12345")
+        self.admin = User.objects.create_user(username="or_admin", password="pw12345")
+        self.server = Server.objects.create(name="s", owner=self.owner)
+        Membership.objects.create(user=self.owner, server=self.server)
+        admin_membership = Membership.objects.create(user=self.admin, server=self.server)
+        roles.create_default_role(self.server)
+        admin_role = Role.objects.create(
+            server=self.server, name="admin", manage_roles=True, manage_members=True)
+        admin_membership.roles.add(admin_role)
+
+    def test_owner_role_is_lazily_created_on_first_list(self):
+        self.assertFalse(self.server.roles.filter(is_owner_role=True).exists())
+        self.client.force_authenticate(self.owner)
+        resp = self.client.get(f"/api/servers/{self.server.id}/roles")
+        self.assertEqual(resp.status_code, 200)
+        owner_roles = [r for r in resp.data if r["is_owner_role"]]
+        self.assertEqual(len(owner_roles), 1)
+        self.assertTrue(owner_roles[0]["manage_server"])
+
+    def test_owner_can_revoke_own_non_locked_permission(self):
+        owner_role = roles.create_owner_role(self.server)
+        self.client.force_authenticate(self.owner)
+        resp = self.client.patch(
+            f"/api/servers/{self.server.id}/roles/{owner_role.id}",
+            {"delete_messages": False}, format="json")
+        self.assertEqual(resp.status_code, 200)
+        self.assertFalse(resp.data["delete_messages"])
+        perms = roles.permissions_for(self.owner, self.server)
+        self.assertFalse(perms["delete_messages"])
+        # Остальное не задели.
+        self.assertTrue(perms["send_messages"])
+
+    def test_locked_permissions_stay_true_even_if_client_sends_false(self):
+        owner_role = roles.create_owner_role(self.server)
+        self.client.force_authenticate(self.owner)
+        resp = self.client.patch(
+            f"/api/servers/{self.server.id}/roles/{owner_role.id}",
+            {"manage_server": False, "manage_roles": False}, format="json")
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(resp.data["manage_server"])
+        self.assertTrue(resp.data["manage_roles"])
+        perms = roles.permissions_for(self.owner, self.server)
+        self.assertTrue(perms["manage_server"])
+        self.assertTrue(perms["manage_roles"])
+
+    def test_non_owner_admin_cannot_edit_owner_role(self):
+        owner_role = roles.create_owner_role(self.server)
+        # admin реально держит manage_roles — но роль владельца не про это.
+        self.client.force_authenticate(self.admin)
+        resp = self.client.patch(
+            f"/api/servers/{self.server.id}/roles/{owner_role.id}",
+            {"delete_messages": False}, format="json")
+        self.assertEqual(resp.status_code, 403)
+        owner_role.refresh_from_db()
+        self.assertTrue(owner_role.delete_messages)
+
+    def test_owner_role_cannot_be_deleted(self):
+        owner_role = roles.create_owner_role(self.server)
+        self.client.force_authenticate(self.owner)
+        resp = self.client.delete(
+            f"/api/servers/{self.server.id}/roles/{owner_role.id}")
+        self.assertEqual(resp.status_code, 400)
+        self.assertTrue(Role.objects.filter(id=owner_role.id).exists())
+
+    def test_api_cannot_create_second_owner_role(self):
+        roles.create_owner_role(self.server)
+        self.client.force_authenticate(self.owner)
+        resp = self.client.post(
+            f"/api/servers/{self.server.id}/roles",
+            {"name": "Владелец 2", "is_owner_role": True}, format="json")
+        self.assertEqual(resp.status_code, 201)
+        self.assertFalse(resp.data["is_owner_role"])
+
+    def test_member_ids_with_permission_excludes_owner_after_self_revoke(self):
+        owner_role = roles.create_owner_role(self.server)
+        owner_role.delete_messages = False
+        owner_role.save(update_fields=["delete_messages"])
+        ids = roles.member_ids_with_permission(self.server, "delete_messages")
+        self.assertNotIn(self.owner.id, ids)
+
+
 class ServerAccessTests(APITestCase):
     """Вкладка «Доступ»: режимы вступления, заявки и баны."""
 
@@ -1114,6 +1202,53 @@ class SingleDeviceVoiceTests(TransactionTestCase):
 
         await device1.disconnect()
         await device2.disconnect()
+
+    async def test_only_voice_device_leaving_clears_presence_even_with_other_tab_open(self):
+        """Реальный баг: два таба одного аккаунта, голос активен только в
+        одном. Закрыли ИМЕННО ЕГО, второй (без голоса) остался открытым —
+        presence обязана посчитать голос покинутым сразу же, а не ждать, пока
+        закроется и второй таб тоже (см. GatewayConsumer.disconnect,
+        presence.is_voice_owner). Раньше disconnect() решал разослать "вышел
+        из голоса" только когда у аккаунта не осталось НИ ОДНОГО живого
+        WS-соединения — с открытым вторым табом голос молча "зависал" в
+        presence навсегда."""
+        voice_tab = await self._connect(self.alice)
+        idle_tab = await self._connect(self.alice)
+
+        await voice_tab.send_json_to(
+            {"op": "voice_join", "channel_id": self.voice_channel.id})
+        await self._receive_until(voice_tab, "voice_peers")
+        # idle_tab — та же server-группа, поэтому сначала видит сам JOIN.
+        joined = await self._receive_until(idle_tab, "voice_state_update")
+        self.assertEqual(joined["channel_id"], self.voice_channel.id)
+
+        await voice_tab.disconnect()
+
+        left = await self._receive_until(idle_tab, "voice_state_update")
+        self.assertEqual(left["user_id"], self.alice.id)
+        self.assertIsNone(left["channel_id"])
+
+        room = await database_sync_to_async(presence.voice_channel)(str(self.alice.id))
+        self.assertIsNone(room)
+
+        await idle_tab.disconnect()
+
+    async def test_closing_idle_tab_does_not_clear_other_tabs_voice(self):
+        """Симметричная проверка на переусердствование фикса выше: закрыли
+        ВТОРОЙ (без голоса) таб — голос в первом должен остаться нетронутым."""
+        voice_tab = await self._connect(self.alice)
+        idle_tab = await self._connect(self.alice)
+
+        await voice_tab.send_json_to(
+            {"op": "voice_join", "channel_id": self.voice_channel.id})
+        await self._receive_until(voice_tab, "voice_peers")
+
+        await idle_tab.disconnect()
+
+        room = await database_sync_to_async(presence.voice_channel)(str(self.alice.id))
+        self.assertEqual(room, str(self.voice_channel.id))
+
+        await voice_tab.disconnect()
 
 
 class ChannelCreateBroadcastTests(TransactionTestCase):

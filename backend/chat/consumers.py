@@ -295,6 +295,14 @@ class GatewayConsumer(AsyncWebsocketConsumer):
             return
 
         prev_voice = await asyncio.to_thread(presence.voice_channel, self.uid)
+        # Аккаунт бывает в голосе только с ОДНОГО устройства разом (см.
+        # _kick_other_devices) — поэтому именно ЭТО соединение должно выйти
+        # из голоса при своём же обрыве, а не когда закроется последняя
+        # вкладка аккаунта вообще: у пользователя мог быть открыт ещё один
+        # таб без голоса, и раньше (remaining == 0 ниже) presence так и
+        # висел бы "в канале" призраком, пока не закроется и он тоже.
+        owns_voice = bool(prev_voice) and await asyncio.to_thread(
+            presence.is_voice_owner, self.uid, self.connection_id)
         remaining = await asyncio.to_thread(presence.user_disconnected, self.uid)
 
         for group in getattr(self, "server_groups", []) + getattr(self, "conversation_groups", []):
@@ -302,14 +310,21 @@ class GatewayConsumer(AsyncWebsocketConsumer):
         if getattr(self, "personal_group", None):
             await self.channel_layer.group_discard(self.personal_group, self.channel_name)
 
-        if remaining == 0:
-            if prev_voice and is_dm_room(prev_voice):
+        if owns_voice:
+            # user_disconnected уже вызвал clear_voice сам, если это была
+            # последняя вкладка аккаунта (remaining == 0) — здесь просто
+            # гарантируем то же самое и для случая remaining > 0; повторный
+            # clear_voice на уже пустом состоянии — no-op.
+            await asyncio.to_thread(presence.clear_voice, self.uid)
+            if is_dm_room(prev_voice):
                 await self._broadcast_dm_voice(
                     self.user.id, dm_conversation_id(prev_voice), False)
-            elif prev_voice:
+            else:
                 server_id = await self._channel_server(prev_voice)
                 await self._broadcast_voice(self.user.id, None, server_id)
                 await self._broadcast_call_state(prev_voice, server_id)
+
+        if remaining == 0:
             await self._broadcast_presence(False)
 
     async def receive(self, text_data=None, bytes_data=None):
@@ -609,7 +624,7 @@ class GatewayConsumer(AsyncWebsocketConsumer):
             return
         await self._kick_other_devices()
         peer_ids, emptied_room = await asyncio.to_thread(
-            presence.join_voice, self.uid, channel_id)
+            presence.join_voice, self.uid, channel_id, self.connection_id)
         # Демонстрация экрана не переживает смену канала (WebRTC-сессия рвётся
         # и пересобирается заново) — presence.voice_flags этого сама не знает
         # (флаг живёт до explicit clear_voice), поэтому глушим его здесь явно
@@ -657,7 +672,7 @@ class GatewayConsumer(AsyncWebsocketConsumer):
         await self._kick_other_devices()
         room = dm_room(conversation_id)
         peer_ids, emptied_room = await asyncio.to_thread(
-            presence.join_voice, self.uid, room)
+            presence.join_voice, self.uid, room, self.connection_id)
         peer_flags = await asyncio.to_thread(
             presence.voice_members_flags, room)
         await self._broadcast_dm_voice(self.user.id, conversation_id, True)

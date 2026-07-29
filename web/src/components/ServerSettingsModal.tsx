@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, ChangeEvent } from 'react'
 import {
-  Camera, Check, ChevronLeft, ChevronRight, Loader2, Plus, Shield, ShieldBan,
-  SlidersHorizontal, Trash2, UserRoundCheck, X,
+  Camera, Check, ChevronLeft, ChevronRight, Crown, Loader2, Plus, Shield,
+  ShieldBan, SlidersHorizontal, Trash2, UserRoundCheck, X,
 } from 'lucide-react'
 import {
   api, Member, Role, Server, ServerAccessMode, ServerBanEntry,
@@ -66,6 +66,35 @@ const PERMISSION_GROUPS: { title: string; items: [ServerPermission, string][] }[
   },
 ]
 
+const PERMISSION_LABELS: Record<string, string> = Object.fromEntries(
+  PERMISSION_GROUPS.flatMap((g) => g.items),
+)
+
+/** Права, которые нельзя снять с роли "Владелец" — см. одноимённую
+ * backend-константу chat.roles.OWNER_LOCKED_PERMISSIONS: без них владелец
+ * потерял бы доступ к настройкам/ролям собственного сервера навсегда,
+ * заступиться некому (он и так уже выше всех в иерархии). Бэк форсит их в
+ * True при любом PATCH независимо от этого списка — здесь чисто чтобы не
+ * дать пользователю щёлкнуть чекбокс, которому бэк всё равно не даст сработать. */
+const OWNER_LOCKED_PERMISSIONS = new Set<ServerPermission>(['manage_server', 'manage_roles'])
+
+/** Держит ли ЭТО право хоть кто-то на сервере, кроме самого владельца —
+ * через роль по умолчанию или любую персональную роль. Используется только
+ * когда владелец снимает право с САМОГО СЕБЯ (роль "Владелец") — предупредить,
+ * что после этого право не сможет применить уже никто. */
+function permissionHeldByAnyoneElse(
+  permission: ServerPermission,
+  roles: Role[],
+  members: Member[],
+): boolean {
+  const defaultRole = roles.find((r) => r.is_default)
+  if (defaultRole?.[permission]) return true
+  return members.some((m) => {
+    if (m.is_owner) return false
+    return m.role_ids.some((rid) => roles.find((r) => r.id === rid)?.[permission])
+  })
+}
+
 const ACCESS_MODES: { value: ServerAccessMode; label: string; hint: string }[] = [
   { value: 'invite', label: 'Только по приглашению', hint: 'Вступить через поиск серверов нельзя.' },
   { value: 'request', label: 'По заявке', hint: 'Заявки приходят во вкладку «Запросы».' },
@@ -76,16 +105,23 @@ function Toggle({
   checked,
   label,
   hint,
+  disabled,
   onChange,
 }: {
   checked: boolean
   label: string
   hint?: string
+  disabled?: boolean
   onChange: (v: boolean) => void
 }) {
   return (
-    <label className="srv-toggle">
-      <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} />
+    <label className={`srv-toggle ${disabled ? 'disabled' : ''}`}>
+      <input
+        type="checkbox"
+        checked={checked}
+        disabled={disabled}
+        onChange={(e) => onChange(e.target.checked)}
+      />
       <span className="srv-toggle-text">
         <span className="srv-toggle-label">{label}</span>
         {hint && <span className="srv-toggle-hint">{hint}</span>}
@@ -662,7 +698,40 @@ function RolesTab({
     }
   }
 
+  /** Чекбокс на роли "Владелец": manage_server/manage_roles всегда включены
+   * (см. backend chat.roles.OWNER_LOCKED_PERMISSIONS — без них владелец
+   * потерял бы доступ к собственным настройкам/ролям НАВСЕГДА, заступиться
+   * некому). Остальные права снять можно, но если СНЯТИЕ оставит право
+   * буквально ни у кого на сервере (кроме самого владельца, который его и
+   * снимает), спрашиваем подтверждение — тот самый сценарий, ради которого
+   * эта роль вообще редактируемая.
+   *
+   * window.confirm, а не отдельная модалка: тот же приём, что уже у
+   * "Удалить роль" чуть ниже (handleDelete) — здесь это разовое действие
+   * внутри формы, а не отдельный поток вроде подтверждения удаления
+   * сообщения. */
+  const handleTogglePermission = (key: ServerPermission, checked: boolean) => {
+    if (!draft) return
+    if (draft.is_owner_role) {
+      if (OWNER_LOCKED_PERMISSIONS.has(key)) return // чекбокс и так задизейблен
+      if (!checked && !permissionHeldByAnyoneElse(key, roles, members)) {
+        const label = PERMISSION_LABELS[key] ?? key
+        if (
+          !window.confirm(
+            `Больше ни у кого на сервере не будет права «${label}». Снять его у себя всё равно?`,
+          )
+        ) {
+          return
+        }
+      }
+    }
+    setDraft({ ...draft, [key]: checked })
+  }
+
   if (loading) return <div className="modal-empty">Загрузка…</div>
+
+  // Владелец — всегда первым в списке слева, остальной порядок как прислал бэк.
+  const sortedRoles = [...roles].sort((a, b) => Number(b.is_owner_role) - Number(a.is_owner_role))
 
   return (
     <div className="srv-tab srv-roles">
@@ -670,15 +739,20 @@ function RolesTab({
         <button type="button" className="btn-secondary srv-role-create" onClick={handleCreate}>
           <Plus size={14} /> Создать роль
         </button>
-        {roles.map((r) => (
+        {sortedRoles.map((r) => (
           <button
             key={r.id}
             type="button"
             className={`srv-role-item ${selectedId === r.id ? 'active' : ''}`}
             onClick={() => select(r)}
           >
-            <span className="srv-role-dot" style={{ background: r.color }} />
+            {r.is_owner_role ? (
+              <Crown size={13} className="srv-role-owner-icon" style={{ color: r.color }} />
+            ) : (
+              <span className="srv-role-dot" style={{ background: r.color }} />
+            )}
             <span className="srv-role-name">{r.name}</span>
+            {r.is_owner_role && <span className="srv-role-badge">владелец</span>}
             {r.is_default && <span className="srv-role-badge">для всех</span>}
           </button>
         ))}
@@ -694,16 +768,17 @@ function RolesTab({
                 className="field-input"
                 value={draft.name}
                 maxLength={100}
-                disabled={draft.is_default}
+                disabled={draft.is_default || draft.is_owner_role}
                 onChange={(e) => setDraft({ ...draft, name: e.target.value })}
               />
               <input
                 type="color"
                 value={draft.color}
+                disabled={draft.is_owner_role}
                 onChange={(e) => setDraft({ ...draft, color: e.target.value })}
                 title="Цвет роли"
               />
-              {!draft.is_default && (
+              {!draft.is_default && !draft.is_owner_role && (
                 <button
                   type="button"
                   className="icon-btn danger"
@@ -720,6 +795,15 @@ function RolesTab({
                 удалить и не нужно никому выдавать.
               </p>
             )}
+            {draft.is_owner_role && (
+              <p className="srv-hint">
+                Зеркало ваших собственных прав как владельца сервера — по умолчанию
+                полных. Можете снять с себя часть (например, «Удаление сообщений»,
+                если не хотите модерировать чат лично) — «Управлять сервером» и
+                «Управлять ролями» снять нельзя: без них вы бы потеряли доступ к
+                этой же вкладке навсегда, а вернуть их было бы уже некому.
+              </p>
+            )}
 
             {PERMISSION_GROUPS.map((group) => (
               <div key={group.title} className="srv-perm-group">
@@ -729,13 +813,14 @@ function RolesTab({
                     key={key}
                     checked={draft[key]}
                     label={label}
-                    onChange={(v) => setDraft({ ...draft, [key]: v })}
+                    disabled={draft.is_owner_role && OWNER_LOCKED_PERMISSIONS.has(key)}
+                    onChange={(v) => handleTogglePermission(key, v)}
                   />
                 ))}
               </div>
             ))}
 
-            {!draft.is_default && (
+            {!draft.is_default && !draft.is_owner_role && (
               <div className="srv-perm-group">
                 <div className="field-label">Кто может упоминать эту роль</div>
                 <p className="srv-hint">
@@ -795,15 +880,24 @@ function RolesTab({
               {saving ? <Loader2 size={15} className="spin" /> : 'Сохранить роль'}
             </button>
 
-            {!draft.is_default && (
+            {!draft.is_default && !draft.is_owner_role && (
               <>
                 <div className="field-label">Кому выдана</div>
                 <div className="srv-member-picker">
                   {members.map((m) => (
-                    <label key={m.id} className="srv-member-row">
+                    <label
+                      key={m.id}
+                      className={`srv-member-row ${m.is_owner ? 'disabled' : ''}`}
+                      title={
+                        m.is_owner
+                          ? 'Владелец сервера уже обладает всеми правами напрямую — роли на него не влияют, и сервер не даст их назначить.'
+                          : undefined
+                      }
+                    >
                       <input
                         type="checkbox"
-                        checked={m.role_ids.includes(draft.id)}
+                        checked={m.is_owner || m.role_ids.includes(draft.id)}
+                        disabled={m.is_owner}
                         onChange={(e) => toggleMemberRole(m, e.target.checked)}
                       />
                       <Avatar

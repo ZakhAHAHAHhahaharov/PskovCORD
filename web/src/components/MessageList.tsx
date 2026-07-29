@@ -1,4 +1,6 @@
-import { Fragment, useEffect, useRef, useState, MouseEvent as ReactMouseEvent } from 'react'
+import {
+  Fragment, useCallback, useEffect, useRef, useState, MouseEvent as ReactMouseEvent,
+} from 'react'
 import {
   AlertCircle, Check, Clock, Reply, Pencil, RotateCw, SmilePlus, Trash2,
 } from 'lucide-react'
@@ -6,11 +8,17 @@ import { ChatMessageBase } from '../api'
 import { DeliveryStatus, DELIVERY_STATUS_PRESENTATION } from '../outbox'
 import { QUICK_REACTIONS } from '../emoji'
 import Avatar from './Avatar'
+import DeleteMessageModal from './DeleteMessageModal'
 import EmojiPicker, { EmojiPickerAnchor } from './EmojiPicker'
 import MessageAttachments from './MessageAttachments'
 import MessageReactions from './MessageReactions'
 import ServerInviteCard from './ServerInviteCard'
 import { ProfilePopupUser } from './MiniProfilePopup'
+
+/** Сколько времени у только что подтверждённого удаления остаётся кнопка
+ * "Отменить" — после этого DELETE уходит на сервер по-настоящему и отмены
+ * уже не будет (см. startPendingDelete). */
+const PENDING_DELETE_MS = 10_000
 
 /** Сообщение в ленте. Неотправленные приходят сюда в той же форме, что и
  * настоящие (см. outbox.pendingAsMessage) — список не должен знать про два
@@ -86,6 +94,7 @@ export default function MessageList({
   onReply,
   onOpenProfile,
   onToggleReaction,
+  resolveUsername,
   onRetry,
   onDiscard,
   onAcceptServerInvite,
@@ -105,6 +114,9 @@ export default function MessageList({
   onOpenProfile: (user: ProfilePopupUser, e: ReactMouseEvent) => void
   /** Поставить/снять реакцию. mine — стоит ли она уже от нас. */
   onToggleReaction: (messageId: number, emoji: string, mine: boolean) => void
+  /** id участника → ник — для попапа со списком поставивших реакцию
+   * (см. MessageReactions). Ростер сервера или участники диалога/группы. */
+  resolveUsername: (userId: number) => string | undefined
   /** Повторить отправку неотправленного сообщения (кнопка на «не доставлено»). */
   onRetry: (nonce: string) => void
   /** Выбросить неотправленное сообщение вместе с черновиком. */
@@ -141,10 +153,59 @@ export default function MessageList({
     }
   }, [messages])
 
-  const confirmDelete = (m: ChatMessageBase) => {
-    if (window.confirm('Удалить это сообщение? Действие необратимо.')) {
-      onDelete(m.id)
+  // Сообщение, для которого открыт DeleteMessageModal (обычный клик по
+  // корзине — см. requestDelete). Shift+клик минует его — requestDelete
+  // сразу зовёт startPendingDelete.
+  const [confirmingDelete, setConfirmingDelete] = useState<ChatMessageBase | null>(null)
+
+  // id сообщений в 10-секундном окне отмены — таймеры реального удаления
+  // лежат в ref (не в стейте: сам по себе таймер не должен вызывать
+  // перерисовку), а Set в стейте — только чтобы отрисовать затемнение/
+  // перечёркивание и полоску отмены под нужным сообщением.
+  const pendingDeleteTimers = useRef<Map<number, ReturnType<typeof setTimeout>>>(new Map())
+  const [pendingDeleteIds, setPendingDeleteIds] = useState<Set<number>>(new Set())
+
+  // Таймеры — не эффект с cleanup на размонтирование: если уйти с канала, где
+  // только что нажали "Удалить", отмена (и настоящее удаление по её
+  // истечении) должна довестись до конца в фоне, а не молча забыться вместе
+  // с компонентом — как и "отменить отправку" в других почтовых клиентах.
+  const startPendingDelete = useCallback(
+    (messageId: number) => {
+      setPendingDeleteIds((prev) => new Set(prev).add(messageId))
+      const timer = setTimeout(() => {
+        pendingDeleteTimers.current.delete(messageId)
+        setPendingDeleteIds((prev) => {
+          const next = new Set(prev)
+          next.delete(messageId)
+          return next
+        })
+        onDelete(messageId)
+      }, PENDING_DELETE_MS)
+      pendingDeleteTimers.current.set(messageId, timer)
+    },
+    [onDelete],
+  )
+
+  const cancelPendingDelete = useCallback((messageId: number) => {
+    const timer = pendingDeleteTimers.current.get(messageId)
+    if (timer) clearTimeout(timer)
+    pendingDeleteTimers.current.delete(messageId)
+    setPendingDeleteIds((prev) => {
+      const next = new Set(prev)
+      next.delete(messageId)
+      return next
+    })
+  }, [])
+
+  /** Клик по корзине — обычный открывает подтверждение, Shift+клик
+   * (см. подсказку в самой модалке) минует его и сразу ставит сообщение в
+   * 10-секундное окно отмены. */
+  const requestDelete = (m: ChatMessageBase, shiftKey: boolean) => {
+    if (shiftKey) {
+      startPendingDelete(m.id)
+      return
     }
+    setConfirmingDelete(m)
   }
 
   return (
@@ -155,6 +216,7 @@ export default function MessageList({
       {messages.map((m, i) => {
         const isAuthor = m.author.id === currentUserId
         const pending = m.pendingNonce != null
+        const pendingDelete = pendingDeleteIds.has(m.id)
         // Разделитель дня — перед первым сообщением дня целиком (включая
         // самое первое сообщение в ленте, если она не пуста), не перед
         // каждым отдельным сообщением.
@@ -217,7 +279,11 @@ export default function MessageList({
                 {m.edited_at && <span className="message-edited">(изменено)</span>}
                 {status && <DeliveryIndicator status={status} />}
               </div>
-              {m.content && <div className="message-content">{m.content}</div>}
+              {m.content && (
+                <div className={`message-content ${pendingDelete ? 'message-content-deleting' : ''}`}>
+                  {m.content}
+                </div>
+              )}
               <MessageAttachments attachments={m.attachments} />
               {m.server_invite && (
                 <ServerInviteCard
@@ -228,15 +294,29 @@ export default function MessageList({
                   onOpen={() => onOpenInvitedServer?.(m.server_invite!.server.id)}
                 />
               )}
-              {!pending && (
-                <MessageReactions
-                  reactions={m.reactions}
-                  currentUserId={currentUserId}
-                  onToggle={(emoji, mine) => onToggleReaction(m.id, emoji, mine)}
-                  onOpenPicker={(rect) =>
-                    setReactionPicker({ messageId: m.id, anchor: { rect } })
-                  }
-                />
+              {pendingDelete ? (
+                <div className="message-delete-pending-bar">
+                  <span className="message-delete-pending-text">Сообщение будет удалено…</span>
+                  <button
+                    type="button"
+                    className="message-delete-undo"
+                    onClick={() => cancelPendingDelete(m.id)}
+                  >
+                    Отменить
+                  </button>
+                </div>
+              ) : (
+                !pending && (
+                  <MessageReactions
+                    reactions={m.reactions}
+                    currentUserId={currentUserId}
+                    resolveUsername={resolveUsername}
+                    onToggle={(emoji, mine) => onToggleReaction(m.id, emoji, mine)}
+                    onOpenPicker={(rect) =>
+                      setReactionPicker({ messageId: m.id, anchor: { rect } })
+                    }
+                  />
+                )
               )}
               {m.deliveryStatus === 'failed' && (
                 <div className="message-failed-actions">
@@ -262,8 +342,10 @@ export default function MessageList({
             </div>
             {/* У неотправленного сообщения ещё нет id на сервере — отвечать,
                 реагировать и удалять его через обычные ручки нельзя; для
-                него свои кнопки выше. */}
-            {!pending && (
+                него свои кнопки выше. Сообщение в 10-секундном окне отмены —
+                та же логика: действовать больше не над чем, кроме "Отменить"
+                у самого текста. */}
+            {!pending && !pendingDelete && (
               <div className="message-actions">
                 {/* Быстрые реакции прямо в ховер-меню: самый частый сценарий —
                     поставить 👍, ради него открывать пикер незачем. */}
@@ -316,8 +398,8 @@ export default function MessageList({
                 {(isAuthor || canModerate) && (
                   <button
                     className="message-action message-action-danger"
-                    title="Удалить"
-                    onClick={() => confirmDelete(m)}
+                    title="Удалить (Shift+клик — без подтверждения)"
+                    onClick={(e) => requestDelete(m, e.shiftKey)}
                   >
                     <Trash2 size={15} />
                   </button>
@@ -342,6 +424,18 @@ export default function MessageList({
             setReactionPicker(null)
           }}
           onClose={() => setReactionPicker(null)}
+        />
+      )}
+
+      {confirmingDelete && (
+        <DeleteMessageModal
+          message={confirmingDelete}
+          timeLabel={formatTime(confirmingDelete.created_at)}
+          onClose={() => setConfirmingDelete(null)}
+          onConfirm={() => {
+            startPendingDelete(confirmingDelete.id)
+            setConfirmingDelete(null)
+          }}
         />
       )}
     </div>

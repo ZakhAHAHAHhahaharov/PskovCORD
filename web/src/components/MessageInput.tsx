@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Pencil, Plus, Smile, X } from 'lucide-react'
 import { Attachment, ChatMessageBase, uploadAttachment } from '../api'
+import Avatar from './Avatar'
 import EmojiPicker, { EmojiPickerAnchor } from './EmojiPicker'
 
 export interface MessageInputPrefill {
@@ -47,6 +48,17 @@ function formatSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} МБ`
 }
 
+/** Минимум, нужный автокомплиту @упоминаний — и Member (ростер сервера), и
+ * User (участники диалога/группы) ему удовлетворяют без адаптации. */
+export interface MentionCandidate {
+  id: number
+  username: string
+  avatar_color: string
+  avatar_image: string
+}
+
+const MENTION_RESULTS_LIMIT = 6
+
 export default function MessageInput({
   channelName,
   onSend,
@@ -57,6 +69,10 @@ export default function MessageInput({
   onCancelEdit,
   hash = true,
   prefill,
+  draftKey,
+  loadDraft,
+  saveDraft,
+  mentionCandidates = [],
 }: {
   /** Название текстового канала/собеседника/группы для плейсхолдера. */
   channelName: string
@@ -71,13 +87,91 @@ export default function MessageInput({
   /** Внешняя подстановка текста в поле ввода — например, «Упомянуть» из
    * контекстного меню участника голосового канала (см. AppShell.handleMention). */
   prefill?: MessageInputPrefill | null
+  /** Идентичность получателя ("channel-5", "dm-12") — вместе с ключом на самом
+   * компоненте (см. AppShell) заставляет React пересоздавать инпут при смене
+   * канала/диалога, а loadDraft/saveDraft — какой текст восстановить в
+   * СВЕЖЕМ инстансе. Не хранится тут же локальным стейтом: черновик должен
+   * пережить конкретно эту пару unmount/mount (переход в голосовой канал и
+   * обратно), а не сам компонент, поэтому источник правды — снаружи, в
+   * AppShell (см. pendingDraftRef там). */
+  draftKey?: string
+  loadDraft?: (key: string) => string | undefined
+  saveDraft?: (key: string, text: string) => void
+  /** Кандидаты на @упоминание при вводе "@ник" — ростер сервера или участники
+   * диалога/группы, кому принадлежит это конкретное поле ввода. */
+  mentionCandidates?: MentionCandidate[]
 }) {
-  const [value, setValue] = useState('')
+  const [value, setValue] = useState(() => (draftKey && loadDraft ? loadDraft(draftKey) ?? '' : ''))
   const [staged, setStaged] = useState<StagedFile[]>([])
   const [emojiAnchor, setEmojiAnchor] = useState<EmojiPickerAnchor | null>(null)
   const [dragging, setDragging] = useState(false)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+
+  // Обёртка вместо голого setValue — черновик обязан улететь наружу при
+  // КАЖДОМ изменении текста, иначе AppShell отдаст следующему инстансу
+  // (после отлучки в голосовой канал) устаревшее значение.
+  const updateValue = useCallback(
+    (next: string) => {
+      setValue(next)
+      if (draftKey && saveDraft) saveDraft(draftKey, next)
+    },
+    [draftKey, saveDraft],
+  )
+
+  // --- автокомплит @упоминаний -------------------------------------------
+  // mentionStart — индекс символа "@" в value, от которого набирается запрос;
+  // null — подсказка закрыта. Пересчитывается при каждом изменении текста
+  // (см. onChange), не при клике/стрелках — точечная перестановка курсора
+  // внутри уже набранного "@ника" не открывает подсказку заново, только сам
+  // ввод.
+  const [mentionStart, setMentionStart] = useState<number | null>(null)
+  const [mentionQuery, setMentionQuery] = useState('')
+  const [mentionActiveIndex, setMentionActiveIndex] = useState(0)
+
+  const mentionMatches =
+    mentionStart == null
+      ? []
+      : mentionCandidates
+          .filter((c) => c.username.toLowerCase().includes(mentionQuery.toLowerCase()))
+          .sort((a, b) => {
+            const q = mentionQuery.toLowerCase()
+            const aStarts = a.username.toLowerCase().startsWith(q) ? 0 : 1
+            const bStarts = b.username.toLowerCase().startsWith(q) ? 0 : 1
+            return aStarts - bStarts || a.username.localeCompare(b.username)
+          })
+          .slice(0, MENTION_RESULTS_LIMIT)
+
+  const mentionOpen = mentionStart != null && mentionMatches.length > 0
+
+  /** Ищет "@токен" непосредственно перед caret — начало строки или пробел
+   * перед "@" (иначе "a@b" в середине слова считался бы началом упоминания). */
+  const detectMention = useCallback((text: string, caret: number) => {
+    const uptoCaret = text.slice(0, caret)
+    const at = uptoCaret.lastIndexOf('@')
+    if (at === -1) return null
+    const before = at === 0 ? '' : uptoCaret[at - 1]
+    if (before && !/\s/.test(before)) return null
+    const query = uptoCaret.slice(at + 1)
+    if (/\s/.test(query)) return null // пробел после "@" — токен уже закрыт
+    return { start: at, query }
+  }, [])
+
+  const applyMention = (candidate: MentionCandidate) => {
+    if (mentionStart == null) return
+    const input = inputRef.current
+    const caret = input?.selectionStart ?? value.length
+    const before = value.slice(0, mentionStart)
+    const after = value.slice(caret)
+    const inserted = `@${candidate.username} `
+    updateValue(before + inserted + after)
+    setMentionStart(null)
+    const nextCaret = before.length + inserted.length
+    requestAnimationFrame(() => {
+      input?.focus()
+      input?.setSelectionRange(nextCaret, nextCaret)
+    })
+  }
 
   // Высота textarea растёт вместе с текстом (до предела в CSS max-height,
   // дальше — собственный скролл). height:auto сначала — иначе браузер меряет
@@ -102,7 +196,7 @@ export default function MessageInput({
 
   useEffect(() => {
     if (!prefill) return
-    setValue(prefill.text)
+    updateValue(prefill.text)
     inputRef.current?.focus()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [prefill?.token])
@@ -214,11 +308,37 @@ export default function MessageInput({
     // Пока хоть один файл в пути — ждём: иначе сообщение уйдёт без него.
     if (uploading) return
     onSend({ content, attachments: readyAttachments })
-    setValue('')
+    // updateValue, а не голый setValue — иначе черновик отправленного текста
+    // остался бы висеть в хранилище AppShell и вернулся бы призраком после
+    // захода в голосовой канал и обратно (см. draftKey/loadDraft/saveDraft).
+    updateValue('')
     clearStaged()
   }
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (mentionOpen) {
+      const activeIndex = Math.min(mentionActiveIndex, mentionMatches.length - 1)
+      if (e.key === 'ArrowDown') {
+        e.preventDefault()
+        setMentionActiveIndex((activeIndex + 1) % mentionMatches.length)
+        return
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault()
+        setMentionActiveIndex((activeIndex - 1 + mentionMatches.length) % mentionMatches.length)
+        return
+      }
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        e.preventDefault()
+        applyMention(mentionMatches[activeIndex])
+        return
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        setMentionStart(null)
+        return
+      }
+    }
     if (e.key === 'Escape' && editTarget) {
       onCancelEdit()
       setValue('')
@@ -239,13 +359,13 @@ export default function MessageInput({
   const insertEmoji = (emoji: string) => {
     const input = inputRef.current
     if (!input) {
-      setValue((prev) => prev + emoji)
+      updateValue(value + emoji)
       return
     }
     const start = input.selectionStart ?? value.length
     const end = input.selectionEnd ?? start
     const next = value.slice(0, start) + emoji + value.slice(end)
-    setValue(next)
+    updateValue(next)
     setEmojiAnchor(null)
     // Курсор — сразу после вставленного, чтобы можно было продолжать печатать.
     // requestAnimationFrame: до перерисовки в поле ещё старое значение, и
@@ -292,6 +412,23 @@ export default function MessageInput({
       }}
       onDrop={handleDrop}
     >
+      {mentionOpen && (
+        <div className="mention-popup" onMouseDown={(e) => e.preventDefault()}>
+          {mentionMatches.map((c, i) => (
+            <button
+              key={c.id}
+              type="button"
+              className={`mention-popup-item ${i === Math.min(mentionActiveIndex, mentionMatches.length - 1) ? 'active' : ''}`}
+              onMouseEnter={() => setMentionActiveIndex(i)}
+              onClick={() => applyMention(c)}
+            >
+              <Avatar name={c.username} color={c.avatar_color} image={c.avatar_image} size={22} />
+              <span className="mention-popup-name">{c.username}</span>
+            </button>
+          ))}
+        </div>
+      )}
+
       {editTarget ? (
         <div className="reply-banner edit-banner">
           <span className="reply-banner-text">
@@ -387,7 +524,14 @@ export default function MessageInput({
           ref={inputRef}
           rows={1}
           value={value}
-          onChange={(e) => setValue(e.target.value)}
+          onChange={(e) => {
+            const next = e.target.value
+            updateValue(next)
+            const found = detectMention(next, e.target.selectionStart ?? next.length)
+            setMentionStart(found?.start ?? null)
+            setMentionQuery(found?.query ?? '')
+            setMentionActiveIndex(0)
+          }}
           onKeyDown={handleKeyDown}
           onPaste={handlePaste}
           placeholder={

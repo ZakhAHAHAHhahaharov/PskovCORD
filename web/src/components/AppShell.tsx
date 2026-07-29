@@ -172,6 +172,26 @@ export default function AppShell() {
     null,
   )
   const [mentionPrefill, setMentionPrefill] = useState<MessageInputPrefill | null>(null)
+  // Черновик композера переживает только "отлучку" в НЕ-текстовое место
+  // (голосовой канал, пустой экран) — сам MessageInput размонтируется там
+  // (см. key={draftKey} у обоих <MessageInput> ниже), и без этого хранилища
+  // текст терялся бы безвозвратно. При этом переключение на ДРУГОЙ текстовый
+  // канал/диалог черновик явно стирает (см. loadDraft) — по этому каналу он
+  // "не должен сохраняться", а не просто не долетать до чужого поля ввода.
+  const pendingDraftRef = useRef<{ key: string; text: string } | null>(null)
+  const saveDraft = useCallback((key: string, text: string) => {
+    pendingDraftRef.current = text ? { key, text } : null
+  }, [])
+  const loadDraft = useCallback((key: string): string | undefined => {
+    const pending = pendingDraftRef.current
+    if (!pending) return undefined
+    if (pending.key === key) return pending.text
+    // Чужой черновик (другого канала/диалога) — не подсовываем и не бережём
+    // на случай возврата, он был привязан к тому месту, а не к "последнему
+    // тексту вообще".
+    pendingDraftRef.current = null
+    return undefined
+  }, [])
   // channel_id канала, где ПРЯМО СЕЙЧАС идёт голосование за мут (по кому бы
   // то ни было) — используется, только чтобы задизейблить «начать ещё одно»
   // в ParticipantContextMenu; сам факт голосования и его результат живут в
@@ -1984,6 +2004,11 @@ export default function AppShell() {
                 onReply={handleDmReplyRequest}
                 onOpenProfile={openProfilePopup}
                 onToggleReaction={handleToggleDmReaction}
+                resolveUsername={(id) =>
+                  id === user!.id
+                    ? user!.username
+                    : activeConversation.participants.find((p) => p.id === id)?.username
+                }
                 onRetry={(nonce) => outbox.retry(nonce)}
                 onDiscard={(nonce) => outbox.discard(nonce)}
                 onAcceptServerInvite={handleAcceptServerInvite}
@@ -1991,6 +2016,11 @@ export default function AppShell() {
                 onOpenInvitedServer={handleOpenInvitedServer}
               />
               <MessageInput
+                key={`dm-${activeConversation.id}`}
+                draftKey={`dm-${activeConversation.id}`}
+                loadDraft={loadDraft}
+                saveDraft={saveDraft}
+                mentionCandidates={activeConversation.participants}
                 channelName={conversationDisplayName(activeConversation)}
                 hash={false}
                 onSend={handleSendDm}
@@ -2058,10 +2088,16 @@ export default function AppShell() {
               onReply={handleReplyRequest}
               onOpenProfile={openProfilePopup}
               onToggleReaction={handleToggleReaction}
+              resolveUsername={(id) => members.find((m) => m.id === id)?.username}
               onRetry={(nonce) => outbox.retry(nonce)}
               onDiscard={(nonce) => outbox.discard(nonce)}
             />
             <MessageInput
+              key={`channel-${currentChannel.id}`}
+              draftKey={`channel-${currentChannel.id}`}
+              loadDraft={loadDraft}
+              saveDraft={saveDraft}
+              mentionCandidates={members}
               channelName={currentChannel.name}
               onSend={handleSend}
               replyTarget={replyTarget}

@@ -54,6 +54,10 @@ def _voice_flags_key(uid) -> str:
     return f"presence:voice_flags:{uid}"
 
 
+def _voice_owner_key(uid) -> str:
+    return f"presence:voice_owner:{uid}"
+
+
 def _call_started_key(channel_id) -> str:
     return f"presence:call_started:{channel_id}"
 
@@ -160,8 +164,18 @@ def set_voice(uid, channel_id):
     return prev
 
 
-def join_voice(uid, channel_id):
+def join_voice(uid, channel_id, connection_id=None):
     """Атомарно ставит пользователя в голосовой канал.
+
+    connection_id — какое именно WS-соединение (вкладка/устройство) это
+    сделало; см. voice_owner/is_voice_owner ниже и GatewayConsumer.disconnect
+    в consumers.py: аккаунт может быть в голосе только с ОДНОГО устройства
+    разом (см. _kick_other_devices), поэтому именно ЭТО соединение и должно
+    выходить из голоса при своём обрыве — не когда закроется последняя
+    вкладка аккаунта вообще (тех, что не при голосе, может быть открыто
+    сколько угодно). Опционален и по умолчанию не трогается — это чисто
+    сервисная метка, часть публичного API join_voice не расширяет для тех,
+    кому она не нужна (тесты, heartbeat_sweep).
 
     Возвращает (peers, emptied_channel):
     - peers — id участников, которые уже были в канале ДО этого вызова
@@ -177,6 +191,9 @@ def join_voice(uid, channel_id):
         args=[uid, channel_id],
     )
     peers = [p for p in peers if p != uid]
+
+    if connection_id is not None:
+        _r.set(_voice_owner_key(uid), connection_id)
 
     emptied_channel = None
     if prev and prev != channel_id and not _r.scard(_voice_members_key(prev)):
@@ -199,11 +216,22 @@ def clear_voice(uid):
         if not _r.scard(_voice_members_key(prev)):
             _clear_call_state(prev)
     _r.delete(_voice_flags_key(uid))
+    _r.delete(_voice_owner_key(uid))
     return prev
 
 
 def voice_channel(uid):
     return _r.get(_voice_key(str(uid)))
+
+
+def is_voice_owner(uid, connection_id) -> bool:
+    """Это ли соединение сейчас "владеет" голосом пользователя — см.
+    join_voice/GatewayConsumer.disconnect. connection_id пустой/None (клиент
+    почему-то не прислал device_id) никогда не считается владельцем —
+    иначе два таких соединения подряд ложно совпали бы друг с другом."""
+    if not connection_id:
+        return False
+    return _r.get(_voice_owner_key(str(uid))) == connection_id
 
 
 def voice_member_ids(channel_id) -> set:
