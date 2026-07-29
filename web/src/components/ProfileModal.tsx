@@ -1,5 +1,5 @@
 import { useRef, useState, ChangeEvent } from 'react'
-import { Check, Copy, MessageSquare, Plus } from 'lucide-react'
+import { Blocks, Calendar, Check, Copy, MessageSquare, Plus } from 'lucide-react'
 import { useAuth } from '../auth'
 import { api, Me } from '../api'
 import { useEscToClose } from '../modalStack'
@@ -128,6 +128,8 @@ export default function ProfileModal({ onClose }: { onClose: () => void }) {
             </button>
           </div>
 
+          <div className="profile-popup-divider" />
+
           <InlineEditableText
             className="profile-popup-bio"
             value={user.bio}
@@ -137,13 +139,21 @@ export default function ProfileModal({ onClose }: { onClose: () => void }) {
             onSave={(v) => patch({ bio: v })}
           />
 
+          <div className="profile-popup-divider" />
+
           <div className="profile-modal-section">
-            <div className="profile-modal-section-title">В числе участников с</div>
+            <div className="profile-modal-section-title">
+              <Calendar size={13} /> В числе участников с
+            </div>
             <div className="profile-modal-section-value">{joinedDate}</div>
           </div>
 
+          <div className="profile-popup-divider" />
+
           <div className="profile-modal-section">
-            <div className="profile-modal-section-title">Интеграции</div>
+            <div className="profile-modal-section-title">
+              <Blocks size={13} /> Интеграции
+            </div>
             <button
               type="button"
               className="profile-modal-add-integration"

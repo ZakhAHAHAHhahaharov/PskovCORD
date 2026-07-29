@@ -6,7 +6,8 @@ import {
   KeyboardEvent as ReactKeyboardEvent,
 } from 'react'
 import {
-  Check, Copy, UserPlus, UserCheck, Loader2, MessageSquare, Smile,
+  Calendar, Check, Copy, UserPlus, UserCheck, Loader2, MessageSquare,
+  NotebookPen, Smile,
 } from 'lucide-react'
 import { api } from '../api'
 import { useEscToClose } from '../modalStack'
@@ -270,30 +271,45 @@ export default function MiniProfilePopup({
         )}
       </div>
 
-      {card?.bio && <div className="profile-popup-bio">{card.bio}</div>}
+      {card?.bio && (
+        <>
+          <div className="profile-popup-divider" />
+          <div className="profile-popup-bio">{card.bio}</div>
+        </>
+      )}
 
       {joinedDate && (
-        <div className="profile-modal-section">
-          <div className="profile-modal-section-title">В числе участников с</div>
-          <div className="profile-modal-section-value">{joinedDate}</div>
-        </div>
+        <>
+          <div className="profile-popup-divider" />
+          <div className="profile-modal-section">
+            <div className="profile-modal-section-title">
+              <Calendar size={13} /> В числе участников с
+            </div>
+            <div className="profile-modal-section-value">{joinedDate}</div>
+          </div>
+        </>
       )}
 
       {!isSelf && (
-        <div className="profile-modal-section">
-          <div className="profile-modal-section-title">Заметка (видна только вам)</div>
-          <InlineEditableText
-            className="profile-popup-note"
-            value={note}
-            placeholder="Нажмите, чтобы добавить заметку"
-            maxLength={300}
-            multiline
-            onSave={async (text) => {
-              await api.setUserNote(user.id, text)
-              setNote(text)
-            }}
-          />
-        </div>
+        <>
+          <div className="profile-popup-divider" />
+          <div className="profile-modal-section">
+            <div className="profile-modal-section-title">
+              <NotebookPen size={13} /> Заметка (видна только вам)
+            </div>
+            <InlineEditableText
+              className="profile-popup-note"
+              value={note}
+              placeholder="Нажмите, чтобы добавить заметку"
+              maxLength={300}
+              multiline
+              onSave={async (text) => {
+                await api.setUserNote(user.id, text)
+                setNote(text)
+              }}
+            />
+          </div>
+        </>
       )}
     </div>
   )
