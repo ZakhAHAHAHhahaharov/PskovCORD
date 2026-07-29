@@ -29,6 +29,11 @@ GatewayConsumer — единственный WebSocket на клиента (по
     {"op": "voice_request_screen_share", "target_user_id": <id>} — попросить
      участника того же голосового канала включить демонстрацию экрана
      (персональный тихий пинг, см. voice_screen_share_requested ниже).
+    {"op": "voice_wake_user", "target_user_id": <id>} — «Разбудить мальчика»:
+     разбудить участника того же голосового канала, у которого СЕЙЧАС выключен
+     микрофон или звук (иначе сервер молча игнорирует — см.
+     _handle_voice_wake_user); в отличие от voice_request_screen_share это не
+     тихий пинг, а нарочно противный звук на стороне адресата.
     {"op": "set_status", "status": "online" | "dnd" | "invisible"}
     {"op": "ping"}  — хартбит, см. presence.heartbeat/chat.heartbeat_sweep
 
@@ -83,6 +88,10 @@ GatewayConsumer — единственный WebSocket на клиента (по
     {"op": "voice_screen_share_requested", "channel_id": <id>,
      "from_user_id": <id>, "from_username": "..."} — персонально: кто-то из
      того же голосового канала просит включить демонстрацию экрана.
+    {"op": "voice_wake_requested", "channel_id": <id>, "from_user_id": <id>,
+     "from_username": "..."} — персонально: кто-то из того же голосового
+     канала «будит» нас (см. voice_wake_user выше) — клиент обязан
+     проиграть звук независимо от собственного выключенного микрофона/звука.
     {"op": "voice_call_state", "channel_id": <id>,
      "call_started_at": <float|null>, "topic": "..."|null}
     {"op": "profile_update", "user_id": <id>, "username": "...",
@@ -374,6 +383,8 @@ class GatewayConsumer(AsyncWebsocketConsumer):
                 await self._handle_voice_mute_vote_cast(data)
             elif op == "voice_request_screen_share":
                 await self._handle_voice_request_screen_share(data)
+            elif op == "voice_wake_user":
+                await self._handle_voice_wake_user(data)
             elif op == "set_status":
                 await self._handle_set_status(data)
             elif op == "dm_send_message":
@@ -837,6 +848,30 @@ class GatewayConsumer(AsyncWebsocketConsumer):
         await self.channel_layer.group_send(
             f"user_{target_user_id}", {"type": "broadcast", "payload": {
                 "op": "voice_screen_share_requested",
+                "channel_id": int(own_room),
+                "from_user_id": self.user.id,
+                "from_username": self.user.username,
+            }})
+
+    async def _handle_voice_wake_user(self, data):
+        target_user_id = data.get("target_user_id")
+        if not target_user_id or int(target_user_id) == self.user.id:
+            return
+        own_room = await asyncio.to_thread(presence.voice_channel, self.uid)
+        if not own_room or is_dm_room(own_room):
+            return
+        target_room = await asyncio.to_thread(presence.voice_channel, str(target_user_id))
+        if target_room != own_room:
+            return
+        # Будить можно только того, кто сам молчит (выключил микрофон или
+        # звук) — проверяем на сервере, а не только на клиенте (та же
+        # кнопка там задизейблена, но это легко обойти прямой отправкой op).
+        flags = await asyncio.to_thread(presence.voice_flags, str(target_user_id))
+        if not (flags["muted"] or flags["deafened"]):
+            return
+        await self.channel_layer.group_send(
+            f"user_{target_user_id}", {"type": "broadcast", "payload": {
+                "op": "voice_wake_requested",
                 "channel_id": int(own_room),
                 "from_user_id": self.user.id,
                 "from_username": self.user.username,
