@@ -6256,16 +6256,59 @@ button.settings-row-clickable:hover .settings-row-label {
     gap: 8px;
   }
 
-  /* QR-сканер на мобилке — окно камеры растягивается на всё доступное
-     место под шапкой (а не квадратик по ширине карточки, как на десктопе,
-     где модалка узкая и центрированная) — .qr-scanner-modal уже
-     display:flex;flex-direction:column, а .modal сама на этом брейкпоинте
-     на весь экран (см. правило выше), так что flex:1 растит вьюпорт
-     до низа доступной высоты. */
-  .qr-scanner-viewport {
-    flex: 1;
-    width: auto;
+  /* QR-сканер на мобилке — камера от края до края экрана, а не квадратик
+     внутри серой карточки с шапкой над ним. .qr-scanner-modal-camera —
+     только у экрана сканирования (см. QrScannerModal.tsx), а не у
+     QrConfirmCard: тому по-прежнему нужны обычные паддинги модалки. */
+  .qr-scanner-modal-camera {
+    padding: 0;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .qr-scanner-modal-camera .qr-scanner-viewport {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
     aspect-ratio: auto;
+    border-radius: 0;
+    margin: 0;
+  }
+
+  /* Заголовок (со стрелкой назад) и подсказка — поверх видео, не в
+     отдельной шапке над ним: градиент-подложка сверху для читаемости
+     текста поверх произвольного фона в кадре. */
+  .qr-scanner-modal-camera .modal-title {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 2;
+    margin: 0;
+    padding: max(14px, env(safe-area-inset-top)) 16px 28px;
+    color: #fff;
+    background: linear-gradient(to bottom, rgba(0, 0, 0, 0.7), transparent);
+  }
+
+  .qr-scanner-modal-camera .modal-title .chat-back-btn {
+    color: #fff;
+  }
+
+  .qr-scanner-modal-camera .modal-title .chat-back-btn:hover {
+    background: rgba(255, 255, 255, 0.15);
+  }
+
+  .qr-scanner-modal-camera .login-sub {
+    position: absolute;
+    top: 56px;
+    left: 0;
+    right: 0;
+    z-index: 2;
+    margin: 0;
+    padding: 0 16px;
+    color: rgba(255, 255, 255, 0.85);
+    text-align: left;
   }
 
   /* ---- редактор ролей сервера — список ролей над редактором, а не рядом
