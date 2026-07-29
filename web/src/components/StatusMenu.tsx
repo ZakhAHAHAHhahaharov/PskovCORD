@@ -191,7 +191,12 @@ export default function StatusMenu({
             pronouns={user.pronouns}
           />
 
-          {user.bio && <div className="profile-popup-bio">{user.bio}</div>}
+          {user.bio && (
+            <>
+              <div className="profile-popup-divider" />
+              <div className="profile-popup-bio">{user.bio}</div>
+            </>
+          )}
 
           {/* Блок 2 (опционально) — текущий голосовой/ЛС-звонок */}
           {voice && (

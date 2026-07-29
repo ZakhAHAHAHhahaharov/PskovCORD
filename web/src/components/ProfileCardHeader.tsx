@@ -8,15 +8,19 @@ const PRONOUN_SUGGESTIONS = [
   'any pronouns', 'ask me',
 ]
 
+const AVATAR_SIZE = 84
+
 /**
- * Банер + аватарка + "облачко" произвольного статуса + имя + строка
- * username • местоимения • значок — общий верх карточки профиля,
- * переиспользуется в StatusMenu (свой профиль), MiniProfilePopup (чужой) и
- * ProfileModal (живое превью по мере ввода). Сам по себе — только для
- * чтения; чтобы включить редактирование прямо в карточке (используется
- * только в ProfileModal), передать проп `edit`: тогда аватар/баннер
- * оборачиваются в ImageHoverMenu, а имя/местоимения — в
- * InlineEditableText вместо обычного текста.
+ * Банер + аватарка (внахлёст на границу баннера и тела карточки — тот же
+ * приём, что у профиль-карточек Discord/LinkedIn: без него аватар просто
+ * "заперт" внутри цветного прямоугольника и карточка читается плоско) +
+ * статус-пилюля + имя + строка username • местоимения • значок — общий
+ * верх карточки профиля, переиспользуется в StatusMenu (свой профиль),
+ * MiniProfilePopup (чужой) и ProfileModal (живое превью по мере ввода).
+ * Сам по себе — только для чтения; чтобы включить редактирование прямо в
+ * карточке (используется только в ProfileModal), передать проп `edit`:
+ * тогда аватар/баннер оборачиваются в ImageHoverMenu, а имя/местоимения/
+ * статус — в InlineEditableText вместо обычного текста.
  */
 export default function ProfileCardHeader({
   username,
@@ -37,9 +41,9 @@ export default function ProfileCardHeader({
   bannerGradient?: string
   bannerImage?: string
   status?: 'online' | 'dnd' | 'offline' | 'invisible'
-  /** Пусто — облачко не рисуется вовсе. */
+  /** Пусто — пилюля статуса не рисуется вовсе (только для чтения). */
   customStatus: string
-  /** Пусто — вторая строка обходится без " • местоимения". */
+  /** Пусто — вторая строка обходится без " · местоимения". */
   pronouns: string
   edit?: {
     onEditAvatar: () => void
@@ -58,116 +62,118 @@ export default function ProfileCardHeader({
       name={username}
       color={avatarColor}
       image={avatarImage}
-      size={86}
+      size={AVATAR_SIZE}
       status={status}
       showStatus={!!status}
     />
   )
 
   return (
-    <div
-      className="profile-popup-banner"
-      style={{
-        background: bannerImage ? undefined : bannerGradient || undefined,
-        backgroundImage: bannerImage ? `url(${bannerImage})` : undefined,
-      }}
-    >
-      {edit ? (
-        <ImageHoverMenu
-          className="profile-avatar-hover-menu"
-          onEdit={edit.onEditAvatar}
-          onRemove={edit.onRemoveAvatar}
-          canRemove={edit.canRemoveAvatar}
-          removeConfirm="Удалить аватар?"
-        >
-          {avatarNode}
-        </ImageHoverMenu>
-      ) : (
-        avatarNode
-      )}
+    <div className="profile-card">
+      <div
+        className="profile-card-banner"
+        style={{
+          background: bannerImage ? undefined : bannerGradient || undefined,
+          backgroundImage: bannerImage ? `url(${bannerImage})` : undefined,
+        }}
+      >
+        {edit && (
+          <ImageHoverMenu
+            className="profile-banner-hover-menu"
+            onEdit={edit.onEditBanner}
+            onRemove={edit.onRemoveBanner}
+            canRemove={edit.canRemoveBanner}
+            removeConfirm="Убрать фон карточки профиля?"
+          >
+            <Pencil size={13} />
+          </ImageHoverMenu>
+        )}
+      </div>
 
-      {edit && (
-        <ImageHoverMenu
-          className="profile-banner-hover-menu"
-          onEdit={edit.onEditBanner}
-          onRemove={edit.onRemoveBanner}
-          canRemove={edit.canRemoveBanner}
-          removeConfirm="Убрать фон карточки профиля?"
-        >
-          <Pencil size={13} />
-        </ImageHoverMenu>
-      )}
-
-      {edit ? (
-        // В режиме редактирования облачко рисуем ВСЕГДА (даже пустым) — иначе
-        // никак не догадаться, что статус-текст вообще можно задать: у самого
-        // поля нет отдельной подписи/строки за пределами облачка.
-        <div className="profile-status-bubble profile-status-bubble-editable">
-          <span className="profile-status-bubble-icon">
-            <MessageCircle size={11} />
-          </span>
-          <InlineEditableText
-            className="profile-status-bubble-text"
-            value={customStatus}
-            placeholder="Статус"
-            maxLength={64}
-            onSave={edit.onSaveCustomStatus}
-          />
+      <div className="profile-card-body">
+        <div className="profile-card-avatar-wrap">
+          {edit ? (
+            <ImageHoverMenu
+              className="profile-avatar-hover-menu"
+              onEdit={edit.onEditAvatar}
+              onRemove={edit.onRemoveAvatar}
+              canRemove={edit.canRemoveAvatar}
+              removeConfirm="Удалить аватар?"
+            >
+              {avatarNode}
+            </ImageHoverMenu>
+          ) : (
+            avatarNode
+          )}
         </div>
-      ) : (
-        !!customStatus && (
-          <div className="profile-status-bubble">
-            <span className="profile-status-bubble-icon">
-              <MessageCircle size={11} />
-            </span>
-            <span className="profile-status-bubble-text">{customStatus}</span>
-          </div>
-        )
-      )}
 
-      {edit ? (
-        <InlineEditableText
-          className="profile-popup-name"
-          value={displayName}
-          placeholder={username}
-          maxLength={64}
-          onSave={edit.onSaveDisplayName}
-        />
-      ) : (
-        <span className="profile-popup-name">{displayName || username}</span>
-      )}
-
-      <div className="profile-popup-meta-line">
-        <span className="profile-popup-username">{username}</span>
         {edit ? (
-          <>
-            <span className="profile-popup-meta-dot">•</span>
+          // В режиме редактирования пилюлю статуса рисуем ВСЕГДА (даже
+          // пустой) — иначе никак не догадаться, что статус-текст вообще
+          // можно задать: у самого поля нет отдельной подписи за её
+          // пределами.
+          <div className="profile-status-pill profile-status-pill-editable">
+            <MessageCircle size={12} className="profile-status-pill-icon" />
             <InlineEditableText
-              className="profile-popup-pronouns-input"
-              value={pronouns}
-              placeholder="местоимения"
-              maxLength={24}
-              datalistOptions={PRONOUN_SUGGESTIONS}
-              onSave={edit.onSavePronouns}
+              className="profile-status-pill-text"
+              value={customStatus}
+              placeholder="Добавить статус"
+              maxLength={64}
+              onSave={edit.onSaveCustomStatus}
             />
-          </>
+          </div>
         ) : (
-          !!pronouns && (
-            <>
-              <span className="profile-popup-meta-dot">•</span>
-              <span className="profile-popup-pronouns">{pronouns}</span>
-            </>
+          !!customStatus && (
+            <div className="profile-status-pill">
+              <MessageCircle size={12} className="profile-status-pill-icon" />
+              <span className="profile-status-pill-text">{customStatus}</span>
+            </div>
           )
         )}
-        <span className="profile-popup-meta-dot">•</span>
-        <button
-          type="button"
-          className="profile-popup-badge"
-          title="Значки — скоро"
-          onClick={() => alert('Пока не реализовано')}
-        >
-          <Sparkles size={13} />
-        </button>
+
+        {edit ? (
+          <InlineEditableText
+            className="profile-card-name"
+            value={displayName}
+            placeholder={username}
+            maxLength={64}
+            onSave={edit.onSaveDisplayName}
+          />
+        ) : (
+          <span className="profile-card-name">{displayName || username}</span>
+        )}
+
+        <div className="profile-card-meta-line">
+          <span className="profile-card-username">{username}</span>
+          {edit ? (
+            <>
+              <span className="profile-card-meta-dot">·</span>
+              <InlineEditableText
+                className="profile-card-pronouns-input"
+                value={pronouns}
+                placeholder="местоимения"
+                maxLength={24}
+                datalistOptions={PRONOUN_SUGGESTIONS}
+                onSave={edit.onSavePronouns}
+              />
+            </>
+          ) : (
+            !!pronouns && (
+              <>
+                <span className="profile-card-meta-dot">·</span>
+                <span className="profile-card-pronouns">{pronouns}</span>
+              </>
+            )
+          )}
+          <button
+            type="button"
+            className="profile-card-badge"
+            title="Значки — скоро"
+            onClick={() => alert('Пока не реализовано')}
+          >
+            <Sparkles size={12} />
+          </button>
+        </div>
       </div>
     </div>
   )
