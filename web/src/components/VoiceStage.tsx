@@ -782,19 +782,20 @@ export default function VoiceStage({
             </div>
           </div>
 
-          {/* Лента миниатюр под демонстрацией — те же тайлы, что и в сетке,
-              просто мельче (--tile-w). Рендерится всегда, а не только при
-              filmstripOpen: чтобы её появление можно было анимировать
-              высотой, содержимое должно уже существовать в DOM. */}
-          {expanded.mode === 'screen' && (
-            <div
-              className="voice-stage-filmstrip"
-              aria-hidden={!filmstripOpen}
-              style={{ '--tile-w': `${FILMSTRIP_TILE_WIDTH}px` } as React.CSSProperties}
-            >
-              <div className="voice-stage-filmstrip-inner">{buildTiles()}</div>
-            </div>
-          )}
+          {/* Лента миниатюр — те же тайлы, что и в сетке, просто мельче
+              (--tile-w). Не только для демонстрации: развёрнутый участник
+              (mode:'participant') тоже может подглядывать остальных — та же
+              кнопка-переключатель ниже видна в обоих режимах. Рендерится
+              всегда, а не только при filmstripOpen: чтобы появление можно
+              было анимировать высотой, содержимое должно уже существовать в
+              DOM. */}
+          <div
+            className="voice-stage-filmstrip"
+            aria-hidden={!filmstripOpen}
+            style={{ '--tile-w': `${FILMSTRIP_TILE_WIDTH}px` } as React.CSSProperties}
+          >
+            <div className="voice-stage-filmstrip-inner">{buildTiles()}</div>
+          </div>
         </div>
       ) : (
         (() => {
@@ -822,19 +823,32 @@ export default function VoiceStage({
           демонстрации, поэтому ездит вместе с ней: лента закрыта — стоит над
           voice-controls-bar, открыта — переезжает на её верхнюю кромку и
           лежит поверх миниатюр (см. .voice-stage-participants-toggle.active).
-          Шеврон показывает, куда лента поедет по клику. */}
-      {expanded?.mode === 'screen' && (
+          Шеврон показывает, куда лента поедет по клику. Виден при любом
+          развороте — и демонстрации, и просто участника (mode:'participant'),
+          не только при демке. */}
+      {expanded != null && (
         <button
-          className={`voice-stage-participants-toggle ${filmstripOpen ? 'active' : ''} ${
+          className={`voice-stage-participants-toggle hover-tip ${filmstripOpen ? 'active' : ''} ${
             showControls ? 'visible' : ''
           }`}
-          title={filmstripOpen ? 'Скрыть участников' : 'Показать участников'}
+          data-tooltip={filmstripOpen ? 'Скрыть участников' : 'Показать участников'}
+          aria-label={filmstripOpen ? 'Скрыть участников' : 'Показать участников'}
           onClick={() => setFilmstripOpen((v) => !v)}
         >
           {filmstripOpen ? <ChevronDown size={15} /> : <ChevronUp size={15} />}
           <Users size={16} />
         </button>
       )}
+
+      {/* Все кнопки внизу — один визуальный футер: общая полоса затемнения
+          (см. .voice-stage-footer в CSS, фон-градиент вместо заливки/тени у
+          каждой кнопки по отдельности) плюс единая высота у всех рядов —
+          основной пилюли (мут/камера/демка/сброс) и кнопок экрана
+          (окно/полноэкранный), которые раньше были ниже и мельче. Сама
+          полоса — чисто декоративный слой (см. .voice-stage-footer,
+          pointer-events только у .visible), кнопки — отдельные абсолютно
+          спозиционированные группы поверх неё, как и раньше. */}
+      <footer className={`voice-stage-footer ${showControls ? 'visible' : ''}`} />
 
       <div className={`voice-controls-bar ${showControls ? 'visible' : ''}`}>
         <div className="voice-controls-group">
@@ -853,28 +867,26 @@ export default function VoiceStage({
         </button>
       </div>
 
-      {/* Подвал — зеркало шапки: появляется и уходит вместе с ней. Здесь
-          живут действия над ВСЕМ экраном звонка (окно, полный экран), а не
-          над конкретной демонстрацией — у неё своих кнопок раскрытия больше
-          нет. */}
-      <footer className={`voice-stage-footer ${showControls ? 'visible' : ''}`}>
+      <div className={`voice-stage-footer-actions ${showControls ? 'visible' : ''}`}>
         {pipSupported && (
           <button
-            className="icon-btn"
-            title={inPip ? 'Вернуть звонок во вкладку' : 'Открыть в отдельном окне'}
+            className="icon-btn hover-tip"
+            data-tooltip={inPip ? 'Вернуть звонок во вкладку' : 'Открыть в отдельном окне'}
+            aria-label={inPip ? 'Вернуть звонок во вкладку' : 'Открыть в отдельном окне'}
             onClick={handleTogglePip}
           >
             <PictureInPicture2 size={16} />
           </button>
         )}
         <button
-          className="icon-btn"
-          title={isFullscreen ? 'Выйти из полноэкранного режима' : 'На весь экран'}
+          className="icon-btn hover-tip"
+          data-tooltip={isFullscreen ? 'Выйти из полноэкранного режима' : 'На весь экран'}
+          aria-label={isFullscreen ? 'Выйти из полноэкранного режима' : 'На весь экран'}
           onClick={toggleFullscreen}
         >
           {isFullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
         </button>
-      </footer>
+      </div>
     </div>
     </>
   )
