@@ -1045,9 +1045,52 @@ input {
   z-index: 2;
 }
 
-.profile-status-hover-menu .image-hover-menu-trigger {
-  padding: 0;
-  border-radius: 14px;
+/* Микро-меню действий над облачком статуса (ProfileModal) — ДВЕ иконки без
+   подписей, горизонтально, появляются по НАВЕДЕНИЮ (не по клику, в
+   отличие от ImageHoverMenu у аватара/баннера): раскрывать лишний клик
+   ради двух самоочевидных иконок-глифов незачем. Растут НАД облачком —
+   .profile-status-bubble-slot уже приподнят вместе с аватаркой (см.
+   .profile-card-top-row), так что даже с отступом вверх меню остаётся
+   внутри banner-области карточки и не обрезается overflow:hidden у
+   .profile-card. */
+.status-bubble-actions {
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  margin-bottom: 6px;
+  display: flex;
+  gap: 3px;
+  padding: 3px;
+  background: var(--modal-bg);
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s ease;
+  z-index: 3;
+}
+
+.status-bubble-hover-zone:hover .status-bubble-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.status-bubble-action {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+  color: var(--text-normal);
+}
+
+.status-bubble-action:hover {
+  background: var(--channel-hover);
+}
+
+.status-bubble-action-danger:hover {
+  color: var(--red);
 }
 
 .profile-card-name {

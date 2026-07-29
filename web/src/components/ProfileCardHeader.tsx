@@ -1,4 +1,4 @@
-import { Pencil, Sparkles } from 'lucide-react'
+import { Pencil, Sparkles, Trash2 } from 'lucide-react'
 import Avatar from './Avatar'
 import ImageHoverMenu from './ImageHoverMenu'
 import InlineEditableText from './InlineEditableText'
@@ -21,9 +21,11 @@ const AVATAR_SIZE = 84
  * ProfileModal (живое превью по мере ввода).
  * Сам по себе — только для чтения; чтобы включить редактирование прямо в
  * карточке (используется только в ProfileModal), передать проп `edit`:
- * тогда аватар/баннер/облачко статуса оборачиваются в ImageHoverMenu (клик —
- * мини-меню "Изменить"/"Очистить"), а имя/местоимения — в InlineEditableText
- * вместо обычного текста. Само облачко статуса НЕ редактируется инлайн —
+ * тогда аватар/баннер оборачиваются в ImageHoverMenu (клик — мини-меню
+ * "Изменить"/"Удалить"), облачко статуса получает СВОЁ горизонтальное
+ * микро-меню из двух иконок без подписей по НАВЕДЕНИЮ (не клику — см.
+ * .status-bubble-actions), а имя/местоимения — в InlineEditableText вместо
+ * обычного текста. Само облачко статуса НЕ редактируется инлайн —
  * "Изменить" открывает StatusEditModal (см. edit.onEditStatus), у него два
  * независимых поля (эмодзи + текст), которым инлайн-текстовому полю не
  * место.
@@ -123,22 +125,37 @@ export default function ProfileCardHeader({
           {edit ? (
             // В режиме редактирования облачко рисуем ВСЕГДА (даже пустым,
             // с плейсхолдером) — иначе никак не догадаться, что статус
-            // вообще можно задать.
-            <div className="profile-status-bubble-slot">
-              <ImageHoverMenu
-                className="profile-status-hover-menu"
-                onEdit={edit.onEditStatus}
-                onRemove={edit.onClearStatus}
-                removeLabel="Очистить"
-                removeConfirm="Очистить статус?"
-                canRemove={hasStatus}
-              >
-                <StatusBubble
-                  emoji={customStatusEmoji}
-                  text={customStatus}
-                  placeholder="Добавить статус"
-                />
-              </ImageHoverMenu>
+            // вообще можно задать. Микро-меню — по наведению (не клику,
+            // в отличие от ImageHoverMenu у аватара/баннера) и без подписей,
+            // только две иконки: карандаш (открывает StatusEditModal) и
+            // корзина (очищает статус сразу, без window.confirm — это
+            // короткий текст, а не тяжёлая картинка, отменить — секунда).
+            <div className="profile-status-bubble-slot status-bubble-hover-zone">
+              <StatusBubble
+                emoji={customStatusEmoji}
+                text={customStatus}
+                placeholder="Добавить статус"
+              />
+              <div className="status-bubble-actions">
+                <button
+                  type="button"
+                  className="status-bubble-action"
+                  title="Изменить"
+                  onClick={edit.onEditStatus}
+                >
+                  <Pencil size={12} />
+                </button>
+                {hasStatus && (
+                  <button
+                    type="button"
+                    className="status-bubble-action status-bubble-action-danger"
+                    title="Очистить"
+                    onClick={edit.onClearStatus}
+                  >
+                    <Trash2 size={12} />
+                  </button>
+                )}
+              </div>
             </div>
           ) : (
             hasStatus && (

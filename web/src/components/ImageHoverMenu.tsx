@@ -12,7 +12,6 @@ export default function ImageHoverMenu({
   onEdit,
   onRemove,
   removeConfirm,
-  removeLabel = 'Удалить',
   canRemove,
   children,
   className,
@@ -23,9 +22,6 @@ export default function ImageHoverMenu({
   onRemove: () => void
   /** Текст window.confirm перед удалением. */
   removeConfirm: string
-  /** Подпись пункта удаления — переопределяется, например, для облачка
-   * статуса ("Очистить" вместо "Удалить", см. StatusBubble). */
-  removeLabel?: string
   /** Нечего удалять (картинка уже не задана) — пункт "Удалить" не рисуем. */
   canRemove: boolean
   children: ReactNode
@@ -73,7 +69,7 @@ export default function ImageHoverMenu({
                 if (window.confirm(removeConfirm)) onRemove()
               }}
             >
-              <Trash2 size={14} /> {removeLabel}
+              <Trash2 size={14} /> Удалить
             </button>
           )}
         </div>
