@@ -170,7 +170,14 @@ export default function StatusMenu({
             {voice != null && voiceStatus === 'connected' && (
               <Mic size={11} className="user-panel-mic" />
             )}
-            {user.custom_status || STATUS_LABELS[user.status]}
+            {user.custom_status ? (
+              <>
+                {user.custom_status_emoji && `${user.custom_status_emoji} `}
+                {user.custom_status}
+              </>
+            ) : (
+              STATUS_LABELS[user.status]
+            )}
           </span>
         </div>
       </button>
@@ -188,6 +195,7 @@ export default function StatusMenu({
             bannerImage={user.banner_image}
             status={user.status}
             customStatus={user.custom_status}
+            customStatusEmoji={user.custom_status_emoji}
             pronouns={user.pronouns}
           />
 

@@ -103,7 +103,8 @@ class MeSerializer(serializers.ModelSerializer):
         model = User
         fields = [
             "id", "username", "display_name", "bio", "pronouns",
-            "custom_status", "date_joined", "avatar_color", "avatar_image",
+            "custom_status", "custom_status_emoji", "date_joined",
+            "avatar_color", "avatar_image",
             "status", "banner_gradient", "banner_image", "dm_privacy",
         ]
 
@@ -162,6 +163,7 @@ class ProfileUpdateSerializer(serializers.ModelSerializer):
         model = User
         fields = [
             "username", "display_name", "bio", "pronouns", "custom_status",
+            "custom_status_emoji",
             "avatar_image", "banner_gradient", "banner_image", "dm_privacy",
             "current_password",
         ]
@@ -171,6 +173,7 @@ class ProfileUpdateSerializer(serializers.ModelSerializer):
             "bio": {"required": False, "allow_blank": True},
             "pronouns": {"required": False, "allow_blank": True},
             "custom_status": {"required": False, "allow_blank": True},
+            "custom_status_emoji": {"required": False, "allow_blank": True},
             "avatar_image": {"required": False, "allow_blank": True},
             "banner_gradient": {"required": False, "allow_blank": True},
             "banner_image": {"required": False, "allow_blank": True},

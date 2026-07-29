@@ -1643,10 +1643,12 @@ class PublicProfileSerializerTests(APITestCase):
     def test_profile_card_includes_pronouns_status_and_joined(self):
         self.user.pronouns = "they/them"
         self.user.custom_status = "варю кофе"
+        self.user.custom_status_emoji = "☕"
         self.user.save()
         resp = self.client.get(f"/api/users/{self.user.id}/profile-card")
         self.assertEqual(resp.data["pronouns"], "they/them")
         self.assertEqual(resp.data["custom_status"], "варю кофе")
+        self.assertEqual(resp.data["custom_status_emoji"], "☕")
         self.assertIn("date_joined", resp.data)
 
 

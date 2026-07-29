@@ -1008,18 +1008,46 @@ input {
   background: var(--modal-bg);
 }
 
-/* display:flex + width:fit-content вместо inline/inline-flex — это
-   ГАРАНТИРОВАННО блочный бокс (своя строка, как у обычного div), просто
-   сжатый под контент, а не растянутый на всю ширину .profile-card-body.
-   С inline-flex тут легко словить "аватар и пилюля статуса на одной
-   строке" — inline-уровневые боксы не переносятся сами по себе. */
-.profile-card-avatar-wrap {
+/* Общая "строка" аватарки и облачка статуса — оба внахлёст на баннер (тот
+   же приём nahлёста, что раньше был только на самой аватарке). Негативный
+   margin-top живёт ЗДЕСЬ (а не на самой .profile-card-avatar-wrap), чтобы
+   облачко, позиционированное absolute от этой строки, поднялось вместе с
+   аватаркой. display:flex + width:fit-content — гарантированно блочный
+   бокс (своя строка), просто сжатый под контент: с inline-flex тут легко
+   словить "аватар и облачко на одной строке с текстом ниже" — inline-
+   уровневые боксы не переносятся сами по себе. */
+.profile-card-top-row {
+  position: relative;
   display: flex;
   width: fit-content;
   margin-top: -42px;
+}
+
+.profile-card-avatar-wrap {
+  display: flex;
   border: 4px solid var(--modal-bg);
   border-radius: 50%;
   background: var(--modal-bg);
+}
+
+/* Облачко статуса — растёт от правого края аватарки, чуть выше её
+   середины (внахлёст на баннер, как и сама аватарка). max-width подобран
+   под самый тесный контейнер-потребитель (.profile-popup — 260px), чтобы
+   не упереться в overflow:hidden у .profile-card в MiniProfilePopup/
+   StatusMenu; в более широком ProfileModal просто остаётся немного
+   воздуха справа. */
+.profile-status-bubble-slot {
+  position: absolute;
+  left: 100%;
+  top: 6px;
+  margin-left: 10px;
+  max-width: 140px;
+  z-index: 2;
+}
+
+.profile-status-hover-menu .image-hover-menu-trigger {
+  padding: 0;
+  border-radius: 14px;
 }
 
 .profile-card-name {
@@ -1100,45 +1128,68 @@ input {
   color: var(--text-normal);
 }
 
-/* Пилюля произвольного статус-текста — под аватаркой, только когда
-   custom_status не пуст (см. ProfileCardHeader). Акцентная иконка в
-   --blurple — единственный цветной штрих во всём теле карточки помимо
-   самого баннера, специально не размножаем акцент по всей карточке. */
-.profile-status-pill {
+/* Облачко статуса (StatusBubble.tsx) — настоящий "говорящий пузырь" с
+   хвостиком, растущий от аватарки, а не иконка+текст в пилюле: так просил
+   пользователь, ориентируясь на референс с хвостиком-указателем. Хвостик
+   — ::before не самого текстового блока (у него overflow:hidden ради
+   ellipsis, обрезал бы хвостик), а отдельный span-сосед вне зоны обрезки. */
+.status-bubble {
+  position: relative;
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
   width: fit-content;
-  max-width: 100%;
-  margin-top: 8px;
-  padding: 5px 10px;
+  padding: 6px 11px;
   background: var(--surface-2);
   border: 1px solid var(--surface-2-border);
-  border-radius: 999px;
+  border-radius: 13px;
+  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.28);
 }
 
-.profile-status-pill-icon {
+.status-bubble-tail {
+  position: absolute;
+  left: -5px;
+  bottom: 9px;
+  width: 10px;
+  height: 10px;
+  background: var(--surface-2);
+  border-left: 1px solid var(--surface-2-border);
+  border-bottom: 1px solid var(--surface-2-border);
+  border-radius: 2px;
+  transform: rotate(45deg);
+}
+
+.status-bubble-emoji {
   flex-shrink: 0;
-  color: var(--blurple);
+  font-size: 14px;
+  line-height: 1;
 }
 
-.profile-status-pill-text {
+.status-bubble-text {
   font-size: 12px;
+  font-weight: 500;
   color: var(--text-normal);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-/* .profile-status-pill-text заодно и className InlineEditableText в
-   режиме редактирования (ProfileModal) — двойной класс перебивает более
-   просторный base-паддинг .inline-editable-*, в тесной пилюле ему не
-   место (та же логика, что у bio/заметки чуть ниже). */
-.inline-editable-display.profile-status-pill-text,
-.inline-editable-input.profile-status-pill-text {
-  padding: 0;
-  margin: 0;
-  min-width: 60px;
+/* Пустое облачко (только в режиме редактирования — плейсхолдер "Добавить
+   статус") — приглушаем и текст, и саму заливку, чтобы не выглядело как
+   уже заданный статус. */
+.status-bubble-empty {
+  background: var(--surface-2);
+  border: 1px dashed var(--input-border);
+  box-shadow: none;
+}
+
+.status-bubble-empty .status-bubble-tail {
+  background: var(--surface-2);
+}
+
+.status-bubble-empty .status-bubble-text {
+  color: var(--text-faint);
+  font-weight: 400;
 }
 
 .profile-popup-bio {
@@ -3058,6 +3109,57 @@ textarea.inline-editable-input {
   font-size: 12px;
   color: var(--text-muted);
   width: 100%;
+}
+
+/* ---- редактор облачка статуса (StatusEditModal) ---- */
+.status-edit-preview {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 16px;
+  background: var(--input-bg);
+  border-radius: 8px;
+}
+
+.status-edit-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.status-edit-emoji-btn {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  font-size: 18px;
+  background: var(--input-bg);
+  border: 1px solid var(--input-border);
+  border-radius: 8px;
+}
+
+.status-edit-emoji-btn:hover {
+  background: var(--channel-hover);
+}
+
+.status-edit-text-input {
+  flex: 1;
+  min-width: 0;
+  height: 40px;
+  padding: 0 12px;
+  font-size: 14px;
+  color: var(--text-normal);
+  background: var(--input-bg);
+  border: 1px solid var(--input-border);
+  border-radius: 8px;
+}
+
+.status-edit-text-input:focus {
+  outline: none;
+  border-color: var(--blurple);
 }
 
 .profile-bio-input {
