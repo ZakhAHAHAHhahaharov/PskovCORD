@@ -13,6 +13,14 @@ export interface Settings {
   /** Порог RMS, с которого микрофон считается "говорящим" (индикатор + кольцо). */
   micThreshold: number
   theme: ThemeChoice
+  /** Мьют/дефен — применяются как стартовое состояние при следующем входе в
+   * голосовой канал (см. useVoiceMesh в voice.ts), а сами кнопки в
+   * user-panel (SidebarBottomBar) переключают их и вне звонка. Синхронизируются
+   * и в обратную сторону — переключение мьюта/дефена ВНУТРИ звонка (MicButton/
+   * DeafenButton → voice.ts toggleMute/toggleDeafen) обновляет их же, чтобы
+   * следующий вход продолжил с того же состояния. */
+  preferMicMuted: boolean
+  preferDeafened: boolean
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -20,6 +28,8 @@ export const DEFAULT_SETTINGS: Settings = {
   micGain: 1,
   micThreshold: 0.035,
   theme: 'dark',
+  preferMicMuted: false,
+  preferDeafened: false,
 }
 
 const STORAGE_KEY = 'pskovcord:settings'
@@ -55,6 +65,8 @@ interface SettingsCtx extends Settings {
   setMicGain: (v: number) => void
   setMicThreshold: (v: number) => void
   setTheme: (t: ThemeChoice) => void
+  setPreferMicMuted: (v: boolean) => void
+  setPreferDeafened: (v: boolean) => void
 }
 
 const Ctx = createContext<SettingsCtx>({
@@ -63,6 +75,8 @@ const Ctx = createContext<SettingsCtx>({
   setMicGain: () => {},
   setMicThreshold: () => {},
   setTheme: () => {},
+  setPreferMicMuted: () => {},
+  setPreferDeafened: () => {},
 })
 
 export const useSettings = () => useContext(Ctx)
@@ -92,6 +106,8 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     setMicGain: (v) => setSettings((s) => ({ ...s, micGain: v })),
     setMicThreshold: (v) => setSettings((s) => ({ ...s, micThreshold: v })),
     setTheme: (t) => setSettings((s) => ({ ...s, theme: t })),
+    setPreferMicMuted: (v) => setSettings((s) => ({ ...s, preferMicMuted: v })),
+    setPreferDeafened: (v) => setSettings((s) => ({ ...s, preferDeafened: v })),
   }
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>

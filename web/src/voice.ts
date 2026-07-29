@@ -126,8 +126,17 @@ export function useVoiceMesh(
   )
   const [ownScreenStream, setOwnScreenStream] = useState<MediaStream | null>(null)
   const [isSharingScreen, setIsSharingScreen] = useState(false)
+  // preferMicMuted/preferDeafened — сохранённое желаемое состояние (см.
+  // settings.tsx), выставляется и вне звонка кнопками в user-panel
+  // (SidebarBottomBar). deafened сразу стартует по нему; muted — нет (см.
+  // useState(true) ниже и комментарий у getUserMedia), пока микрофон не
+  // захвачен, реальное состояние всё равно "молчим".
+  const { micGain, micThreshold, preferMicMuted, preferDeafened, setPreferMicMuted, setPreferDeafened } =
+    useSettings()
+  const preferMicMutedRef = useRef(preferMicMuted)
+  preferMicMutedRef.current = preferMicMuted
   const [muted, setMuted] = useState(true)
-  const [deafened, setDeafened] = useState(false)
+  const [deafened, setDeafened] = useState(() => preferDeafened)
   const [forcedMuteUntil, setForcedMuteUntil] = useState<number | null>(null)
   const forcedMuteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [blockedScreenViewerIds, setBlockedScreenViewerIds] = useState<Set<number>>(new Set())
@@ -142,8 +151,9 @@ export function useVoiceMesh(
   const remoteStreamsRef = useRef(remoteStreams)
   remoteStreamsRef.current = remoteStreams
   // Состояние мьюта на момент включения дефена — чтобы при выключении дефена
-  // вернуть именно его, а не всегда размьючивать.
-  const mutedBeforeDeafen = useRef(false)
+  // вернуть именно его, а не всегда размьючивать. preferMicMuted — на случай
+  // если дефен выключат, ни разу не потрогав мьют вручную в этом звонке.
+  const mutedBeforeDeafen = useRef(preferMicMuted)
   // Текущий мьют для переприменения к продюсеру нового SfuClient при
   // автопереподключении (эффект ниже создаётся один раз на весь канал).
   const mutedRef = useRef(muted)
@@ -163,7 +173,6 @@ export function useVoiceMesh(
   // Живой уровень своего микрофона для метра в настройках — см. VoiceMesh.getMicLevel.
   const micLevelRef = useRef(0)
 
-  const { micGain, micThreshold } = useSettings()
   // Порог VAD читается внутри requestAnimationFrame-цикла ниже — эффект,
   // где он крутится, не должен пересоздаваться на каждое изменение настройки.
   const micThresholdRef = useRef(micThreshold)
@@ -389,6 +398,14 @@ export function useVoiceMesh(
           return
         }
         localStream.current = stream
+        // Стартовый мьют — по сохранённому предпочтению (preferMicMuted/
+        // preferDeafened, см. настройки и user-panel вне звонка), а не
+        // безусловно "включаем микрофон": трек глушим ЗДЕСЬ же, ДО того как
+        // он уйдёт в граф усиления и на продюсер (см. комментарий про .enabled
+        // чуть ниже) — свежий продюсер и так стартует unpaused (см. startAttempt),
+        // поэтому setMicPaused тут не нужен, будет молчать за счёт .enabled.
+        const startMuted = preferMicMutedRef.current || deafened
+        stream.getAudioTracks().forEach((t) => (t.enabled = !startMuted))
         // Граф усиления микрофона: source (сырой mic-трек) -> gain ->
         // destination (обработанный трек, именно его и продюсируем). Мьют
         // по-прежнему переключает .enabled на СЫРОМ треке (toggleMute) —
@@ -411,7 +428,7 @@ export function useVoiceMesh(
         } catch {
           // Без Web Audio просто продюсируем сырой трек без усиления.
         }
-        setMuted(false)
+        setMuted(startMuted)
       } catch {
         if (!cancelled) setMuted(true)
       }
@@ -573,13 +590,20 @@ export function useVoiceMesh(
     // enabled=true => сейчас размьючены, значит мьютим => пауза продюсера.
     client.current?.setMicPaused(enabled)
     setMuted(enabled)
+    // Сохраняем как предпочтение — следующий вход в звонок начнётся с того
+    // же состояния мьюта, что и конец этого (см. settings.tsx/SidebarBottomBar).
+    setPreferMicMuted(enabled)
     // Как в Discord: включение микрофона автоматически снимает дефен.
-    if (!enabled && deafened) setDeafened(false)
+    if (!enabled && deafened) {
+      setDeafened(false)
+      setPreferDeafened(false)
+    }
   }
 
   const toggleDeafen = () => {
     setDeafened((prev) => {
       const next = !prev
+      setPreferDeafened(next)
       if (next) {
         // Дефен глушит и свой микрофон — иначе странно "не слышать", но
         // говорить. Запоминаем прежнее состояние мьюта для восстановления.
@@ -587,12 +611,14 @@ export function useVoiceMesh(
         localStream.current?.getAudioTracks().forEach((t) => (t.enabled = false))
         client.current?.setMicPaused(true)
         setMuted(true)
+        setPreferMicMuted(true)
       } else {
         // Возвращаем микрофон в состояние до дефена.
         const restoreMuted = mutedBeforeDeafen.current
         localStream.current?.getAudioTracks().forEach((t) => (t.enabled = !restoreMuted))
         client.current?.setMicPaused(restoreMuted)
         setMuted(restoreMuted)
+        setPreferMicMuted(restoreMuted)
       }
       return next
     })
