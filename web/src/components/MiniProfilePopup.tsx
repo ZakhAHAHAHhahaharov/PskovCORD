@@ -256,7 +256,7 @@ export default function MiniProfilePopup({
             </button>
           </div>
         ) : (
-          <div className="profile-modal-actions-row">
+          <div className="profile-modal-actions-row profile-modal-actions-row-stacked">
             {!isSelf && (
               <button
                 type="button"

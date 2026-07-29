@@ -1052,7 +1052,18 @@ input {
    .profile-status-bubble-slot уже приподнят вместе с аватаркой (см.
    .profile-card-top-row), так что даже с отступом вверх меню остаётся
    внутри banner-области карточки и не обрезается overflow:hidden у
-   .profile-card. */
+   .profile-card.
+
+   Показ/скрытие — через JS-состояние (useHoverFlyout, тот же хук, что и
+   у status-flyout/account-flyout в StatusMenu.tsx), а НЕ через CSS
+   :hover + opacity/pointer-events: тумблер по классу-родителю оставлял
+   зазор (margin-bottom) НЕОХВАЧЕННЫМ ничьей зоной — курсор успевал выйти
+   и из .profile-status-bubble-slot (его рамка = ровно облачко, меню
+   вынесено absolute и в неё не входит), и получал pointer-events:none
+   до того, как долетал до самого меню, так что кликнуть не успевал. При
+   условном рендере (см. .tsx) меню всегда интерактивно, пока
+   отрисовано, а мост ::before ниже (тот же приём, что у .status-flyout)
+   держит наведение на всём пути через зазор. */
 .status-bubble-actions {
   position: absolute;
   bottom: 100%;
@@ -1064,15 +1075,16 @@ input {
   background: var(--modal-bg);
   border-radius: 8px;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 0.12s ease;
   z-index: 3;
 }
 
-.status-bubble-hover-zone:hover .status-bubble-actions {
-  opacity: 1;
-  pointer-events: auto;
+.status-bubble-actions::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 100%;
+  height: 6px;
 }
 
 .status-bubble-action {
@@ -1089,7 +1101,9 @@ input {
   background: var(--channel-hover);
 }
 
-.status-bubble-action-danger:hover {
+/* Удаление/очистка — деструктивное действие, отмечено красным ВСЕГДА (не
+   только по наведению), тот же язык, что у .image-hover-menu-item-danger. */
+.status-bubble-action-danger {
   color: var(--red);
 }
 
@@ -1428,6 +1442,17 @@ textarea.inline-editable-input {
   display: flex;
   gap: 8px;
   padding: 12px 12px 4px;
+}
+
+/* Только MiniProfilePopup (чужой профиль) — "Написать сообщение"/
+   "Копировать ID" друг НАД другом, а не по бокам (ProfileModal, свой
+   профиль, оставляем как есть — там первая кнопка всегда disabled). */
+.profile-modal-actions-row-stacked {
+  flex-direction: column;
+}
+
+.profile-modal-actions-row-stacked .profile-popup-item {
+  flex: none;
 }
 
 .profile-modal-actions-row .profile-popup-item {
@@ -2510,6 +2535,31 @@ textarea.inline-editable-input {
 .chat-header-name {
   font-weight: 700;
   color: var(--heading-text);
+}
+
+/* Тумблер видимости списка участников — справа в шапке текстового канала
+   (margin-left:auto прибивает его к правому краю). Выключен — серая
+   иконка, включён — обычный цвет текста; фона на самой кнопке нет, чтобы
+   не спорить с #/названием канала слева, только hover-подсветка. */
+.chat-header-members-toggle {
+  margin-left: auto;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 4px;
+  color: var(--text-faint);
+}
+
+.chat-header-members-toggle:hover {
+  background: var(--channel-hover);
+  color: var(--text-normal);
+}
+
+.chat-header-members-toggle.active {
+  color: var(--text-normal);
 }
 
 .chat-empty {
@@ -5525,6 +5575,13 @@ button.settings-row-clickable:hover .settings-row-label {
      совсем — в голосовом канале участники и так видны плитками VoiceStage,
      для текстового канала это осознанный компромисс (см. план). */
   .members-list {
+    display: none;
+  }
+
+  /* Тумблер списка участников в chat-header — списку и так неоткуда
+     взяться на мобилке (см. правило выше), кнопка была бы декорацией без
+     эффекта. */
+  .chat-header-members-toggle {
     display: none;
   }
 
