@@ -34,8 +34,8 @@ from .middleware import JWTAuthMiddleware
 from .models import (
     Attachment, Channel, Conversation, ConversationMessage,
     ConversationParticipant, MAX_ATTACHMENT_BYTES, MAX_REACTIONS_PER_MESSAGE,
-    Membership, Message, Reaction, Role, Server, ServerBan, ServerInvite,
-    ServerJoinRequest, dm_room,
+    Membership, Message, ProfileNote, Reaction, Role, Server, ServerBan,
+    ServerInvite, ServerJoinRequest, dm_room,
 )
 from .permissions import can_dm
 
@@ -1638,6 +1638,68 @@ class PublicProfileSerializerTests(APITestCase):
         stranger = User.objects.create_user(username="pp_stranger", password="pw12345")
         self.client.force_authenticate(stranger)
         resp = self.client.get(f"/api/users/{self.user.id}/profile-card")
+        self.assertEqual(resp.status_code, 403)
+
+    def test_profile_card_includes_pronouns_status_and_joined(self):
+        self.user.pronouns = "they/them"
+        self.user.custom_status = "варю кофе"
+        self.user.save()
+        resp = self.client.get(f"/api/users/{self.user.id}/profile-card")
+        self.assertEqual(resp.data["pronouns"], "they/them")
+        self.assertEqual(resp.data["custom_status"], "варю кофе")
+        self.assertIn("date_joined", resp.data)
+
+
+class ProfileNoteTests(APITestCase):
+    """Приватная заметка о другом пользователе — своя у каждого
+    просматривающего, виден только автору."""
+
+    def setUp(self):
+        self.author = User.objects.create_user(username="note_author", password="pw12345")
+        self.about = User.objects.create_user(username="note_about", password="pw12345")
+        # Общий сервер — та же видимость, что и у profile-card (см.
+        # _can_see_profile), проще, чем заводить дружбу.
+        self.server = Server.objects.create(name="s", owner=self.author)
+        Membership.objects.create(user=self.author, server=self.server)
+        Membership.objects.create(user=self.about, server=self.server)
+        self.client.force_authenticate(self.author)
+
+    def test_note_empty_by_default(self):
+        resp = self.client.get(f"/api/users/{self.about.id}/note")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data["text"], "")
+
+    def test_create_and_read_note(self):
+        put_resp = self.client.put(
+            f"/api/users/{self.about.id}/note", {"text": "любит чай"},
+            format="json")
+        self.assertEqual(put_resp.status_code, 200)
+        self.assertEqual(put_resp.data["text"], "любит чай")
+        get_resp = self.client.get(f"/api/users/{self.about.id}/note")
+        self.assertEqual(get_resp.data["text"], "любит чай")
+
+    def test_note_overwrites_not_duplicates(self):
+        self.client.put(f"/api/users/{self.about.id}/note", {"text": "a"}, format="json")
+        self.client.put(f"/api/users/{self.about.id}/note", {"text": "b"}, format="json")
+        self.assertEqual(ProfileNote.objects.filter(author=self.author, about=self.about).count(), 1)
+        resp = self.client.get(f"/api/users/{self.about.id}/note")
+        self.assertEqual(resp.data["text"], "b")
+
+    def test_note_is_private_to_author(self):
+        ProfileNote.objects.create(author=self.author, about=self.about, text="секрет")
+        other = User.objects.create_user(username="note_other", password="pw12345")
+        Membership.objects.create(user=other, server=self.server)
+        self.client.force_authenticate(other)
+        resp = self.client.get(f"/api/users/{self.about.id}/note")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data["text"], "")  # своей заметки у other ещё нет
+
+    def test_note_denied_to_stranger(self):
+        stranger = User.objects.create_user(username="note_stranger", password="pw12345")
+        self.client.force_authenticate(stranger)
+        resp = self.client.get(f"/api/users/{self.about.id}/note")
+        self.assertEqual(resp.status_code, 403)
+        resp = self.client.put(f"/api/users/{self.about.id}/note", {"text": "x"}, format="json")
         self.assertEqual(resp.status_code, 403)
 
 

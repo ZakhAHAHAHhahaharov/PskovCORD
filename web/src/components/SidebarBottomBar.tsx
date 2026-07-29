@@ -96,6 +96,7 @@ export default function SidebarBottomBar({
           voice={voice}
           voiceRoster={voiceRoster}
           voiceTopic={voiceTopic}
+          voiceStatus={voiceStatus}
         />
         <div className="user-panel-actions">
           {voice ? (

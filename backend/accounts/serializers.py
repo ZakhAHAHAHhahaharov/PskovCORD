@@ -102,9 +102,9 @@ class MeSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
         fields = [
-            "id", "username", "display_name", "bio", "avatar_color",
-            "avatar_image", "status", "banner_gradient", "banner_image",
-            "dm_privacy",
+            "id", "username", "display_name", "bio", "pronouns",
+            "custom_status", "date_joined", "avatar_color", "avatar_image",
+            "status", "banner_gradient", "banner_image", "dm_privacy",
         ]
 
 
@@ -138,10 +138,12 @@ class RegisterSerializer(serializers.ModelSerializer):
 
 
 class ProfileUpdateSerializer(serializers.ModelSerializer):
-    """PATCH /api/auth/me — смена ника, отображаемого имени, био и/или
-    аватара. Поля необязательны (partial-обновление); avatar_image=""
-    удаляет аватар (возврат к цветному кружку с буквой), display_name=""
-    и bio="" — сброс к пустому (тогда карточка показывает только username).
+    """PATCH /api/auth/me — смена ника, отображаемого имени, био,
+    местоимений, статус-текста и/или аватара. Поля необязательны
+    (partial-обновление); avatar_image="" удаляет аватар (возврат к
+    цветному кружку с буквой), display_name/bio/pronouns/custom_status=""
+    — сброс к пустому (тогда карточка показывает только username и без
+    облачка статуса).
 
     username здесь остаётся ради фронтового SettingsModal.UsernameChangeModal
     (единственное место, откуда теперь меняют ник — см. ProfileModal.tsx,
@@ -159,14 +161,16 @@ class ProfileUpdateSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
         fields = [
-            "username", "display_name", "bio", "avatar_image",
-            "banner_gradient", "banner_image", "dm_privacy",
+            "username", "display_name", "bio", "pronouns", "custom_status",
+            "avatar_image", "banner_gradient", "banner_image", "dm_privacy",
             "current_password",
         ]
         extra_kwargs = {
             "username": {"required": False},
             "display_name": {"required": False, "allow_blank": True},
             "bio": {"required": False, "allow_blank": True},
+            "pronouns": {"required": False, "allow_blank": True},
+            "custom_status": {"required": False, "allow_blank": True},
             "avatar_image": {"required": False, "allow_blank": True},
             "banner_gradient": {"required": False, "allow_blank": True},
             "banner_image": {"required": False, "allow_blank": True},
