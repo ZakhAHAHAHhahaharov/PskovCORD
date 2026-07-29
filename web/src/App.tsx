@@ -2,6 +2,7 @@ import { useEffect } from 'react'
 import { AuthProvider, useAuth } from './auth'
 import { GatewayProvider } from './gateway'
 import { SettingsProvider } from './settings'
+import { ErrorBoundary, ErrorReportingProvider } from './errorReporting'
 import { handleGlobalEscape } from './modalStack'
 import { parseQrLoginToken } from './qrToken'
 import LoginScreen from './components/LoginScreen'
@@ -48,10 +49,14 @@ export default function App() {
   }, [])
 
   return (
-    <SettingsProvider>
-      <AuthProvider>
-        <Inner />
-      </AuthProvider>
-    </SettingsProvider>
+    <ErrorBoundary>
+      <ErrorReportingProvider>
+        <SettingsProvider>
+          <AuthProvider>
+            <Inner />
+          </AuthProvider>
+        </SettingsProvider>
+      </ErrorReportingProvider>
+    </ErrorBoundary>
   )
 }

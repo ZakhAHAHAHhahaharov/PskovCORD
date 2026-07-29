@@ -191,6 +191,7 @@ SFU-сервис (mediasoup) — клиент открывает к нему с�
 """
 import asyncio
 import json
+import logging
 import uuid
 from urllib.parse import parse_qs
 
@@ -201,6 +202,8 @@ from django.utils import timezone
 from django.db import transaction
 
 from . import emoji as emoji_keys, mute_vote, presence, roles
+
+logger = logging.getLogger(__name__)
 from .models import (
     Attachment, Channel, ConversationMessage, ConversationParticipant,
     MAX_ATTACHMENTS_PER_MESSAGE, MAX_REACTIONS_PER_MESSAGE, Membership,
@@ -316,59 +319,69 @@ class GatewayConsumer(AsyncWebsocketConsumer):
             return
 
         op = data.get("op")
-        if op == "send_message":
-            await self._handle_send(data)
-        elif op == "delete_message":
-            await self._handle_delete_message(data)
-        elif op == "edit_message":
-            await self._handle_edit_message(data)
-        elif op == "add_reaction":
-            await self._handle_reaction(data, add=True, dm=False)
-        elif op == "remove_reaction":
-            await self._handle_reaction(data, add=False, dm=False)
-        elif op == "dm_add_reaction":
-            await self._handle_reaction(data, add=True, dm=True)
-        elif op == "dm_remove_reaction":
-            await self._handle_reaction(data, add=False, dm=True)
-        elif op == "voice_join":
-            await self._handle_voice_join(data)
-        elif op == "voice_leave":
-            await self._handle_voice_leave()
-        elif op == "voice_mute_update":
-            await self._handle_voice_mute_update(data)
-        elif op == "voice_screen_share_update":
-            await self._handle_voice_screen_share_update(data)
-        elif op == "voice_topic_update":
-            await self._handle_voice_topic_update(data)
-        elif op == "voice_disconnect_user":
-            await self._handle_voice_disconnect_user(data)
-        elif op == "voice_mute_vote_start":
-            await self._handle_voice_mute_vote_start(data)
-        elif op == "voice_mute_vote_cast":
-            await self._handle_voice_mute_vote_cast(data)
-        elif op == "voice_request_screen_share":
-            await self._handle_voice_request_screen_share(data)
-        elif op == "set_status":
-            await self._handle_set_status(data)
-        elif op == "dm_send_message":
-            await self._handle_dm_send(data)
-        elif op == "dm_delete_message":
-            await self._handle_dm_delete_message(data)
-        elif op == "dm_edit_message":
-            await self._handle_dm_edit_message(data)
-        elif op == "dm_voice_join":
-            await self._handle_dm_voice_join(data)
-        elif op == "ping":
-            # Хартбит живости соединения — см. presence.heartbeat и
-            # chat.heartbeat_sweep (страховка на случай, если WS оборвётся
-            # без close-фрейма и обычный disconnect() не придёт).
-            restored = await asyncio.to_thread(presence.heartbeat, self.uid)
-            if restored:
-                # Sweep успел счесть нас призраком (пинг задержался дольше
-                # HEARTBEAT_TTL — спящая вкладка, длинный сетевой провал),
-                # хотя сокет жив. Возвращаем себя в онлайн для остальных:
-                # иначе для них мы так и остались бы офлайн навсегда.
-                await self._broadcast_presence(True)
+        # Один необработанный exception в конкретной операции раньше ронял
+        # WHOLE WS-соединение целиком (Channels не ловит исключения из
+        # receive() сам, ASGI-сервер закрывает сокет) — с клиента это
+        # выглядело как "ничего не произошло": авто-реконнект тут же поднимал
+        # новый сокет молча, без видимой ошибки, а сама операция (например,
+        # delete_message) просто терялась. Теперь падение одной операции не
+        # рвёт соединение целиком, а падение хотя бы попадает в лог.
+        try:
+            if op == "send_message":
+                await self._handle_send(data)
+            elif op == "delete_message":
+                await self._handle_delete_message(data)
+            elif op == "edit_message":
+                await self._handle_edit_message(data)
+            elif op == "add_reaction":
+                await self._handle_reaction(data, add=True, dm=False)
+            elif op == "remove_reaction":
+                await self._handle_reaction(data, add=False, dm=False)
+            elif op == "dm_add_reaction":
+                await self._handle_reaction(data, add=True, dm=True)
+            elif op == "dm_remove_reaction":
+                await self._handle_reaction(data, add=False, dm=True)
+            elif op == "voice_join":
+                await self._handle_voice_join(data)
+            elif op == "voice_leave":
+                await self._handle_voice_leave()
+            elif op == "voice_mute_update":
+                await self._handle_voice_mute_update(data)
+            elif op == "voice_screen_share_update":
+                await self._handle_voice_screen_share_update(data)
+            elif op == "voice_topic_update":
+                await self._handle_voice_topic_update(data)
+            elif op == "voice_disconnect_user":
+                await self._handle_voice_disconnect_user(data)
+            elif op == "voice_mute_vote_start":
+                await self._handle_voice_mute_vote_start(data)
+            elif op == "voice_mute_vote_cast":
+                await self._handle_voice_mute_vote_cast(data)
+            elif op == "voice_request_screen_share":
+                await self._handle_voice_request_screen_share(data)
+            elif op == "set_status":
+                await self._handle_set_status(data)
+            elif op == "dm_send_message":
+                await self._handle_dm_send(data)
+            elif op == "dm_delete_message":
+                await self._handle_dm_delete_message(data)
+            elif op == "dm_edit_message":
+                await self._handle_dm_edit_message(data)
+            elif op == "dm_voice_join":
+                await self._handle_dm_voice_join(data)
+            elif op == "ping":
+                # Хартбит живости соединения — см. presence.heartbeat и
+                # chat.heartbeat_sweep (страховка на случай, если WS оборвётся
+                # без close-фрейма и обычный disconnect() не придёт).
+                restored = await asyncio.to_thread(presence.heartbeat, self.uid)
+                if restored:
+                    # Sweep успел счесть нас призраком (пинг задержался дольше
+                    # HEARTBEAT_TTL — спящая вкладка, длинный сетевой провал),
+                    # хотя сокет жив. Возвращаем себя в онлайн для остальных:
+                    # иначе для них мы так и остались бы офлайн навсегда.
+                    await self._broadcast_presence(True)
+        except Exception:
+            logger.exception("gateway op %r failed (user %s)", op, getattr(self, "uid", None))
 
     # --- операции -----------------------------------------------------------
     def _read_nonce(self, data):
@@ -1088,18 +1101,36 @@ class GatewayConsumer(AsyncWebsocketConsumer):
 
     @database_sync_to_async
     def _delete_message(self, message_id):
+        # Логи ниже — единственный след неудачного удаления: клиенту в ответ
+        # на delete_message никогда не шлётся ни ошибка, ни подтверждение
+        # (см. _handle_delete_message), так что без них "тихий" отказ
+        # (сообщение не найдено / не участник / нет прав) не отличить от
+        # обычной сетевой задержки на стороне поддержки.
         try:
             msg = Message.objects.select_related("channel__server").get(id=message_id)
         except Message.DoesNotExist:
+            logger.warning(
+                "delete_message: message %s not found (requested by user %s)",
+                message_id, self.user.id,
+            )
             return None
         server = msg.channel.server
         if not Membership.objects.filter(user=self.user, server=server).exists():
+            logger.warning(
+                "delete_message: user %s is not a member of server %s (message %s)",
+                self.user.id, server.id, message_id,
+            )
             return None
         # Удалить может автор ИЛИ тот, кому роль даёт «Удаление сообщений»
         # (владельцу сервера chat.roles выдаёт все права безусловно).
         if msg.author_id != self.user.id and not roles.has_permission(
             self.user, server, "delete_messages"
         ):
+            logger.warning(
+                "delete_message: user %s lacks permission to delete message %s "
+                "(author %s) on server %s",
+                self.user.id, message_id, msg.author_id, server.id,
+            )
             return None
         channel_id, server_id = msg.channel_id, server.id
         msg.delete()

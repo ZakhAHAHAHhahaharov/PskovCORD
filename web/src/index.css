@@ -3236,6 +3236,60 @@ textarea.inline-editable-input {
   border-radius: 4px;
 }
 
+/* ---- глобальный модал непойманной ошибки (ErrorModal.tsx) ---- */
+.error-modal-overlay {
+  /* Выше любой другой модалки — ошибка может случиться, пока уже что-то
+     открыто (например, редактор сервера), и должна лечь поверх всего. */
+  z-index: 300;
+}
+
+.error-modal-text {
+  margin: 4px 0 12px;
+  color: var(--text-normal);
+  font-size: 14px;
+  line-height: 1.5;
+  overflow-wrap: break-word;
+}
+
+.error-modal-toggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-muted);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.error-modal-toggle:hover {
+  color: var(--text-normal);
+}
+
+.error-modal-trace-wrap {
+  margin-top: 10px;
+}
+
+.error-modal-trace {
+  max-height: 240px;
+  overflow: auto;
+  padding: 10px;
+  background: var(--input-bg);
+  border: 1px solid var(--input-border);
+  border-radius: 6px;
+  color: var(--text-muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+}
+
+.error-modal-copy {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+}
+
 /* ---- profile modal ---- */
 .profile-avatar-row {
   display: flex;
