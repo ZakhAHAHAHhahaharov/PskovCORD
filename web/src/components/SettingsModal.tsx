@@ -444,9 +444,12 @@ function UsernameChangeModal({ onClose, isMobile }: { onClose: () => void; isMob
         <button className="btn-primary" onClick={save} disabled={saving || !canSubmit}>
           {saving ? <Loader2 size={15} className="spin" /> : 'Сохранить'}
         </button>
-        <button className="modal-close" onClick={onClose}>
-          Отмена
-        </button>
+        {/* На мобилке эта кнопка дублирует стрелку назад в заголовке. */}
+        {!isMobile && (
+          <button className="modal-close" onClick={onClose}>
+            Отмена
+          </button>
+        )}
       </div>
     </div>
   )
@@ -519,9 +522,11 @@ function PasswordChangeModal({ onClose, isMobile }: { onClose: () => void; isMob
         <button className="btn-primary" onClick={save} disabled={saving || !current || !next}>
           {saving ? <Loader2 size={15} className="spin" /> : 'Сохранить'}
         </button>
-        <button className="modal-close" onClick={onClose}>
-          Отмена
-        </button>
+        {!isMobile && (
+          <button className="modal-close" onClick={onClose}>
+            Отмена
+          </button>
+        )}
       </div>
     </div>
   )
@@ -1067,9 +1072,14 @@ export default function SettingsModal({
           </div>
         </div>
 
-        <button className="modal-close" onClick={onClose}>
-          Закрыть
-        </button>
+        {/* На мобилке закрытие — стрелка назад в шапке (см. modal-title
+            выше), эта кнопка там просто дублирует её и занимает место
+            снизу полноэкранного слоя. */}
+        {!isMobile && (
+          <button className="modal-close" onClick={onClose}>
+            Закрыть
+          </button>
+        )}
       </div>
     </div>
 
@@ -1082,7 +1092,9 @@ export default function SettingsModal({
     {activeModal === 'password' && (
       <PasswordChangeModal onClose={() => setActiveModal(null)} isMobile={isMobile} />
     )}
-    {activeModal === 'qrScanner' && <QrScannerModal onClose={() => setActiveModal(null)} />}
+    {activeModal === 'qrScanner' && (
+      <QrScannerModal onClose={() => setActiveModal(null)} isMobile={isMobile} />
+    )}
     </>
   )
 }
