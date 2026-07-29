@@ -97,11 +97,18 @@ export default function QrScannerModal({
 
   return (
     <div className="modal-overlay settings-sub-overlay" onClick={onClose}>
-      <div className="modal qr-scanner-modal" onClick={(e) => e.stopPropagation()}>
+      <div
+        className={`modal qr-scanner-modal ${token ? '' : 'qr-scanner-modal-camera'}`}
+        onClick={(e) => e.stopPropagation()}
+      >
         {token ? (
           <QrConfirmCard token={token} onClose={onClose} />
         ) : (
           <>
+            {/* На мобилке (см. .qr-scanner-modal-camera) заголовок и подсказка
+                лежат ПОВЕРХ видео с камеры (полупрозрачный градиент для
+                читаемости), а не в отдельной серой шапке над ним — камера
+                занимает экран от края до края. */}
             <h2 className="modal-title">
               {isMobile && (
                 <button className="chat-back-btn" title="Назад" onClick={onClose}>
