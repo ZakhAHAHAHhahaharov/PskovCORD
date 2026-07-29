@@ -2512,6 +2512,31 @@ textarea.inline-editable-input {
   color: var(--heading-text);
 }
 
+/* Тумблер видимости списка участников — справа в шапке текстового канала
+   (margin-left:auto прибивает его к правому краю). Выключен — серая
+   иконка, включён — обычный цвет текста; фона на самой кнопке нет, чтобы
+   не спорить с #/названием канала слева, только hover-подсветка. */
+.chat-header-members-toggle {
+  margin-left: auto;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 4px;
+  color: var(--text-faint);
+}
+
+.chat-header-members-toggle:hover {
+  background: var(--channel-hover);
+  color: var(--text-normal);
+}
+
+.chat-header-members-toggle.active {
+  color: var(--text-normal);
+}
+
 .chat-empty {
   flex: 1;
   display: flex;
@@ -5525,6 +5550,13 @@ button.settings-row-clickable:hover .settings-row-label {
      совсем — в голосовом канале участники и так видны плитками VoiceStage,
      для текстового канала это осознанный компромисс (см. план). */
   .members-list {
+    display: none;
+  }
+
+  /* Тумблер списка участников в chat-header — списку и так неоткуда
+     взяться на мобилке (см. правило выше), кнопка была бы декорацией без
+     эффекта. */
+  .chat-header-members-toggle {
     display: none;
   }
 

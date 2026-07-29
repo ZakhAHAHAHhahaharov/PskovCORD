@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, MouseEvent as ReactMouseEvent } from 'react'
-import { ChevronLeft, Phone, PhoneOff } from 'lucide-react'
+import { ChevronLeft, Phone, PhoneOff, Users } from 'lucide-react'
 import { useIsMobile } from '../hooks/useIsMobile'
 import {
   api, Channel, ChatMessageBase, Conversation, ConversationMessage, FriendsState, KnownPerson,
@@ -148,6 +148,11 @@ export default function AppShell() {
   userRef.current = user
   const [showDiscover, setShowDiscover] = useState(false)
   const [showServerSettings, setShowServerSettings] = useState(false)
+  // Переключатель списка участников сервера (иконка в chat-header текстового
+  // канала) — сам список в принципе показывается только для текстового
+  // канала (см. members-list ниже по currentChannel.kind), этот тумблер —
+  // ещё один слой поверх: можно спрятать его и сидя в тексте.
+  const [showMembersList, setShowMembersList] = useState(true)
   const [showSettings, setShowSettings] = useState(false)
   // Настройки на мобилке — полноэкранный "слой" поверх текущего экрана
   // (nav или content), а не центрированная модалка, и закрываются так же
@@ -2031,6 +2036,14 @@ export default function AppShell() {
               )}
               <span className="hash">#</span>
               <span className="chat-header-name">{currentChannel.name}</span>
+              <button
+                type="button"
+                className={`chat-header-members-toggle ${showMembersList ? 'active' : ''}`}
+                title={showMembersList ? 'Скрыть список участников' : 'Показать список участников'}
+                onClick={() => setShowMembersList((v) => !v)}
+              >
+                <Users size={18} />
+              </button>
             </header>
             <MessageList
               messages={[
@@ -2068,16 +2081,21 @@ export default function AppShell() {
         )}
       </main>
 
-      {serverId == null ? (
-        <aside className="members-list" />
-      ) : (
+      {/* Список участников — только для текстового канала (voice-канал и его
+          заглушка "Присоединиться", DM/группа, пустой экран без выбранного
+          канала — все прячут его, места справа под сетку/лендинг звонка не
+          остаётся). showMembersList — ещё один тумблер поверх этого, из
+          иконки в chat-header, действует только пока мы и так в тексте. */}
+      {serverId != null && currentChannel?.kind === 'text' && showMembersList ? (
         <MembersList
           members={members}
           channels={channels}
-          roles={serverId != null ? rolesForServer(serverId) : []}
+          roles={rolesForServer(serverId)}
           ownerId={currentServer?.owner ?? -1}
           onOpenProfile={openProfilePopup}
         />
+      ) : (
+        <aside className="members-list" />
       )}
 
       {showNewConversation && (
