@@ -117,7 +117,7 @@ export default function ProfileModal({ onClose }: { onClose: () => void }) {
           />
           {avatarError && <div className="login-error">{avatarError}</div>}
 
-          <div className="profile-modal-actions-row">
+          <div className="profile-modal-actions-row profile-modal-actions-row-stacked">
             <button
               type="button"
               className="profile-popup-item mini-profile-action"
