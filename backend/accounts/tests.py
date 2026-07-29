@@ -124,6 +124,28 @@ class ProfileUpdateTests(APITestCase):
         resp = self.client.patch("/api/auth/me", {"bio": "x" * 300})
         self.assertEqual(resp.status_code, 200)
 
+    def test_patch_pronouns_and_custom_status(self):
+        resp = self.client.patch(
+            "/api/auth/me", {"pronouns": "she/her", "custom_status": "чиню баги"})
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data["pronouns"], "she/her")
+        self.assertEqual(resp.data["custom_status"], "чиню баги")
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.pronouns, "she/her")
+        self.assertEqual(self.user.custom_status, "чиню баги")
+
+    def test_patch_pronouns_rejects_too_long(self):
+        resp = self.client.patch("/api/auth/me", {"pronouns": "x" * 25})
+        self.assertEqual(resp.status_code, 400)
+
+    def test_patch_custom_status_rejects_too_long(self):
+        resp = self.client.patch("/api/auth/me", {"custom_status": "x" * 65})
+        self.assertEqual(resp.status_code, 400)
+
+    def test_me_includes_date_joined(self):
+        resp = self.client.get("/api/auth/me")
+        self.assertIn("date_joined", resp.data)
+
     def test_unauthenticated_cannot_patch(self):
         self.client.force_authenticate(None)
         resp = self.client.patch("/api/auth/me", {"username": "hacker"})

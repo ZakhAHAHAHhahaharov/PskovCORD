@@ -21,9 +21,9 @@ from accounts.serializers import UserSerializer
 from . import presence, roles, sfu, uploads
 from .models import (
     Attachment, Channel, Conversation, ConversationMessage,
-    ConversationParticipant, Membership, Message, Role, Server, ServerBan,
-    ServerInvite, ServerJoinRequest, MAX_ATTACHMENT_BYTES, _invite_code,
-    dm_room,
+    ConversationParticipant, Membership, Message, ProfileNote, Role, Server,
+    ServerBan, ServerInvite, ServerJoinRequest, MAX_ATTACHMENT_BYTES,
+    _invite_code, dm_room,
 )
 from .permissions import are_friends, can_dm
 from .serializers import (
@@ -1130,7 +1130,35 @@ class UserProfileCard(APIView):
             "banner_gradient": target.banner_gradient,
             "banner_image": target.banner_image,
             "bio": target.bio,
+            "pronouns": target.pronouns,
+            "custom_status": target.custom_status,
+            "date_joined": target.date_joined,
         })
+
+
+class UserNote(APIView):
+    """GET/PUT приватной заметки о другом пользователе (см.
+    chat.models.ProfileNote) — как заметки в профиле Discord: видна и
+    редактируется только автором, у target об этом никакого сигнала не
+    уходит. Тот же барьер видимости, что и у самой карточки профиля
+    (_can_see_profile) — оставить заметку тому, чей профиль не видишь,
+    нельзя."""
+
+    def get(self, request, user_id):
+        target = get_object_or_404(User, id=user_id)
+        if target.id != request.user.id and not _can_see_profile(request.user, target):
+            return Response({"detail": "Нет доступа."}, status=403)
+        note = ProfileNote.objects.filter(author=request.user, about=target).first()
+        return Response({"text": note.text if note else ""})
+
+    def put(self, request, user_id):
+        target = get_object_or_404(User, id=user_id)
+        if target.id != request.user.id and not _can_see_profile(request.user, target):
+            return Response({"detail": "Нет доступа."}, status=403)
+        text = (request.data.get("text") or "").strip()
+        note, _ = ProfileNote.objects.update_or_create(
+            author=request.user, about=target, defaults={"text": text})
+        return Response({"text": note.text})
 
 
 class ConversationListCreate(APIView):

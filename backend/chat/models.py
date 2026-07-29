@@ -643,3 +643,27 @@ class Reaction(models.Model):
 
     def __str__(self) -> str:
         return f"{self.user} {self.emoji}"
+
+
+class ProfileNote(models.Model):
+    """Приватная заметка о другом пользователе — видна только автору (как
+    заметки в профиле Discord). Одна заметка на пару (author, about) —
+    повторная запись просто перезаписывает текст, отдельной истории нет.
+    Видимость самого профиля (можно ли вообще оставить/прочитать заметку)
+    проверяется тем же барьером, что и для карточки — см.
+    chat.views._can_see_profile/UserNote."""
+
+    author = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+        related_name="notes_written")
+    about = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+        related_name="notes_about")
+    text = models.TextField(blank=True, default="")
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ("author", "about")
+
+    def __str__(self) -> str:
+        return f"{self.author_id} note about {self.about_id}"

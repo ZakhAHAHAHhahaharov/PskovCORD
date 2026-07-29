@@ -981,7 +981,10 @@ input {
 .profile-popup-banner {
   /* Скруглённые верхние углы — на самом баннере, а не через overflow:hidden
      у .profile-popup: тот обрезал бы боковой флаут выбора статуса (Блок 3),
-     который позиционируется за пределами ширины попапа. */
+     который позиционируется за пределами ширины попапа. relative — для
+     облачка статуса и уголковых кнопок редактирования аватара/баннера
+     (ImageHoverMenu), которые позиционируются абсолютно внутри. */
+  position: relative;
   border-radius: 8px 8px 0 0;
   background: var(
     --profile-banner-gradient,
@@ -1006,12 +1009,18 @@ input {
   text-shadow: 0 1px 3px rgba(0, 0, 0, 0.45);
 }
 
-/* Строка @username под отображаемым именем — только когда оно задано (см.
-   StatusMenu/MiniProfilePopup: user.display_name || user.username сверху,
-   а эта строка — только при непустом display_name, иначе получалось бы
-   два одинаковых username подряд). */
-.profile-popup-username {
+/* Строка username • местоимения • значок под отображаемым именем — см.
+   ProfileCardHeader.tsx. username теперь показывается ВСЕГДА (не только
+   когда задано display_name), местоимения/значок — рядом же. */
+.profile-popup-meta-line {
+  display: flex;
+  align-items: center;
+  gap: 4px;
   padding-left: 5px;
+  min-width: 0;
+}
+
+.profile-popup-username {
   font-size: 12px;
   font-weight: 500;
   color: rgba(255, 255, 255, 0.75);
@@ -1021,6 +1030,83 @@ input {
   text-shadow: 0 1px 3px rgba(0, 0, 0, 0.45);
 }
 
+.profile-popup-meta-dot {
+  flex-shrink: 0;
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.profile-popup-pronouns {
+  flex-shrink: 0;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.75);
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.45);
+}
+
+/* Инпут местоимений (только в ProfileModal, режим редактирования) — тот же
+   стиль, что у соседних .profile-popup-pronouns, а не общий тёмный
+   .field-input: он сидит на цветном баннере, а не на фоне модалки. */
+.profile-popup-pronouns-input.inline-editable-display,
+.profile-popup-pronouns-input.inline-editable-input {
+  font-size: 12px;
+  color: #fff;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.45);
+  padding: 0 3px;
+  max-width: 110px;
+}
+
+.profile-popup-pronouns-input.inline-editable-display.empty {
+  color: rgba(255, 255, 255, 0.55);
+}
+
+/* Значок после местоимений — статичная заглушка (см. ProfileCardHeader),
+   реальная система бейджей появится позже, пока просто not-implemented. */
+.profile-popup-badge {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.profile-popup-badge:hover {
+  background: rgba(255, 255, 255, 0.15);
+}
+
+/* Облачко произвольного статус-текста — рядом с аватаркой, только когда
+   custom_status не пуст (см. ProfileCardHeader). */
+.profile-status-bubble {
+  position: absolute;
+  top: 4px;
+  left: 76px;
+  right: 8px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  background: var(--modal-bg);
+  border-radius: 12px;
+  padding: 4px 9px 4px 7px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
+  z-index: 2;
+}
+
+.profile-status-bubble-icon {
+  display: flex;
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+
+.profile-status-bubble-text {
+  font-size: 11px;
+  color: var(--text-normal);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .profile-popup-bio {
   padding: 10px 12px;
   font-size: 13px;
@@ -1028,6 +1114,223 @@ input {
   color: var(--text-normal);
   white-space: pre-wrap;
   overflow-wrap: break-word;
+}
+
+/* ---- ImageHoverMenu (ImageHoverMenu.tsx) — общий поповер редактирования
+   картинки, тот же визуальный язык, что у .status-flyout/.account-flyout. ---- */
+.image-hover-menu {
+  position: relative;
+  display: inline-block;
+}
+
+.image-hover-menu-trigger {
+  display: block;
+  cursor: pointer;
+}
+
+.image-hover-menu-popup {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  margin-top: 4px;
+  min-width: 150px;
+  background: var(--modal-bg);
+  border-radius: 8px;
+  box-shadow: 0 8px 16px rgba(0, 0, 0, 0.32);
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  z-index: 30;
+}
+
+.image-hover-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 4px;
+  font-size: 13px;
+  color: var(--text-normal);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.image-hover-menu-item:hover {
+  background: var(--channel-hover);
+}
+
+.image-hover-menu-item-danger {
+  color: var(--red);
+}
+
+/* Аватар в карточке — обёртка ImageHoverMenu поверх круглой аватарки,
+   затемнение по hover как визуальная подсказка "можно кликнуть". */
+.profile-avatar-hover-menu {
+  z-index: 2;
+}
+
+.profile-avatar-hover-menu .image-hover-menu-trigger {
+  position: relative;
+  border-radius: 50%;
+}
+
+.profile-avatar-hover-menu .image-hover-menu-trigger::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.35);
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  pointer-events: none;
+}
+
+.profile-avatar-hover-menu .image-hover-menu-trigger:hover::after {
+  opacity: 1;
+}
+
+/* Баннер — маленькая кнопка-карандаш в углу, а не оверлей на всю площадь
+   (тот спорил бы по z-index с аватаркой/именем/облачком статуса поверх
+   того же баннера). */
+.profile-banner-hover-menu {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 3;
+}
+
+.profile-banner-hover-menu .image-hover-menu-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.35);
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.profile-popup-banner:hover .profile-banner-hover-menu .image-hover-menu-trigger,
+.profile-banner-hover-menu:has(.image-hover-menu-popup) .image-hover-menu-trigger {
+  opacity: 1;
+}
+
+/* ---- InlineEditableText (InlineEditableText.tsx) — поля профиля без
+   подписи/рамки в покое, рамка по hover, клик — редактирование, blur/Enter
+   — сохранение. ---- */
+.inline-editable-display {
+  border: 1px solid transparent;
+  border-radius: 4px;
+  padding: 4px 6px;
+  margin: -4px -6px;
+  cursor: text;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+}
+
+.inline-editable-display:hover {
+  border-color: var(--input-border);
+  background: var(--input-bg);
+}
+
+.inline-editable-display.empty {
+  color: var(--text-muted);
+}
+
+.inline-editable-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.inline-editable-input {
+  width: 100%;
+  background: var(--input-bg);
+  border: 1px solid var(--blurple);
+  border-radius: 4px;
+  padding: 4px 6px;
+  margin: -4px -6px;
+  color: var(--text-normal);
+  font-family: inherit;
+  font-size: inherit;
+  outline: none;
+}
+
+textarea.inline-editable-input {
+  resize: vertical;
+  min-height: 48px;
+}
+
+/* bio/заметка переиспользуют .profile-popup-bio/.profile-popup-note как
+   className InlineEditableText — двойной класс перебивает более тесный
+   base-паддинг .inline-editable-* (та же специфичность, порядок иначе
+   решал бы не в пользу читаемого абзаца). */
+.inline-editable-display.profile-popup-bio,
+.inline-editable-input.profile-popup-bio,
+.inline-editable-display.profile-popup-note,
+.inline-editable-input.profile-popup-note {
+  padding: 10px 12px;
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.inline-editable-error {
+  font-size: 12px;
+  color: var(--red);
+  padding-left: 2px;
+}
+
+/* ---- ProfileModal/MiniProfilePopup — новые блоки под карточкой ---- */
+.profile-modal-actions-row {
+  display: flex;
+  gap: 6px;
+  padding: 0 6px;
+}
+
+.profile-modal-actions-row .profile-popup-item {
+  flex: 1;
+  justify-content: center;
+}
+
+.profile-modal-section {
+  padding: 10px 12px;
+}
+
+.profile-modal-section-title {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+
+.profile-modal-section-value {
+  font-size: 13px;
+  color: var(--text-normal);
+}
+
+.profile-modal-add-integration {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.profile-modal-add-integration:hover {
+  color: var(--text-normal);
+}
+
+/* Значок микрофона в свёрнутой нижней панели — см. StatusMenu.tsx trigger,
+   показывается только пока реально идёт голосовой звонок. */
+.user-panel-mic {
+  color: var(--green);
+  flex-shrink: 0;
 }
 
 .profile-popup-menu {

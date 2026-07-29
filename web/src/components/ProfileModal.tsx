@@ -1,145 +1,108 @@
 import { useRef, useState, ChangeEvent } from 'react'
-import { Camera, Trash2, Loader2 } from 'lucide-react'
+import { Check, Copy, MessageSquare, Plus } from 'lucide-react'
 import { useAuth } from '../auth'
-import { api } from '../api'
+import { api, Me } from '../api'
 import { useEscToClose } from '../modalStack'
-import {
-  AVATAR_SIZE, BANNER_MAX_BYTES, BANNER_MAX_H, BANNER_MAX_W, GRADIENT_PRESETS,
-  buildGradient, fileToBannerDataUrl, fileToSquareDataUrl, parseGradient,
-} from '../images'
-import Avatar from './Avatar'
+import { AVATAR_SIZE, fileToSquareDataUrl } from '../images'
+import ProfileCardHeader from './ProfileCardHeader'
+import BannerEditorModal from './BannerEditorModal'
+import InlineEditableText from './InlineEditableText'
 
 const BIO_MAX_LENGTH = 300
-const DISPLAY_NAME_MAX_LENGTH = 64
 
 /**
- * Профиль пользователя — всплывает поверх страницы (как в Discord). Смена
- * отображаемого имени, био и аватара (сжимается на клиенте до 256x256,
- * хранится как data-URL в БД — см. accounts.models.User.avatar_image).
+ * Профиль пользователя — всплывает поверх страницы (как в Discord). Вся
+ * карточка редактируется прямо на месте — отображаемое имя, местоимения,
+ * bio (InlineEditableText, см. ProfileCardHeader), аватар/баннер (hover-
+ * меню, см. ImageHoverMenu) — кнопки "Сохранить" нет вообще: потеря
+ * фокуса поля коммитит изменение сразу PATCH-запросом. Закрытие модалки
+ * (крестик/Esc/клик мимо) само снимает фокус с активного поля ПЕРЕД
+ * закрытием — см. handleClose — чтобы недописанное значение успело
+ * сохраниться тем же путём, что обычный blur.
+ *
  * Смена НИКА (username) отсюда убрана — он остаётся идентификатором
  * аккаунта и меняется только в Settings → «Учётная запись» (требует
- * подтверждения паролем, см. SettingsModal.UsernameChangeModal); здесь же
- * редактируется только то, что видно в карточке профиля поверх username.
+ * подтверждения паролем, см. SettingsModal.UsernameChangeModal).
  * Смена пароля и "Кто может мне писать" тоже убраны — первое дублирует
  * Settings → «Пароль и безопасность», второе переехало в Settings →
  * «Контент и общение». Открывается из ChannelSidebar (иконка в
  * user-panel-actions).
  */
 export default function ProfileModal({ onClose }: { onClose: () => void }) {
-  useEscToClose(onClose)
   const { user, updateLocalUser } = useAuth()
   const fileRef = useRef<HTMLInputElement>(null)
-  const bannerFileRef = useRef<HTMLInputElement>(null)
+  const [showBannerEditor, setShowBannerEditor] = useState(false)
+  const [avatarError, setAvatarError] = useState('')
+  const [copied, setCopied] = useState(false)
+  const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  const [displayName, setDisplayName] = useState(user?.display_name ?? '')
-  const [bio, setBio] = useState(user?.bio ?? '')
-  const [avatarImage, setAvatarImage] = useState(user?.avatar_image ?? '')
-  const [savingProfile, setSavingProfile] = useState(false)
-  const [profileError, setProfileError] = useState('')
-  const [profileSaved, setProfileSaved] = useState(false)
+  // Закрытие = коммит того, что сейчас в фокусе (если что-то есть) — без
+  // этого набранный, но ещё не потерявший фокус текст пропал бы молча при
+  // закрытии модалки, ведь именно blur — единственный путь сохранения.
+  const handleClose = () => {
+    ;(document.activeElement as HTMLElement)?.blur()
+    onClose()
+  }
 
-  const initialGradient = parseGradient(user?.banner_gradient ?? '')
-  const [bannerMode, setBannerMode] = useState<'gradient' | 'gif'>(
-    user?.banner_image ? 'gif' : 'gradient',
-  )
-  const [gradientFrom, setGradientFrom] = useState(initialGradient.from)
-  const [gradientTo, setGradientTo] = useState(initialGradient.to)
-  const [gradientAngle, setGradientAngle] = useState(initialGradient.angle)
-  const [bannerImage, setBannerImage] = useState(user?.banner_image ?? '')
-  const [bannerError, setBannerError] = useState('')
+  useEscToClose(handleClose)
 
   if (!user) return null
 
-  const currentGradientCss = buildGradient(gradientAngle, gradientFrom, gradientTo)
-  const desiredGradient = bannerMode === 'gradient' ? currentGradientCss : ''
-  const desiredBannerImage = bannerMode === 'gif' ? bannerImage : ''
-  const bannerDirty =
-    desiredGradient !== (user.banner_gradient || '') ||
-    desiredBannerImage !== (user.banner_image || '')
-
-  const profileDirty =
-    displayName.trim() !== (user.display_name || '') ||
-    bio.trim() !== (user.bio || '') ||
-    avatarImage !== user.avatar_image ||
-    bannerDirty
+  const patch = async (data: Parameters<typeof api.updateProfile>[0]) => {
+    const updated: Me = await api.updateProfile(data)
+    updateLocalUser(updated)
+  }
 
   const handleFileChange = async (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     e.target.value = ''
     if (!file) return
-    setProfileError('')
-    setProfileSaved(false)
+    setAvatarError('')
     try {
-      setAvatarImage(await fileToSquareDataUrl(file, AVATAR_SIZE))
+      const dataUrl = await fileToSquareDataUrl(file, AVATAR_SIZE)
+      await patch({ avatar_image: dataUrl })
     } catch (err) {
-      setProfileError((err as Error).message)
+      setAvatarError((err as Error).message)
     }
   }
 
-  const handleBannerFileChange = async (e: ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    e.target.value = ''
-    if (!file) return
-    setBannerError('')
-    setProfileSaved(false)
-    try {
-      setBannerImage(await fileToBannerDataUrl(file))
-      setBannerMode('gif')
-    } catch (err) {
-      setBannerError((err as Error).message)
-    }
+  const copyId = () => {
+    navigator.clipboard.writeText(String(user.id)).then(() => {
+      setCopied(true)
+      if (copyTimer.current) clearTimeout(copyTimer.current)
+      copyTimer.current = setTimeout(() => setCopied(false), 1500)
+    })
   }
 
-  const handleSaveProfile = async () => {
-    if (bio.length > BIO_MAX_LENGTH) {
-      setProfileError(`Слишком длинное описание (максимум ${BIO_MAX_LENGTH} символов).`)
-      return
-    }
-    setSavingProfile(true)
-    setProfileError('')
-    setProfileSaved(false)
-    try {
-      const patch: {
-        display_name?: string
-        bio?: string
-        avatar_image?: string
-        banner_gradient?: string
-        banner_image?: string
-      } = {}
-      if (displayName.trim() !== (user.display_name || '')) patch.display_name = displayName.trim()
-      if (bio.trim() !== (user.bio || '')) patch.bio = bio.trim()
-      if (avatarImage !== user.avatar_image) patch.avatar_image = avatarImage
-      if (bannerDirty) {
-        patch.banner_gradient = desiredGradient
-        patch.banner_image = desiredBannerImage
-      }
-      const updated = await api.updateProfile(patch)
-      updateLocalUser(updated)
-      setProfileSaved(true)
-    } catch (err) {
-      setProfileError((err as Error).message)
-    } finally {
-      setSavingProfile(false)
-    }
-  }
+  const joinedDate = new Date(user.date_joined).toLocaleDateString('ru-RU', {
+    day: 'numeric', month: 'long', year: 'numeric',
+  })
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div className="modal profile-modal" onClick={(e) => e.stopPropagation()}>
-        <h2 className="modal-title">Мой профиль</h2>
-
-        <div className="profile-avatar-row">
-          <button
-            type="button"
-            className="profile-avatar-edit"
-            onClick={() => fileRef.current?.click()}
-            title="Сменить аватар"
-          >
-            <Avatar name={user.username} color={user.avatar_color} image={avatarImage} size={80} />
-            <span className="profile-avatar-overlay">
-              <Camera size={20} />
-            </span>
-          </button>
+    <>
+      <div className="modal-overlay" onClick={handleClose}>
+        <div className="modal profile-modal" onClick={(e) => e.stopPropagation()}>
+          <ProfileCardHeader
+            username={user.username}
+            displayName={user.display_name}
+            avatarColor={user.avatar_color}
+            avatarImage={user.avatar_image}
+            bannerGradient={user.banner_gradient}
+            bannerImage={user.banner_image}
+            status={user.status}
+            customStatus={user.custom_status}
+            pronouns={user.pronouns}
+            edit={{
+              onEditAvatar: () => fileRef.current?.click(),
+              onRemoveAvatar: () => patch({ avatar_image: '' }),
+              canRemoveAvatar: !!user.avatar_image,
+              onEditBanner: () => setShowBannerEditor(true),
+              onRemoveBanner: () => patch({ banner_gradient: '', banner_image: '' }),
+              canRemoveBanner: !!(user.banner_gradient || user.banner_image),
+              onSaveDisplayName: (v) => patch({ display_name: v }),
+              onSavePronouns: (v) => patch({ pronouns: v }),
+            }}
+          />
           <input
             ref={fileRef}
             type="file"
@@ -147,186 +110,68 @@ export default function ProfileModal({ onClose }: { onClose: () => void }) {
             className="profile-file-input"
             onChange={handleFileChange}
           />
-          {avatarImage && (
+          {avatarError && <div className="login-error">{avatarError}</div>}
+
+          <div className="profile-modal-actions-row">
             <button
               type="button"
-              className="profile-avatar-remove"
-              onClick={() => {
-                setAvatarImage('')
-                setProfileSaved(false)
-              }}
+              className="profile-popup-item mini-profile-action"
+              disabled
+              title="Нельзя написать самому себе"
             >
-              <Trash2 size={13} /> Удалить аватар
+              <MessageSquare size={15} /> Написать сообщение
             </button>
-          )}
-        </div>
-
-        <div className="field-label">Фон карточки профиля</div>
-        <div
-          className="banner-preview"
-          style={{ background: bannerMode === 'gif' && bannerImage ? undefined : currentGradientCss }}
-        >
-          {bannerMode === 'gif' && bannerImage && (
-            <img src={bannerImage} alt="" className="banner-preview-img" />
-          )}
-        </div>
-
-        <div className="banner-mode-tabs">
-          <button
-            type="button"
-            className={`banner-mode-tab ${bannerMode === 'gradient' ? 'active' : ''}`}
-            onClick={() => {
-              setBannerMode('gradient')
-              setProfileSaved(false)
-            }}
-          >
-            Градиент
-          </button>
-          <button
-            type="button"
-            className={`banner-mode-tab ${bannerMode === 'gif' ? 'active' : ''}`}
-            onClick={() => {
-              setBannerMode('gif')
-              setProfileSaved(false)
-            }}
-          >
-            Гифка
-          </button>
-        </div>
-
-        {bannerMode === 'gradient' ? (
-          <>
-            <div className="gradient-presets">
-              {GRADIENT_PRESETS.map(([from, to]) => (
-                <button
-                  key={from + to}
-                  type="button"
-                  className="gradient-preset"
-                  style={{ background: buildGradient(gradientAngle, from, to) }}
-                  title="Применить пресет"
-                  onClick={() => {
-                    setGradientFrom(from)
-                    setGradientTo(to)
-                    setProfileSaved(false)
-                  }}
-                />
-              ))}
-            </div>
-            <div className="gradient-controls">
-              <label className="gradient-color-field">
-                От
-                <input
-                  type="color"
-                  value={gradientFrom}
-                  onChange={(e) => {
-                    setGradientFrom(e.target.value)
-                    setProfileSaved(false)
-                  }}
-                />
-              </label>
-              <label className="gradient-color-field">
-                До
-                <input
-                  type="color"
-                  value={gradientTo}
-                  onChange={(e) => {
-                    setGradientTo(e.target.value)
-                    setProfileSaved(false)
-                  }}
-                />
-              </label>
-              <label className="gradient-angle-field">
-                Угол
-                <input
-                  type="range"
-                  min={0}
-                  max={360}
-                  value={gradientAngle}
-                  onChange={(e) => {
-                    setGradientAngle(Number(e.target.value))
-                    setProfileSaved(false)
-                  }}
-                />
-              </label>
-            </div>
-          </>
-        ) : (
-          <div className="banner-gif-row">
-            <button
-              type="button"
-              className="btn-secondary"
-              onClick={() => bannerFileRef.current?.click()}
-            >
-              {bannerImage ? 'Заменить гифку' : 'Загрузить гифку'}
+            <button type="button" className="profile-popup-item" onClick={copyId}>
+              {copied ? <Check size={15} /> : <Copy size={15} />}
+              {copied ? 'Скопировано' : 'Копировать ID'}
             </button>
-            <input
-              ref={bannerFileRef}
-              type="file"
-              accept="image/gif,image/webp,image/png,image/jpeg"
-              className="profile-file-input"
-              onChange={handleBannerFileChange}
-            />
-            {bannerImage && (
-              <button
-                type="button"
-                className="profile-avatar-remove"
-                onClick={() => {
-                  setBannerImage('')
-                  setProfileSaved(false)
-                }}
-              >
-                <Trash2 size={13} /> Убрать
-              </button>
-            )}
-            <span className="banner-hint">
-              До {BANNER_MAX_W}×{BANNER_MAX_H}, макс. {Math.round(BANNER_MAX_BYTES / 1_000_000)} МБ.
-            </span>
           </div>
-        )}
-        {bannerError && <div className="login-error">{bannerError}</div>}
 
-        <div className="field-label">Отображаемое имя</div>
-        <input
-          className="field-input"
-          value={displayName}
-          onChange={(e) => {
-            setDisplayName(e.target.value)
-            setProfileSaved(false)
-          }}
-          placeholder={user.username}
-          maxLength={DISPLAY_NAME_MAX_LENGTH}
-        />
+          <InlineEditableText
+            className="profile-popup-bio"
+            value={user.bio}
+            placeholder="Расскажи о себе"
+            maxLength={BIO_MAX_LENGTH}
+            multiline
+            onSave={(v) => patch({ bio: v })}
+          />
 
-        <div className="field-label">О себе</div>
-        <textarea
-          className="field-input profile-bio-input"
-          value={bio}
-          onChange={(e) => {
-            setBio(e.target.value)
-            setProfileSaved(false)
-          }}
-          placeholder="Расскажи о себе"
-          maxLength={BIO_MAX_LENGTH}
-          rows={3}
-        />
+          <div className="profile-modal-section">
+            <div className="profile-modal-section-title">В числе участников с</div>
+            <div className="profile-modal-section-value">{joinedDate}</div>
+          </div>
 
-        {profileError && <div className="login-error">{profileError}</div>}
-        {profileSaved && !profileError && <div className="profile-success">Сохранено.</div>}
+          <div className="profile-modal-section">
+            <div className="profile-modal-section-title">Интеграции</div>
+            <button
+              type="button"
+              className="profile-modal-add-integration"
+              onClick={() => alert('Пока не реализовано')}
+            >
+              <Plus size={14} /> Добавить интеграцию
+            </button>
+          </div>
 
-        <button
-          className="btn-primary"
-          onClick={handleSaveProfile}
-          disabled={
-            savingProfile || !profileDirty
-          }
-        >
-          {savingProfile ? <Loader2 size={15} className="spin" /> : 'Сохранить'}
-        </button>
-
-        <button className="modal-close" onClick={onClose}>
-          Закрыть
-        </button>
+          <button className="modal-close" onClick={handleClose}>
+            Закрыть
+          </button>
+        </div>
       </div>
-    </div>
+
+      {/* Не вложена в .modal-overlay выше — иначе клик мимо этой
+          под-модалки (но всё ещё внутри overlay профиля) всплыл бы до его
+          onClick и закрыл заодно и сам профиль (тот же приём, что и у
+          под-модалок в SettingsModal.tsx). */}
+      {showBannerEditor && (
+        <BannerEditorModal
+          currentGradient={user.banner_gradient}
+          currentImage={user.banner_image}
+          onSave={(gradient, image) =>
+            patch({ banner_gradient: gradient, banner_image: image })
+          }
+          onClose={() => setShowBannerEditor(false)}
+        />
+      )}
+    </>
   )
 }

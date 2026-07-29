@@ -5,15 +5,18 @@ import {
   useState,
   KeyboardEvent as ReactKeyboardEvent,
 } from 'react'
-import { UserPlus, UserCheck, Loader2, MessageSquare, Smile } from 'lucide-react'
+import {
+  Check, Copy, UserPlus, UserCheck, Loader2, MessageSquare, Smile,
+} from 'lucide-react'
 import { api } from '../api'
 import { useEscToClose } from '../modalStack'
-import Avatar from './Avatar'
+import ProfileCardHeader from './ProfileCardHeader'
+import InlineEditableText from './InlineEditableText'
 
 export interface ProfilePopupUser {
   id: number
   username: string
-  /** Пусто — карточка показывает только username, без второй строки. */
+  /** Пусто — карточка показывает только username. */
   display_name?: string
   avatar_color: string
   avatar_image: string
@@ -57,6 +60,8 @@ export default function MiniProfilePopup({
   const [composing, setComposing] = useState(false)
   const [message, setMessage] = useState('')
   const [addStatus, setAddStatus] = useState<'idle' | 'sending' | 'sent'>('idle')
+  const [copied, setCopied] = useState(false)
+  const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const { user } = target
 
   const handleAddFriend = async () => {
@@ -67,27 +72,61 @@ export default function MiniProfilePopup({
   }
   const isSelf = user.id === currentUserId
 
-  // Баннер и bio чужого профиля не приходят вместе с самим профилем: баннер
-  // весит до 4 МБ, а профиль вложен в каждое сообщение и в каждую строку
-  // ростера (bio туда не тяжёлое, но всё равно ни к чему — см. api.ts
-  // ProfileCard). Догружаем ровно здесь — когда карточку реально открыли.
-  const [card, setCard] = useState<{ gradient: string; image: string; bio: string } | null>(null)
+  // Тяжёлые/редко нужные поля чужого профиля не приходят вместе с самим
+  // профилем (баннер — до 4 МБ data-URL, а сам ProfilePopupUser собирается
+  // из message.author/строки ростера, которые летят в КАЖДОМ сообщении) —
+  // догружаем ровно здесь, когда карточку реально открыли. Тот же приём,
+  // что уже был для bio/баннера, просто заодно все новые поля карточки.
+  const [card, setCard] = useState<{
+    gradient: string
+    image: string
+    bio: string
+    pronouns: string
+    customStatus: string
+    dateJoined: string
+  } | null>(null)
   useEffect(() => {
     let cancelled = false
     void (async () => {
       try {
         const data = await api.profileCard(user.id)
         if (!cancelled) {
-          setCard({ gradient: data.banner_gradient, image: data.banner_image, bio: data.bio })
+          setCard({
+            gradient: data.banner_gradient,
+            image: data.banner_image,
+            bio: data.bio,
+            pronouns: data.pronouns,
+            customStatus: data.custom_status,
+            dateJoined: data.date_joined,
+          })
         }
       } catch {
-        // Нет доступа или сеть — просто оставим фон по умолчанию, без bio.
+        // Нет доступа или сеть — просто оставим фон по умолчанию, без остального.
       }
     })()
     return () => {
       cancelled = true
     }
   }, [user.id])
+
+  // Приватная заметка (видна только автору, своя у каждого просматривающего)
+  // — не имеет смысла на своём же профиле, лениво грузим только для чужого.
+  const [note, setNote] = useState('')
+  useEffect(() => {
+    if (isSelf) return
+    let cancelled = false
+    void (async () => {
+      try {
+        const data = await api.getUserNote(user.id)
+        if (!cancelled) setNote(data.text)
+      } catch {
+        // Нет доступа — оставляем пустой, поле просто не даст сохранить.
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [user.id, isSelf])
 
   const bannerGradient = card?.gradient ?? user.banner_gradient
   const bannerImage = card?.image ?? user.banner_image
@@ -130,38 +169,41 @@ export default function MiniProfilePopup({
     }
   }
 
+  const copyId = () => {
+    navigator.clipboard.writeText(String(user.id)).then(() => {
+      setCopied(true)
+      if (copyTimer.current) clearTimeout(copyTimer.current)
+      copyTimer.current = setTimeout(() => setCopied(false), 1500)
+    })
+  }
+
+  const joinedDate = card?.dateJoined
+    ? new Date(card.dateJoined).toLocaleDateString('ru-RU', {
+        day: 'numeric', month: 'long', year: 'numeric',
+      })
+    : null
+
   return (
     <div
       ref={ref}
       className="profile-popup mini-profile-popup"
       style={{ left: target.x, top: target.y }}
     >
-      <div
-        className="profile-popup-banner"
-        style={{
-          background: bannerImage ? undefined : bannerGradient || undefined,
-          backgroundImage: bannerImage ? `url(${bannerImage})` : undefined,
-        }}
-      >
-        <Avatar
-          name={user.username}
-          color={user.avatar_color}
-          image={user.avatar_image}
-          size={86}
-          status={user.status}
-          showStatus={!!user.status}
-        />
-        <span className="profile-popup-name">{user.display_name || user.username}</span>
-        {!!user.display_name && (
-          <span className="profile-popup-username">@{user.username}</span>
-        )}
-      </div>
+      <ProfileCardHeader
+        username={user.username}
+        displayName={user.display_name || ''}
+        avatarColor={user.avatar_color}
+        avatarImage={user.avatar_image}
+        bannerGradient={bannerGradient}
+        bannerImage={bannerImage}
+        status={user.status}
+        customStatus={card?.customStatus || ''}
+        pronouns={card?.pronouns || ''}
+      />
 
-      {card?.bio && <div className="profile-popup-bio">{card.bio}</div>}
-
-      {!isSelf && (
-        <div className="profile-popup-menu">
-          {isFriend ? (
+      <div className="profile-popup-menu">
+        {!isSelf && (
+          isFriend ? (
             <div className="profile-popup-item mini-profile-note">
               <UserPlus size={15} /> Уже в друзьях
             </div>
@@ -187,35 +229,70 @@ export default function MiniProfilePopup({
                   ? 'Заявка отправлена'
                   : 'Добавить в друзья'}
             </button>
-          )}
-          {composing ? (
-            <div className="mini-profile-compose">
-              <input
-                className="mini-profile-compose-input"
-                placeholder={`Сообщение для ${user.username}`}
-                value={message}
-                onChange={(e) => setMessage(e.target.value)}
-                onKeyDown={handleComposeKeyDown}
-                autoFocus
-              />
-              <button
-                type="button"
-                className="mini-profile-compose-emoji"
-                title="Эмодзи (пока не реализовано)"
-                disabled
-              >
-                <Smile size={16} />
-              </button>
-            </div>
-          ) : (
+          )
+        )}
+
+        {composing ? (
+          <div className="mini-profile-compose">
+            <input
+              className="mini-profile-compose-input"
+              placeholder={`Сообщение для ${user.username}`}
+              value={message}
+              onChange={(e) => setMessage(e.target.value)}
+              onKeyDown={handleComposeKeyDown}
+              autoFocus
+            />
             <button
               type="button"
-              className="profile-popup-item mini-profile-action"
-              onClick={() => setComposing(true)}
+              className="mini-profile-compose-emoji"
+              title="Эмодзи (пока не реализовано)"
+              disabled
             >
-              <MessageSquare size={15} /> Написать сообщение
+              <Smile size={16} />
             </button>
-          )}
+          </div>
+        ) : (
+          <div className="profile-modal-actions-row">
+            {!isSelf && (
+              <button
+                type="button"
+                className="profile-popup-item mini-profile-action"
+                onClick={() => setComposing(true)}
+              >
+                <MessageSquare size={15} /> Написать сообщение
+              </button>
+            )}
+            <button type="button" className="profile-popup-item" onClick={copyId}>
+              {copied ? <Check size={15} /> : <Copy size={15} />}
+              {copied ? 'Скопировано' : 'Копировать ID'}
+            </button>
+          </div>
+        )}
+      </div>
+
+      {card?.bio && <div className="profile-popup-bio">{card.bio}</div>}
+
+      {joinedDate && (
+        <div className="profile-modal-section">
+          <div className="profile-modal-section-title">В числе участников с</div>
+          <div className="profile-modal-section-value">{joinedDate}</div>
+        </div>
+      )}
+
+      {!isSelf && (
+        <div className="profile-modal-section">
+          <div className="profile-modal-section-title">Заметка (видна только вам)</div>
+          <InlineEditableText
+            className="profile-popup-note"
+            value={note}
+            placeholder="Нажмите, чтобы добавить заметку"
+            maxLength={300}
+            multiline
+            onSave={async (text) => {
+              await api.setUserNote(user.id, text)
+              setNote(text)
+            }}
+          />
         </div>
       )}
     </div>
