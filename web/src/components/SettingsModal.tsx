@@ -868,11 +868,28 @@ export default function SettingsModal({
       <div className="modal settings-modal" onClick={(e) => e.stopPropagation()}>
         <h2 className="modal-title">
           {isMobile && (
-            <button className="chat-back-btn" title="Назад" onClick={onClose}>
+            // Открыта категория — стрелка закрывает ТОЛЬКО её (возврат к
+            // списку категорий), а не весь экран настроек; сам заголовок
+            // тогда тоже подменяется на название категории — единственный
+            // хедер вместо "Настройки" сверху + отдельного мини-хедера
+            // категории под ним, как было раньше (см. удалённый
+            // .settings-content-back ниже).
+            <button
+              className="chat-back-btn"
+              title="Назад"
+              onClick={() => {
+                if (mobileCategoryOpen) {
+                  setMobileCategoryOpen(false)
+                  setDetailView(null)
+                } else {
+                  onClose()
+                }
+              }}
+            >
               <ChevronLeft size={20} />
             </button>
           )}
-          Настройки
+          {isMobile && mobileCategoryOpen ? currentCategory.label : 'Настройки'}
         </h2>
 
         <div className={`settings-body${mobileCategoryOpen ? ' mobile-category-open' : ''}`}>
@@ -933,14 +950,6 @@ export default function SettingsModal({
           </nav>
 
           <div className="settings-content" ref={contentRef}>
-            {isMobile && (
-              <button
-                className="settings-detail-back settings-content-back"
-                onClick={() => setMobileCategoryOpen(false)}
-              >
-                <ChevronLeft size={16} /> {currentCategory.label}
-              </button>
-            )}
             {detailView === 'sessions' ? (
               <SessionsDetailView onBack={() => setDetailView(null)} />
             ) : activeCategory === 'account' ? (

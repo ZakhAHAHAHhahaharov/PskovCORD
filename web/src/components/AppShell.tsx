@@ -2135,6 +2135,7 @@ export default function AppShell() {
           onClose={() => setShowServerSettings(false)}
           onServerUpdated={handleServerUpdated}
           onMembersChanged={reloadMembers}
+          isMobile={isMobile}
         />
       )}
       {showSettings && (

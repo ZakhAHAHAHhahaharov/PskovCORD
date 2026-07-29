@@ -542,6 +542,14 @@ input {
   position: relative;
   width: 48px;
   height: 48px;
+  /* box-sizing:border-box идёт глобально (см. * {} в начале файла), а
+     UA-стиль <button> добавляет паддинг по умолчанию (в Chrome/Safari —
+     несимметричный, больше по бокам, чем сверху/снизу) — сам сброс
+     button {} в начале файла его не убирает, только border/background.
+     Без явного padding:0 значок сервера (.rail-pill-icon, width/height:
+     100% от content-box) оказывался у́же 48px и не доставал до левого/
+     правого края пилюли. */
+  padding: 0;
   border-radius: 24px;
   background: var(--sidebar-bg);
   color: var(--text-normal);
@@ -5529,6 +5537,21 @@ button.settings-row-clickable:hover .settings-row-label {
    (web/src/hooks/useIsMobile.ts, по умолчанию тоже 768px).
    =================================================================== */
 @media (max-width: 768px) {
+  /* iOS Safari (и часть других мобильных браузеров) сама зумит страницу при
+     фокусе на поле с font-size < 16px — "минимально необходимый" размер
+     тут в буквальном смысле 16px, меньше нельзя без побочного авто-зума.
+     У десятка полей по всему файлу (.message-input textarea,
+     .field-input, .status-edit-text-input и т.д.) свой font-size меньше
+     16px для десктопа — !important здесь оправдан: это не стилевое
+     предпочтение, а обход конкретного браузерного поведения, патчить
+     каждый класс по отдельности означало бы держать список синхронным
+     вручную при каждом новом поле. */
+  input,
+  textarea,
+  select {
+    font-size: 16px !important;
+  }
+
   /* ---- layout: nav-экран (.mobile-nav-pane — рельса+сайдбар каналов
      единым блоком, см. .mobile-nav-pane выше в файле) vs content-экран
      (main.chat — текстовый чат или VoiceStage) на весь экран. Класс
@@ -5706,10 +5729,11 @@ button.settings-row-clickable:hover .settings-row-label {
      почти не оставляют места контенту. Список категорий и контент
      конкретной категории — два РАЗНЫХ полных "экрана" (см.
      mobileCategoryOpen в SettingsModal.tsx: тап по категории показывает
-     её контент на весь экран, кнопка назад — .settings-content-back —
-     возвращает к списку), а не таб-строка сверху + контент под ней
-     сразу оба видны, как было раньше. display:none/block — тот же
-     проверенный приём, что и для nav/content экранов всего приложения
+     её контент на весь экран, кнопка назад в общем modal-title меняет
+     назначение — закрывает категорию, а не весь модал целиком, см.
+     .modal-title в SettingsModal.tsx), а не таб-строка сверху + контент
+     под ней сразу оба видны, как было раньше. display:none/block — тот
+     же проверенный приём, что и для nav/content экранов всего приложения
      (см. .app main.chat выше в файле) — простой toggle без
      position:absolute/transform, которые там ломались. */
   .settings-body {
@@ -5747,12 +5771,6 @@ button.settings-row-clickable:hover .settings-row-label {
     flex: 1;
     min-height: 0;
     overflow-y: auto;
-  }
-
-  .settings-content-back {
-    font-size: 15px;
-    font-weight: 700;
-    color: var(--heading-text);
   }
 
   /* ---- под-модалки настроек (смена ника/пароля) — тоже полноэкранные на
