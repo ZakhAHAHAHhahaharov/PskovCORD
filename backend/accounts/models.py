@@ -2,6 +2,40 @@ from django.contrib.auth.models import AbstractUser
 from django.db import models
 
 
+class NameFont(models.Model):
+    """Шрифт для стиля отображаемого имени (см. User.name_font) — загружается
+    суперпользователем через админку и становится доступен всем в пикере
+    шрифтов (ProfileModal → «Стили» → «Стиль отображаемого имени»). В отличие
+    от core.Favicon, тут не нужна Pillow-обработка перед сохранением — файл
+    шрифта хранится как есть, поэтому обычный ModelForm/ImageField-подобный
+    FileField работают без плясок с отдельной формой."""
+
+    label = models.CharField(max_length=60, verbose_name="Название (в списке выбора)")
+    file = models.FileField(upload_to="name_fonts/", verbose_name="Файл шрифта (woff2/woff/ttf)")
+    uploaded_by = models.ForeignKey(
+        "accounts.User",
+        on_delete=models.CASCADE,
+        related_name="uploaded_name_fonts",
+        verbose_name="Загрузил",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["label"]
+        verbose_name = "Шрифт ника"
+        verbose_name_plural = "Шрифты ника"
+
+    def __str__(self) -> str:
+        return self.label
+
+    @property
+    def family_name(self) -> str:
+        # Синтетический, а не введённый вручную — гарантированно уникален и
+        # не зависит от того, что admin впишет в label (два шрифта вполне
+        # могут называться одинаково "для человека").
+        return f"pc-namefont-{self.pk}"
+
+
 class User(AbstractUser):
     """Пользователь PskovCord. Пока = стандартный Django-юзер + цвет аватара."""
 
@@ -12,6 +46,19 @@ class User(AbstractUser):
         (ONLINE, "В сети"),
         (DND, "Не беспокоить"),
         (INVISIBLE, "Невидимка"),
+    ]
+
+    NAME_EFFECT_STANDARD = "standard"
+    NAME_EFFECT_GRADIENT = "gradient"
+    NAME_EFFECT_NEON = "neon"
+    NAME_EFFECT_CARTOON = "cartoon"
+    NAME_EFFECT_HIGHLIGHT = "highlight"
+    NAME_EFFECT_CHOICES = [
+        (NAME_EFFECT_STANDARD, "Минимализм"),
+        (NAME_EFFECT_GRADIENT, "Градиент"),
+        (NAME_EFFECT_NEON, "Неон"),
+        (NAME_EFFECT_CARTOON, "Мультфильм"),
+        (NAME_EFFECT_HIGHLIGHT, "Выделение"),
     ]
 
     avatar_color = models.CharField(max_length=7, default="#5865F2")
@@ -59,6 +106,35 @@ class User(AbstractUser):
     # только в собственной карточке профиля, незачем гонять гифки по WS
     # всем на сервере.
     banner_image = models.TextField(blank=True, default="")
+    # Фон ПОД баннером — виден только когда banner_image задан и это гифка/
+    # картинка с прозрачностью (см. фронт ProfileCardHeader.profile-card-banner:
+    # backgroundColor рисуется отдельным слоем ПОД backgroundImage). Для
+    # градиента бессмысленен (тот и так непрозрачный), поэтому фронт его туда
+    # не подставляет. Пусто — прозрачные пиксели гифки показывают то, что
+    # рисуется под баннером в CSS по умолчанию (см. .profile-card-banner).
+    banner_color = models.CharField(max_length=7, blank=True, default="")
+    # Шрифт отображаемого имени в сообщениях/голосовом ростере (см.
+    # NameFont выше) — null означает "системный" (обычный var(--font) на
+    # фронте). SET_NULL — если админ удалит загруженный шрифт, у всех, кто
+    # его выбрал, ник просто откатывается на системный, а не ломается.
+    name_font = models.ForeignKey(
+        "accounts.NameFont",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+        verbose_name="Шрифт ника",
+    )
+    # Как обыгрывается цвет(а) ника — сам цвет(а) ниже, в name_color_1/2.
+    name_effect = models.CharField(
+        max_length=12, choices=NAME_EFFECT_CHOICES, default=NAME_EFFECT_STANDARD)
+    # Хекс-цвета для стиля ника — сколько реально используется, зависит от
+    # name_effect (см. фронт nameStyle.ts NAME_EFFECTS.colorCount): standard/
+    # neon — только name_color_1, gradient/highlight — оба. Пусто — цвет не
+    # переопределяется, ник рисуется обычным цветом текста темы (нулевой
+    # визуальный дифф для тех, кто это не настраивал).
+    name_color_1 = models.CharField(max_length=7, blank=True, default="")
+    name_color_2 = models.CharField(max_length=7, blank=True, default="")
     # Выбирается самим пользователем; фактическая видимость другим (online/dnd/offline)
     # вычисляется отдельно с учётом реального подключения — см. chat.presence_status.
     status = models.CharField(max_length=10, choices=STATUS_CHOICES, default=ONLINE)

@@ -174,10 +174,12 @@ export default function StatusMenu({
             avatarImage={user.avatar_image}
             bannerGradient={user.banner_gradient}
             bannerImage={user.banner_image}
+            bannerColor={user.banner_color}
             status={user.status}
             customStatus={user.custom_status}
             customStatusEmoji={user.custom_status_emoji}
             pronouns={user.pronouns}
+            nameStyle={user}
           />
 
           {user.bio && (

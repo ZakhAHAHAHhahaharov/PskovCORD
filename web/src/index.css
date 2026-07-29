@@ -37,6 +37,13 @@
 
   --font: 'gg sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
     Helvetica, Arial, sans-serif;
+
+  /* Множитель ко всем font-size в файле (см. calc(...px * var(--font-scale))
+     ниже) — настройка "Размер шрифта" в Внешнем виде (см. settings.tsx
+     applyFontScale). 1 = как сейчас, без изменений. Ставится инлайн на
+     <html> из SettingsProvider, здесь — только резервное значение до того,
+     как он смонтируется. */
+  --font-scale: 1;
 }
 
 /* Темы переключаются атрибутом data-theme на <html>, см. applyTheme() в
@@ -189,7 +196,7 @@ input {
 
 .login-logo {
   margin: 0 0 4px;
-  font-size: 28px;
+  font-size: calc(28px * var(--font-scale, 1));
   font-weight: 800;
   text-align: center;
   color: var(--text-normal);
@@ -209,7 +216,7 @@ input {
 
 .not-found-code {
   margin: 4px 0;
-  font-size: 56px;
+  font-size: calc(56px * var(--font-scale, 1));
   font-weight: 800;
   letter-spacing: 1px;
   color: var(--text-faint);
@@ -222,7 +229,7 @@ input {
 }
 
 .field-label {
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale, 1));
   font-weight: 700;
   text-transform: uppercase;
   color: var(--text-muted);
@@ -236,7 +243,7 @@ input {
   border-radius: 4px;
   padding: 10px;
   color: var(--text-normal);
-  font-size: 15px;
+  font-size: calc(15px * var(--font-scale, 1));
   outline: none;
 }
 
@@ -278,7 +285,7 @@ input {
   font-weight: 600;
   padding: 11px;
   border-radius: 4px;
-  font-size: 15px;
+  font-size: calc(15px * var(--font-scale, 1));
   transition: background 0.15s;
 }
 
@@ -294,12 +301,12 @@ input {
 .login-error {
   margin-top: 12px;
   color: var(--red);
-  font-size: 14px;
+  font-size: calc(14px * var(--font-scale, 1));
 }
 
 .login-switch {
   margin-top: 14px;
-  font-size: 14px;
+  font-size: calc(14px * var(--font-scale, 1));
   color: var(--text-muted);
 }
 
@@ -341,14 +348,14 @@ input {
 
 .qr-login-title {
   margin: 0 0 8px;
-  font-size: 16px;
+  font-size: calc(16px * var(--font-scale, 1));
   font-weight: 700;
   color: #fff;
 }
 
 .qr-login-subtitle {
   margin: 0 0 16px;
-  font-size: 13px;
+  font-size: calc(13px * var(--font-scale, 1));
   line-height: 1.4;
   color: var(--text-muted);
 }
@@ -384,12 +391,12 @@ input {
   gap: 8px;
   padding: 12px;
   color: #fff;
-  font-size: 13px;
+  font-size: calc(13px * var(--font-scale, 1));
   text-align: center;
 }
 
 .qr-login-pin {
-  font-size: 30px;
+  font-size: calc(30px * var(--font-scale, 1));
   font-weight: 800;
   letter-spacing: 4px;
   color: #fff;
@@ -416,13 +423,13 @@ input {
 }
 
 .qr-confirm-device-title {
-  font-size: 14px;
+  font-size: calc(14px * var(--font-scale, 1));
   font-weight: 600;
 }
 
 .qr-confirm-device-ip {
   margin-top: 2px;
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale, 1));
   color: var(--text-muted);
 }
 
@@ -444,7 +451,7 @@ input {
   background: var(--input-bg);
   border: 1px solid var(--input-border);
   color: var(--text-normal);
-  font-size: 22px;
+  font-size: calc(22px * var(--font-scale, 1));
   font-weight: 700;
   letter-spacing: 2px;
   display: flex;
@@ -501,7 +508,7 @@ input {
   padding: 16px;
   text-align: center;
   color: #fff;
-  font-size: 13px;
+  font-size: calc(13px * var(--font-scale, 1));
   background: rgba(0, 0, 0, 0.55);
 }
 
@@ -581,7 +588,7 @@ input {
   background: var(--sidebar-bg);
   color: var(--text-normal);
   font-weight: 600;
-  font-size: 16px;
+  font-size: calc(16px * var(--font-scale, 1));
   display: flex;
   align-items: center;
   justify-content: center;
@@ -599,7 +606,7 @@ input {
   border-radius: 9px;
   background: var(--red);
   color: #fff;
-  font-size: 11px;
+  font-size: calc(11px * var(--font-scale, 1));
   font-weight: 700;
   display: flex;
   align-items: center;
@@ -628,7 +635,7 @@ input {
 .rail-pill.add {
   color: var(--green);
   background: var(--sidebar-bg);
-  font-size: 24px;
+  font-size: calc(24px * var(--font-scale, 1));
 }
 
 .rail-pill.add:hover {
@@ -638,7 +645,7 @@ input {
 
 .rail-pill.explore {
   color: var(--green);
-  font-size: 20px;
+  font-size: calc(20px * var(--font-scale, 1));
 }
 
 .rail-pill.explore:hover {
@@ -688,7 +695,7 @@ input {
 
 .sidebar-title {
   font-weight: 700;
-  font-size: 15px;
+  font-size: calc(15px * var(--font-scale, 1));
   color: var(--heading-text);
   white-space: nowrap;
   overflow: hidden;
@@ -710,7 +717,7 @@ input {
 }
 
 .cat-label {
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale, 1));
   font-weight: 700;
   text-transform: uppercase;
   color: var(--text-muted);
@@ -724,7 +731,7 @@ input {
 
 .cat-add {
   color: var(--text-muted);
-  font-size: 18px;
+  font-size: calc(18px * var(--font-scale, 1));
   line-height: 1;
   padding: 0 4px;
 }
@@ -741,7 +748,7 @@ input {
   padding: 7px 8px;
   border-radius: 4px;
   color: var(--text-muted);
-  font-size: 15px;
+  font-size: calc(15px * var(--font-scale, 1));
   text-align: left;
 }
 
@@ -794,7 +801,7 @@ input {
 .voice-channel-status {
   padding: 0 8px 4px 28px;
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale, 1));
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -809,7 +816,7 @@ input {
   border-radius: 4px;
   text-align: left;
   color: var(--text-muted);
-  font-size: 14px;
+  font-size: calc(14px * var(--font-scale, 1));
 }
 
 .voice-user:hover {
@@ -840,7 +847,7 @@ input {
 .call-duration {
   flex-shrink: 0;
   color: var(--green);
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale, 1));
   font-weight: 700;
   font-variant-numeric: tabular-nums;
 }
@@ -851,7 +858,7 @@ input {
   white-space: nowrap;
   text-overflow: ellipsis;
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale, 1));
 }
 
 .call-topic.editable {
@@ -871,7 +878,7 @@ input {
   border-radius: 3px;
   padding: 1px 5px;
   color: var(--text-normal);
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale, 1));
 }
 
 /* ---- voice connected strip ---- */
@@ -894,7 +901,7 @@ input {
   align-items: center;
   gap: 4px;
   color: var(--green);
-  font-size: 13px;
+  font-size: calc(13px * var(--font-scale, 1));
   font-weight: 700;
 }
 
@@ -912,7 +919,7 @@ input {
   gap: 3px;
   margin-left: 6px;
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale, 1));
   font-weight: 500;
 }
 
@@ -921,7 +928,7 @@ input {
   align-items: center;
   gap: 4px;
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale, 1));
 }
 
 .spin {
@@ -939,7 +946,7 @@ input {
 
 .voice-disconnect {
   color: var(--text-muted);
-  font-size: 18px;
+  font-size: calc(18px * var(--font-scale, 1));
   padding: 6px;
   border-radius: 4px;
 }
@@ -974,7 +981,7 @@ input {
 }
 
 .user-panel-username {
-  font-size: 14px;
+  font-size: calc(14px * var(--font-scale, 1));
   font-weight: 600;
   color: var(--heading-text);
   white-space: nowrap;
@@ -983,7 +990,7 @@ input {
 }
 
 .user-panel-status {
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale, 1));
   color: var(--text-muted);
 }
 
@@ -1043,6 +1050,316 @@ input {
      сиблингом ниже .profile-card, вне этого контейнера. */
   border-radius: 8px 8px 0 0;
   overflow: hidden;
+}
+
+/* Точка отсчёта для .profile-styles-tab и ProfileStylesFlyout ниже — оба
+   позиционируются от НЕЁ, а не от .profile-card (там overflow:hidden ради
+   скруглённых углов баннера обрезал бы всё, что торчит за края). */
+.profile-modal {
+  position: relative;
+}
+
+/* Закладка-таб "Стили" (см. ProfileCardHeader/ProfileStylesFlyout) — торчит
+   за правым краем карточки на высоте аватарки. Числа подобраны под текущие
+   размеры баннера/аватарки (banner height 88px, .profile-card-top-row
+   margin-top -42px, AVATAR_SIZE 84 + 4px рамка) — при их изменении сверить
+   заново. */
+.profile-styles-tab {
+  position: absolute;
+  top: 78px;
+  right: -14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  background: var(--surface-2);
+  border: 1px solid var(--surface-2-border);
+  border-radius: 0 8px 8px 0;
+  color: var(--text-muted);
+  box-shadow: 2px 2px 6px rgba(0, 0, 0, 0.3);
+}
+
+.profile-styles-tab:hover {
+  color: var(--text-normal);
+  background: var(--channel-hover);
+}
+
+/* Флайаут "Стили" (ProfileStylesFlyout.tsx) — растёт от правого края
+   .profile-modal (см. position:relative там), сразу под уровнем самого
+   .profile-modal (z-index неявный — просто следующий элемент в DOM после
+   .modal-overlay, тот же приём, что у под-модалок ProfileModal). */
+.styles-flyout {
+  position: absolute;
+  top: 0;
+  left: 100%;
+  margin-left: 10px;
+  width: 260px;
+  max-height: 100%;
+  overflow-y: auto;
+  background: var(--modal-bg);
+  border-radius: 8px;
+  padding: 16px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+}
+
+.styles-flyout-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 14px;
+  color: var(--heading-text);
+  font-size: calc(15px * var(--font-scale, 1));
+}
+
+.styles-flyout-section {
+  margin-bottom: 16px;
+}
+
+.styles-flyout-section-title {
+  font-size: calc(11px * var(--font-scale, 1));
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  color: var(--text-faint);
+  margin-bottom: 8px;
+}
+
+.styles-flyout-placeholder-row {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  /* Немного воздуха снизу — иначе горизонтальный скроллбар (если появится)
+     сидит впритык к квадратам. */
+  padding-bottom: 4px;
+}
+
+.styles-flyout-placeholder-card {
+  flex-shrink: 0;
+  width: 44px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  background: var(--surface-2);
+  border: 1px solid var(--surface-2-border);
+  color: var(--text-faint);
+}
+
+.styles-flyout-placeholder-card:hover {
+  color: var(--text-normal);
+  background: var(--channel-hover);
+}
+
+.styles-flyout-color-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.styles-hint {
+  font-size: calc(11px * var(--font-scale, 1));
+  color: var(--text-faint);
+}
+
+.styles-flyout-reset-link {
+  margin-top: 6px;
+  font-size: calc(12px * var(--font-scale, 1));
+  color: var(--text-muted);
+  text-decoration: underline;
+}
+
+.styles-flyout-reset-link:hover {
+  color: var(--text-normal);
+}
+
+.styles-flyout-name-style-btn {
+  width: 100%;
+  padding: 10px;
+  text-align: left;
+  background: var(--surface-2);
+  border: 1px solid var(--surface-2-border);
+  border-radius: 6px;
+  font-size: calc(13px * var(--font-scale, 1));
+  font-weight: 600;
+  color: var(--text-normal);
+  margin-bottom: 8px;
+}
+
+.styles-flyout-name-style-btn:hover {
+  background: var(--channel-hover);
+}
+
+/* ============ DisplayNameStyleModal.tsx ============ */
+
+.display-name-style-modal {
+  width: 780px;
+}
+
+.dns-layout {
+  display: flex;
+  gap: 20px;
+  align-items: flex-start;
+}
+
+.dns-settings {
+  flex: 1;
+  min-width: 0;
+}
+
+.dns-font-grid,
+.dns-effect-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 18px;
+}
+
+.dns-font-card,
+.dns-effect-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  width: 84px;
+  padding: 10px 6px;
+  border-radius: 6px;
+  background: var(--surface-2);
+  border: 1px solid var(--surface-2-border);
+}
+
+.dns-font-card:hover,
+.dns-effect-card:hover {
+  background: var(--channel-hover);
+}
+
+.dns-font-card.active,
+.dns-effect-card.active {
+  border-color: var(--blurple);
+  background: rgba(88, 101, 242, 0.12);
+}
+
+.dns-font-card-sample {
+  font-size: calc(20px * var(--font-scale, 1));
+  font-weight: 700;
+  color: var(--heading-text);
+}
+
+.dns-font-card-label,
+.dns-effect-card-label {
+  font-size: calc(11px * var(--font-scale, 1));
+  color: var(--text-muted);
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+.dns-effect-card-preview {
+  font-size: calc(13px * var(--font-scale, 1));
+  font-weight: 600;
+  color: var(--heading-text);
+}
+
+.dns-color-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 18px;
+  flex-wrap: wrap;
+}
+
+/* ---- Панель предпросмотра — своя пара тёмная/светлая, НЕЗАВИСИМАЯ от темы
+   приложения (см. комментарий в DisplayNameStyleModal.tsx): обычный каскад
+   темы завязан на :root[data-theme=...], который матчит только настоящий
+   <html>, вложенный div с тем же атрибутом сам по себе тему не переключает.
+   Поэтому здесь ПОЛНОСТЬЮ отдельные блоки переменных на оба состояния —
+   значения продублированы из :root/:root[data-theme='light'] специально
+   для этого случая. ---- */
+.dns-preview {
+  width: 280px;
+  flex-shrink: 0;
+  padding: 14px;
+  border-radius: 8px;
+  background: var(--sidebar-bg);
+  border: 1px solid var(--border-color);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.dns-preview[data-theme='dark'] {
+  --rail-bg: #1e1f22;
+  --sidebar-bg: #2b2d31;
+  --chat-bg: #313338;
+  --modal-bg: #313338;
+  --channel-hover: #35373c;
+  --text-normal: #dbdee1;
+  --text-muted: #949ba4;
+  --text-faint: #80848e;
+  --heading-text: #ffffff;
+  --surface-2: #232428;
+  --surface-2-border: #1f2023;
+  --border-color: rgba(255, 255, 255, 0.08);
+}
+
+.dns-preview[data-theme='light'] {
+  --rail-bg: #e3e5e8;
+  --sidebar-bg: #f2f3f5;
+  --chat-bg: #ffffff;
+  --modal-bg: #ffffff;
+  --channel-hover: #e0e2e6;
+  --text-normal: #060607;
+  --text-muted: #5c5e66;
+  --text-faint: #6d6f78;
+  --heading-text: #060607;
+  --surface-2: #ebedef;
+  --surface-2-border: #d4d7dc;
+  --border-color: rgba(6, 6, 7, 0.08);
+}
+
+.dns-preview-theme-toggle {
+  display: flex;
+  gap: 6px;
+}
+
+.dns-preview-theme-toggle button {
+  flex: 1;
+  padding: 6px;
+  border-radius: 6px;
+  font-size: calc(12px * var(--font-scale, 1));
+  color: var(--text-muted);
+  background: var(--surface-2);
+  border: 1px solid var(--surface-2-border);
+}
+
+.dns-preview-theme-toggle button.active {
+  color: var(--text-normal);
+  background: var(--channel-active);
+  font-weight: 600;
+}
+
+.dns-preview-card {
+  border-radius: 8px;
+  overflow: hidden;
+  /* .profile-card внутри сама красится через --modal-bg/--heading-text и
+     т.д., которые в этом поддереве уже переопределены выше. */
+}
+
+.dns-preview-message-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  background: var(--chat-bg);
+  border-radius: 8px;
+  padding: 10px;
+}
+
+.dns-preview-voice-tile {
+  width: 100%;
+  aspect-ratio: 16 / 9;
 }
 
 .profile-card-banner {
@@ -1163,7 +1480,7 @@ input {
 .profile-card-name {
   display: block;
   margin-top: 10px;
-  font-size: 19px;
+  font-size: calc(19px * var(--font-scale, 1));
   font-weight: 800;
   letter-spacing: -0.01em;
   color: var(--heading-text);
@@ -1184,7 +1501,7 @@ input {
 }
 
 .profile-card-username {
-  font-size: 13px;
+  font-size: calc(13px * var(--font-scale, 1));
   font-weight: 500;
   color: var(--text-muted);
   white-space: nowrap;
@@ -1194,7 +1511,7 @@ input {
 
 .profile-card-meta-dot {
   flex-shrink: 0;
-  font-size: 15px;
+  font-size: calc(15px * var(--font-scale, 1));
   font-weight: 700;
   line-height: 1;
   margin: 0 1px;
@@ -1203,7 +1520,7 @@ input {
 
 .profile-card-pronouns {
   flex-shrink: 0;
-  font-size: 13px;
+  font-size: calc(13px * var(--font-scale, 1));
   color: var(--text-muted);
 }
 
@@ -1211,7 +1528,7 @@ input {
    стиль, что у соседнего .profile-card-pronouns. */
 .profile-card-pronouns-input.inline-editable-display,
 .profile-card-pronouns-input.inline-editable-input {
-  font-size: 13px;
+  font-size: calc(13px * var(--font-scale, 1));
   color: var(--text-muted);
   padding: 0 3px;
   max-width: 100px;
@@ -1271,12 +1588,12 @@ input {
 
 .status-bubble-emoji {
   flex-shrink: 0;
-  font-size: 14px;
+  font-size: calc(14px * var(--font-scale, 1));
   line-height: 1;
 }
 
 .status-bubble-text {
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale, 1));
   font-weight: 500;
   color: var(--text-normal);
   overflow: hidden;
@@ -1304,7 +1621,7 @@ input {
 
 .profile-popup-bio {
   padding: 10px 12px;
-  font-size: 13px;
+  font-size: calc(13px * var(--font-scale, 1));
   line-height: 1.4;
   color: var(--text-normal);
   white-space: pre-wrap;
@@ -1345,7 +1662,7 @@ input {
   gap: 8px;
   padding: 8px 10px;
   border-radius: 4px;
-  font-size: 13px;
+  font-size: calc(13px * var(--font-scale, 1));
   color: var(--text-normal);
   text-align: left;
   white-space: nowrap;
@@ -1480,12 +1797,12 @@ textarea.inline-editable-input {
 .inline-editable-input.profile-popup-note {
   padding: 10px 12px;
   margin: 0;
-  font-size: 13px;
+  font-size: calc(13px * var(--font-scale, 1));
   line-height: 1.4;
 }
 
 .inline-editable-error {
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale, 1));
   color: var(--red);
   padding-left: 2px;
 }
@@ -1513,7 +1830,7 @@ textarea.inline-editable-input {
   justify-content: center;
   padding: 9px 10px;
   border-radius: 8px;
-  font-size: 13px;
+  font-size: calc(13px * var(--font-scale, 1));
   font-weight: 600;
   background: var(--input-secondary-bg);
 }
@@ -1545,7 +1862,7 @@ textarea.inline-editable-input {
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale, 1));
   font-weight: 600;
   color: var(--text-muted);
   margin-bottom: 4px;
@@ -1557,7 +1874,7 @@ textarea.inline-editable-input {
 }
 
 .profile-modal-section-value {
-  font-size: 13px;
+  font-size: calc(13px * var(--font-scale, 1));
   color: var(--text-normal);
 }
 
@@ -1572,7 +1889,7 @@ textarea.inline-editable-input {
   padding: 8px 10px;
   border: 1px dashed var(--input-border);
   border-radius: 8px;
-  font-size: 13px;
+  font-size: calc(13px * var(--font-scale, 1));
   color: var(--text-muted);
 }
 
@@ -1602,7 +1919,7 @@ textarea.inline-editable-input {
   gap: 8px;
   padding: 8px 10px;
   border-radius: 4px;
-  font-size: 14px;
+  font-size: calc(14px * var(--font-scale, 1));
   color: var(--text-normal);
   text-align: left;
 }
@@ -1649,7 +1966,7 @@ textarea.inline-editable-input {
   border: none;
   border-radius: 4px;
   padding: 8px 34px 8px 10px;
-  font-size: 14px;
+  font-size: calc(14px * var(--font-scale, 1));
   color: var(--text-normal);
 }
 
@@ -1698,7 +2015,7 @@ textarea.inline-editable-input {
 
 .profile-popup-label {
   padding: 2px 10px 4px;
-  font-size: 11px;
+  font-size: calc(11px * var(--font-scale, 1));
   font-weight: 700;
   letter-spacing: 0.02em;
   text-transform: uppercase;
@@ -1711,7 +2028,7 @@ textarea.inline-editable-input {
   gap: 8px;
   padding: 8px 10px;
   border-radius: 4px;
-  font-size: 14px;
+  font-size: calc(14px * var(--font-scale, 1));
   color: var(--text-normal);
   text-align: left;
 }
@@ -1760,7 +2077,7 @@ textarea.inline-editable-input {
 }
 
 .profile-popup-voice-label {
-  font-size: 11px;
+  font-size: calc(11px * var(--font-scale, 1));
   font-weight: 700;
   letter-spacing: 0.02em;
   text-transform: uppercase;
@@ -1768,7 +2085,7 @@ textarea.inline-editable-input {
 }
 
 .profile-popup-voice-name {
-  font-size: 13px;
+  font-size: calc(13px * var(--font-scale, 1));
   font-weight: 600;
   color: var(--text-normal);
   white-space: nowrap;
@@ -1783,7 +2100,7 @@ textarea.inline-editable-input {
 }
 
 .profile-popup-voice-more {
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale, 1));
   color: var(--text-muted);
   margin-left: 2px;
 }
@@ -1868,13 +2185,13 @@ textarea.inline-editable-input {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 14px;
+  font-size: calc(14px * var(--font-scale, 1));
   font-weight: 600;
   color: var(--text-normal);
 }
 
 .status-flyout-item-caption {
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale, 1));
   color: var(--text-muted);
   padding-left: 18px;
 }
@@ -1891,7 +2208,7 @@ textarea.inline-editable-input {
   gap: 8px;
   padding: 8px 10px;
   border-radius: 4px;
-  font-size: 14px;
+  font-size: calc(14px * var(--font-scale, 1));
   color: var(--text-normal);
   text-align: left;
   white-space: nowrap;
@@ -1926,7 +2243,7 @@ textarea.inline-editable-input {
 
 .status-menu-error {
   padding: 4px 10px;
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale, 1));
   color: var(--red);
 }
 
@@ -1937,7 +2254,7 @@ textarea.inline-editable-input {
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 15px;
+  font-size: calc(15px * var(--font-scale, 1));
 }
 
 .icon-btn:hover {
@@ -1967,7 +2284,7 @@ textarea.inline-editable-input {
   border-radius: 10px;
   background: var(--red);
   color: #fff;
-  font-size: 11px;
+  font-size: calc(11px * var(--font-scale, 1));
   font-weight: 700;
   line-height: 1.6;
   flex-shrink: 0;
@@ -1983,7 +2300,7 @@ textarea.inline-editable-input {
   gap: 4px;
   padding: 2px 8px;
   border-radius: 4px;
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale, 1));
   color: #fff;
   background: rgba(0, 0, 0, 0.6);
 }
@@ -2167,7 +2484,7 @@ textarea.inline-editable-input {
 .voice-landing-title {
   margin: 0;
   color: #fff;
-  font-size: 24px;
+  font-size: calc(24px * var(--font-scale, 1));
   font-weight: 800;
 }
 
@@ -2192,7 +2509,7 @@ textarea.inline-editable-input {
 .voice-landing-empty {
   margin: 4px 0 0;
   color: rgba(255, 255, 255, 0.7);
-  font-size: 14px;
+  font-size: calc(14px * var(--font-scale, 1));
 }
 
 .voice-landing-join {
@@ -2205,7 +2522,7 @@ textarea.inline-editable-input {
   background: var(--green);
   color: #fff;
   font-weight: 700;
-  font-size: 14px;
+  font-size: calc(14px * var(--font-scale, 1));
 }
 
 .voice-landing-join:hover {
@@ -2269,7 +2586,7 @@ textarea.inline-editable-input {
   align-items: center;
   gap: 6px;
   min-width: 0;
-  font-size: 13px;
+  font-size: calc(13px * var(--font-scale, 1));
   font-weight: 600;
   color: #fff;
   text-shadow: 0 1px 3px rgba(0, 0, 0, 0.6);
@@ -2336,7 +2653,7 @@ textarea.inline-editable-input {
   border-radius: 5px;
   background: rgba(0, 0, 0, 0.85);
   color: #fff;
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale, 1));
   font-weight: 600;
   white-space: nowrap;
   opacity: 0;
@@ -2359,7 +2676,7 @@ textarea.inline-editable-input {
   justify-content: center;
   height: 100%;
   color: var(--text-muted);
-  font-size: 14px;
+  font-size: calc(14px * var(--font-scale, 1));
   background: var(--chat-bg);
 }
 
@@ -2421,7 +2738,7 @@ textarea.inline-editable-input {
   gap: 4px;
   padding: 2px 8px;
   border-radius: 4px;
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale, 1));
   font-weight: 600;
   color: #fff;
   background: rgba(0, 0, 0, 0.6);
@@ -2518,7 +2835,7 @@ textarea.inline-editable-input {
   background: var(--blurple);
   color: #fff;
   font-weight: 600;
-  font-size: 14px;
+  font-size: calc(14px * var(--font-scale, 1));
 }
 
 .screen-watch-btn:hover {
@@ -2643,7 +2960,7 @@ textarea.inline-editable-input {
 /* В ленте тайлы мелкие — крупная подпись и бейдж «демка» в них не помещаются. */
 .voice-stage-filmstrip .participant-tile-name,
 .voice-stage-filmstrip .screen-tile-label {
-  font-size: 10px;
+  font-size: calc(10px * var(--font-scale, 1));
   padding: 1px 5px;
   left: 4px;
   bottom: 4px;
@@ -2747,7 +3064,7 @@ textarea.inline-editable-input {
 
 .chat-header .hash {
   color: var(--text-faint);
-  font-size: 22px;
+  font-size: calc(22px * var(--font-scale, 1));
   font-weight: 500;
 }
 
@@ -2820,7 +3137,7 @@ textarea.inline-editable-input {
 
 .date-divider-label {
   flex-shrink: 0;
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale, 1));
   font-weight: 600;
   color: var(--text-faint);
   white-space: nowrap;
@@ -2857,22 +3174,87 @@ textarea.inline-editable-input {
 .message-author {
   font-weight: 600;
   color: var(--heading-text);
-  font-size: 15px;
+  font-size: calc(15px * var(--font-scale, 1));
+}
+
+/* ============ СТИЛЬ ОТОБРАЖАЕМОГО ИМЕНИ (nameStyle.ts) ============
+   Вешается ВТОРЫМ классом рядом с .message-author/.participant-tile-name/
+   .profile-card-name (см. styledNameProps) — effect-standard сам ничего не
+   красит (см. комментарий в nameStyle.ts, там цвет — inline style.color),
+   остальные четыре — самостоятельные эффекты с фолбэком на --blurple, если
+   пользователь выбрал эффект, но ещё не выбрал цвет. */
+.name-style.effect-gradient {
+  background-image: linear-gradient(
+    90deg,
+    var(--name-color-1, var(--blurple)) 0%,
+    var(--name-color-2, var(--blurple-hover)) 100%
+  );
+  background-size: 200% auto;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: name-style-gradient-shift 4s linear infinite;
+}
+
+@keyframes name-style-gradient-shift {
+  to {
+    background-position: 200% center;
+  }
+}
+
+.name-style.effect-neon {
+  color: var(--name-color-1, var(--blurple));
+  animation: name-style-neon-pulse 2s ease-in-out infinite;
+}
+
+/* Дышит именно радиус свечения (text-shadow), а не opacity всего текста —
+   сам ник остаётся полностью читаемым, "неонит" только ореол вокруг него. */
+@keyframes name-style-neon-pulse {
+  0%,
+  100% {
+    text-shadow:
+      0 0 4px var(--name-color-1, var(--blurple)),
+      0 0 10px var(--name-color-1, var(--blurple));
+  }
+  50% {
+    text-shadow:
+      0 0 8px var(--name-color-1, var(--blurple)),
+      0 0 20px var(--name-color-1, var(--blurple));
+  }
+}
+
+.name-style.effect-cartoon {
+  color: var(--name-color-1, var(--blurple));
+  /* Контрастная обводка (чёрная/белая) — считается на фронте по яркости
+     name-color-1 (см. pickContrastOutline в nameStyle.ts), не хардкод. */
+  -webkit-text-stroke: 1.5px var(--name-outline-color, #000);
+}
+
+.name-style.effect-highlight {
+  color: var(--name-color-1, inherit);
+  background: var(--name-color-2, var(--blurple));
+  padding: 0 4px;
+  border-radius: 3px;
+  /* Если ник вдруг переносится на вторую строку — плашка не должна тянуться
+     сплошной полосой через пробел между строк, каждая строка красится своим
+     куском фона отдельно. */
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
 }
 
 .message-time {
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale, 1));
   color: var(--text-faint);
 }
 
 .message-edited {
-  font-size: 11px;
+  font-size: calc(11px * var(--font-scale, 1));
   color: var(--text-faint);
 }
 
 .message-content {
   color: var(--text-normal);
-  font-size: 15px;
+  font-size: calc(15px * var(--font-scale, 1));
   line-height: 1.375;
   word-wrap: break-word;
   white-space: pre-wrap;
@@ -2905,7 +3287,7 @@ textarea.inline-editable-input {
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
-  font-size: 13px;
+  font-size: calc(13px * var(--font-scale, 1));
   color: var(--text-muted);
 }
 
@@ -2949,7 +3331,7 @@ textarea.inline-editable-input {
   align-items: center;
   justify-content: center;
   border-radius: 4px;
-  font-size: 14px;
+  font-size: calc(14px * var(--font-scale, 1));
 }
 
 .message-action:hover {
@@ -2983,7 +3365,7 @@ textarea.inline-editable-input {
   border: none;
   padding: 12px 8px;
   color: var(--text-normal);
-  font-size: 15px;
+  font-size: calc(15px * var(--font-scale, 1));
   font-family: inherit;
   line-height: 1.375;
   outline: none;
@@ -3023,7 +3405,7 @@ textarea.inline-editable-input {
 
 .composer-hint {
   padding: 4px 8px 0;
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale, 1));
   color: var(--text-muted);
 }
 
@@ -3039,7 +3421,7 @@ textarea.inline-editable-input {
   border-radius: 8px;
   background: rgba(88, 101, 242, 0.12);
   color: var(--text-normal);
-  font-size: 14px;
+  font-size: calc(14px * var(--font-scale, 1));
   pointer-events: none;
 }
 
@@ -3068,7 +3450,7 @@ textarea.inline-editable-input {
   gap: 8px;
   padding: 6px 8px;
   border-radius: 4px;
-  font-size: 14px;
+  font-size: calc(14px * var(--font-scale, 1));
   color: var(--text-normal);
   text-align: left;
 }
@@ -3094,7 +3476,7 @@ textarea.inline-editable-input {
   margin-bottom: 4px;
   background: var(--input-secondary-bg);
   border-radius: 8px 8px 0 0;
-  font-size: 13px;
+  font-size: calc(13px * var(--font-scale, 1));
   color: var(--text-muted);
 }
 
@@ -3136,7 +3518,7 @@ textarea.inline-editable-input {
 }
 
 .member-category {
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale, 1));
   font-weight: 700;
   text-transform: uppercase;
   color: var(--text-muted);
@@ -3165,7 +3547,7 @@ textarea.inline-editable-input {
 }
 
 .member-name {
-  font-size: 15px;
+  font-size: calc(15px * var(--font-scale, 1));
   font-weight: 500;
   color: var(--text-normal);
 }
@@ -3178,7 +3560,7 @@ textarea.inline-editable-input {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale, 1));
   color: var(--text-muted);
 }
 
@@ -3246,6 +3628,71 @@ textarea.inline-editable-input {
   z-index: 100;
 }
 
+/* Обёртка модала + плашки "Изменения не сохранены" под ним (см.
+   useUnsavedChangesGuard/UnsavedChangesNudge) — единственный flex-item
+   .modal-overlay, столбцом. Не кладём плашку ВНУТРЬ .modal (у него
+   overflow-y:auto для длинного контента — абсолютно спозиционированного
+   потомка ниже границы блока он бы обрезал), а рядом, как отдельный элемент
+   в общем столбце. */
+.unsaved-guard-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+
+/* Тряска модала при попытке закрыть кликом мимо с несохранёнными
+   изменениями — амплитуда растёт с частотой повторных кликов (см.
+   useUnsavedChangesGuard), --shake-amplitude выставляется туда же inline. */
+@keyframes modal-shake {
+  10%,
+  90% {
+    transform: translateX(calc(var(--shake-amplitude, 4px) * -1));
+  }
+  20%,
+  80% {
+    transform: translateX(var(--shake-amplitude, 4px));
+  }
+  30%,
+  50%,
+  70% {
+    transform: translateX(calc(var(--shake-amplitude, 4px) * -1));
+  }
+  40%,
+  60% {
+    transform: translateX(var(--shake-amplitude, 4px));
+  }
+}
+
+.modal-shake {
+  animation: modal-shake 0.4s ease-in-out;
+}
+
+.unsaved-changes-nudge {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: var(--modal-bg);
+  border: 1px solid var(--red);
+  border-radius: 8px;
+  padding: 10px 14px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  font-size: calc(13px * var(--font-scale, 1));
+  max-width: 92vw;
+}
+
+.unsaved-changes-nudge-text {
+  font-weight: 600;
+  color: var(--text-normal);
+  white-space: nowrap;
+}
+
+.unsaved-changes-nudge-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
 .modal {
   width: 440px;
   max-width: 92vw;
@@ -3263,7 +3710,7 @@ textarea.inline-editable-input {
 .modal-title {
   margin: 0 0 16px;
   color: var(--heading-text);
-  font-size: 20px;
+  font-size: calc(20px * var(--font-scale, 1));
 }
 
 .modal-empty {
@@ -3290,7 +3737,7 @@ textarea.inline-editable-input {
   gap: 6px;
   margin: 0;
   color: var(--text-normal);
-  font-size: 14px;
+  font-size: calc(14px * var(--font-scale, 1));
 }
 
 .voice-invite-join-btn {
@@ -3327,12 +3774,12 @@ textarea.inline-editable-input {
 }
 
 .discover-count {
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale, 1));
   color: var(--text-muted);
 }
 
 .discover-joined {
-  font-size: 13px;
+  font-size: calc(13px * var(--font-scale, 1));
   color: var(--text-muted);
 }
 
@@ -3342,7 +3789,7 @@ textarea.inline-editable-input {
   font-weight: 600;
   padding: 8px 16px;
   border-radius: 4px;
-  font-size: 14px;
+  font-size: calc(14px * var(--font-scale, 1));
 }
 
 .btn-small:hover {
@@ -3369,7 +3816,7 @@ textarea.inline-editable-input {
 .error-modal-text {
   margin: 4px 0 12px;
   color: var(--text-normal);
-  font-size: 14px;
+  font-size: calc(14px * var(--font-scale, 1));
   line-height: 1.5;
   overflow-wrap: break-word;
 }
@@ -3379,7 +3826,7 @@ textarea.inline-editable-input {
   align-items: center;
   gap: 4px;
   color: var(--text-muted);
-  font-size: 13px;
+  font-size: calc(13px * var(--font-scale, 1));
   font-weight: 600;
 }
 
@@ -3400,7 +3847,7 @@ textarea.inline-editable-input {
   border-radius: 6px;
   color: var(--text-muted);
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale, 1));
   line-height: 1.5;
   white-space: pre-wrap;
   overflow-wrap: break-word;
@@ -3453,7 +3900,7 @@ textarea.inline-editable-input {
   align-items: center;
   gap: 5px;
   color: var(--text-muted);
-  font-size: 13px;
+  font-size: calc(13px * var(--font-scale, 1));
 }
 
 .profile-avatar-remove:hover {
@@ -3469,7 +3916,7 @@ textarea.inline-editable-input {
 .profile-subtitle {
   margin: 0 0 12px;
   color: var(--heading-text);
-  font-size: 15px;
+  font-size: calc(15px * var(--font-scale, 1));
 }
 
 .btn-secondary {
@@ -3478,7 +3925,7 @@ textarea.inline-editable-input {
   font-weight: 600;
   padding: 8px 14px;
   border-radius: 4px;
-  font-size: 13px;
+  font-size: calc(13px * var(--font-scale, 1));
   transition: background 0.15s;
 }
 
@@ -3510,7 +3957,7 @@ textarea.inline-editable-input {
   flex: 1;
   padding: 7px;
   border-radius: 4px;
-  font-size: 13px;
+  font-size: calc(13px * var(--font-scale, 1));
   font-weight: 600;
   color: var(--text-muted);
   background: var(--channel-hover);
@@ -3547,7 +3994,7 @@ textarea.inline-editable-input {
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale, 1));
   color: var(--text-muted);
 }
 
@@ -3565,7 +4012,7 @@ textarea.inline-editable-input {
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale, 1));
   color: var(--text-muted);
   flex: 1;
 }
@@ -3583,7 +4030,7 @@ textarea.inline-editable-input {
 }
 
 .banner-hint {
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale, 1));
   color: var(--text-muted);
   width: 100%;
 }
@@ -3612,7 +4059,7 @@ textarea.inline-editable-input {
   justify-content: center;
   width: 40px;
   height: 40px;
-  font-size: 18px;
+  font-size: calc(18px * var(--font-scale, 1));
   background: var(--input-bg);
   border: 1px solid var(--input-border);
   border-radius: 8px;
@@ -3627,7 +4074,7 @@ textarea.inline-editable-input {
   min-width: 0;
   height: 40px;
   padding: 0 12px;
-  font-size: 14px;
+  font-size: calc(14px * var(--font-scale, 1));
   color: var(--text-normal);
   background: var(--input-bg);
   border: 1px solid var(--input-border);
@@ -3648,7 +4095,7 @@ textarea.inline-editable-input {
 .profile-success {
   margin-top: 12px;
   color: var(--green);
-  font-size: 14px;
+  font-size: calc(14px * var(--font-scale, 1));
 }
 
 .modal-close:hover {
@@ -3698,7 +4145,7 @@ textarea.inline-editable-input {
   padding: 8px 10px;
   border-radius: 4px;
   color: var(--text-muted);
-  font-size: 14px;
+  font-size: calc(14px * var(--font-scale, 1));
   font-weight: 500;
   text-align: left;
 }
@@ -3748,7 +4195,7 @@ textarea.inline-editable-input {
   padding: 6px 8px;
   border-radius: 4px;
   color: var(--text-faint);
-  font-size: 13px;
+  font-size: calc(13px * var(--font-scale, 1));
   text-align: left;
   line-height: 1.3;
 }
@@ -3789,7 +4236,7 @@ textarea.inline-editable-input {
 
 .settings-section-title {
   margin: 0 0 14px;
-  font-size: 16px;
+  font-size: calc(16px * var(--font-scale, 1));
   font-weight: 700;
   color: var(--heading-text);
   scroll-margin-top: 4px;
@@ -3810,13 +4257,13 @@ textarea.inline-editable-input {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-size: 13px;
+  font-size: calc(13px * var(--font-scale, 1));
   font-weight: 600;
   color: var(--text-normal);
 }
 
 .settings-field-value {
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale, 1));
   color: var(--text-muted);
   font-variant-numeric: tabular-nums;
 }
@@ -3871,6 +4318,32 @@ textarea.inline-editable-input {
 .settings-field-reset:hover {
   color: var(--text-normal);
   background: var(--channel-hover);
+}
+
+/* Подписи отметок под SteppedSliderField (масштаб интерфейса, размер
+   шрифта) — растянуты в ряд под ползунком тем же способом, что и его
+   деления (space-between), чтобы каждая подпись оказалась примерно под
+   своей меткой. Первая/последняя выравниваются по краям текста, а не по
+   центру самого крайнего деления — иначе они вылезали бы за трек. */
+.slider-ticks {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 4px;
+  /* Правый паддинг компенсирует кнопку сброса + gap рядом со слайдером
+     (.settings-field-reset — 22px, плюс 8px .settings-field-row gap), иначе
+     подписи разъехались бы с делениями самого range, у которого flex:1
+     кончается ДО кнопки. */
+  padding: 0 38px 0 8px;
+}
+
+.slider-tick {
+  font-size: calc(11px * var(--font-scale, 1));
+  color: var(--text-faint);
+}
+
+.slider-tick.active {
+  color: var(--text-normal);
+  font-weight: 600;
 }
 
 .mic-sensitivity {
@@ -3962,7 +4435,7 @@ textarea.inline-editable-input {
 
 .settings-hint {
   margin: 0 0 20px;
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale, 1));
   color: var(--text-faint);
 }
 
@@ -3977,7 +4450,7 @@ textarea.inline-editable-input {
   font-weight: 600;
   padding: 10px;
   border-radius: 4px;
-  font-size: 14px;
+  font-size: calc(14px * var(--font-scale, 1));
 }
 
 .settings-logout + .settings-logout {
@@ -4010,14 +4483,14 @@ textarea.inline-editable-input {
 }
 
 .settings-row-label {
-  font-size: 13px;
+  font-size: calc(13px * var(--font-scale, 1));
   font-weight: 600;
   color: var(--text-normal);
 }
 
 .settings-row-value {
   margin-top: 2px;
-  font-size: 13px;
+  font-size: calc(13px * var(--font-scale, 1));
   color: var(--text-muted);
 }
 
@@ -4027,7 +4500,7 @@ textarea.inline-editable-input {
   border-radius: 4px;
   background: var(--channel-hover);
   color: var(--text-normal);
-  font-size: 13px;
+  font-size: calc(13px * var(--font-scale, 1));
   font-weight: 600;
 }
 
@@ -4052,7 +4525,7 @@ button.settings-row-clickable:hover .settings-row-label {
   align-items: center;
   gap: 4px;
   color: var(--text-muted);
-  font-size: 13px;
+  font-size: calc(13px * var(--font-scale, 1));
 }
 
 .settings-chevron {
@@ -4068,7 +4541,7 @@ button.settings-row-clickable:hover .settings-row-label {
   gap: 4px;
   margin-bottom: 12px;
   color: var(--text-muted);
-  font-size: 13px;
+  font-size: calc(13px * var(--font-scale, 1));
   font-weight: 600;
 }
 
@@ -4078,7 +4551,7 @@ button.settings-row-clickable:hover .settings-row-label {
 
 .settings-detail-subhead {
   margin: 18px 0 8px;
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale, 1));
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.02em;
@@ -4136,7 +4609,7 @@ button.settings-row-clickable:hover .settings-row-label {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 13px;
+  font-size: calc(13px * var(--font-scale, 1));
   font-weight: 600;
   color: var(--text-normal);
 }
@@ -4147,14 +4620,14 @@ button.settings-row-clickable:hover .settings-row-label {
   border-radius: 8px;
   background: rgba(35, 165, 90, 0.16);
   color: var(--green);
-  font-size: 10px;
+  font-size: calc(10px * var(--font-scale, 1));
   font-weight: 700;
   text-transform: uppercase;
 }
 
 .session-row-meta {
   margin-top: 1px;
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale, 1));
   color: var(--text-faint);
   overflow-wrap: anywhere;
 }
@@ -4174,7 +4647,7 @@ button.settings-row-clickable:hover .settings-row-label {
   background: rgba(242, 63, 67, 0.1);
   color: var(--red);
   font-weight: 600;
-  font-size: 13px;
+  font-size: calc(13px * var(--font-scale, 1));
 }
 
 .settings-danger-btn:hover {
@@ -4200,7 +4673,7 @@ button.settings-row-clickable:hover .settings-row-label {
   background: var(--input-bg);
   border: 2px solid transparent;
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale, 1));
   font-weight: 600;
   text-align: center;
 }
@@ -4258,7 +4731,7 @@ button.settings-row-clickable:hover .settings-row-label {
   position: relative;
   padding: 8px;
   border-radius: 4px;
-  font-size: 13px;
+  font-size: calc(13px * var(--font-scale, 1));
   font-weight: 600;
   color: var(--text-muted);
 }
@@ -4282,7 +4755,7 @@ button.settings-row-clickable:hover .settings-row-label {
   border-radius: 8px;
   background: var(--red);
   color: #fff;
-  font-size: 10px;
+  font-size: calc(10px * var(--font-scale, 1));
   font-weight: 700;
   line-height: 15px;
   text-align: center;
@@ -4305,7 +4778,7 @@ button.settings-row-clickable:hover .settings-row-label {
   border-radius: 4px;
   background: var(--channel-hover);
   color: var(--text-normal);
-  font-size: 13px;
+  font-size: calc(13px * var(--font-scale, 1));
   font-weight: 600;
   text-align: center;
 }
@@ -4317,7 +4790,7 @@ button.settings-row-clickable:hover .settings-row-label {
 .home-empty {
   padding: 12px 8px;
   color: var(--text-muted);
-  font-size: 13px;
+  font-size: calc(13px * var(--font-scale, 1));
   text-align: center;
 }
 
@@ -4334,7 +4807,7 @@ button.settings-row-clickable:hover .settings-row-label {
   border-radius: 4px;
   padding: 8px 10px;
   color: var(--text-normal);
-  font-size: 13px;
+  font-size: calc(13px * var(--font-scale, 1));
   outline: none;
 }
 
@@ -4442,11 +4915,11 @@ button.settings-row-clickable:hover .settings-row-label {
 .incoming-call-title {
   font-weight: 700;
   color: var(--heading-text);
-  font-size: 14px;
+  font-size: calc(14px * var(--font-scale, 1));
 }
 
 .incoming-call-subtitle {
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale, 1));
   color: var(--text-muted);
 }
 
@@ -4539,7 +5012,7 @@ button.settings-row-clickable:hover .settings-row-label {
 
 .rail-tooltip-name {
   font-weight: 700;
-  font-size: 15px;
+  font-size: calc(15px * var(--font-scale, 1));
   line-height: 1.25;
   color: var(--text-normal);
   white-space: nowrap;
@@ -4548,7 +5021,7 @@ button.settings-row-clickable:hover .settings-row-label {
 }
 
 .rail-tooltip-sub {
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale, 1));
   line-height: 1.35;
   color: var(--text-muted);
   overflow-wrap: anywhere;
@@ -4577,7 +5050,7 @@ button.settings-row-clickable:hover .settings-row-label {
 }
 
 .discover-flag {
-  font-size: 10px;
+  font-size: calc(10px * var(--font-scale, 1));
   font-weight: 700;
   text-transform: uppercase;
   padding: 1px 5px;
@@ -4626,7 +5099,7 @@ button.settings-row-clickable:hover .settings-row-label {
 }
 
 .srv-hint {
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale, 1));
   color: var(--text-muted);
   margin: 6px 0 0;
 }
@@ -4643,7 +5116,7 @@ button.settings-row-clickable:hover .settings-row-label {
   flex-direction: column;
   align-items: flex-start;
   gap: 8px;
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale, 1));
   color: var(--text-muted);
 }
 
@@ -4661,7 +5134,7 @@ button.settings-row-clickable:hover .settings-row-label {
   border-radius: 12px;
   background: var(--channel-active);
   color: var(--text-normal);
-  font-size: 13px;
+  font-size: calc(13px * var(--font-scale, 1));
 }
 
 .srv-tag button {
@@ -4712,12 +5185,12 @@ button.settings-row-clickable:hover .settings-row-label {
 }
 
 .srv-toggle-label {
-  font-size: 14px;
+  font-size: calc(14px * var(--font-scale, 1));
   color: var(--text-normal);
 }
 
 .srv-toggle-hint {
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale, 1));
   color: var(--text-muted);
 }
 
@@ -4793,7 +5266,7 @@ button.settings-row-clickable:hover .settings-row-label {
 }
 
 .srv-role-badge {
-  font-size: 10px;
+  font-size: calc(10px * var(--font-scale, 1));
   font-weight: 700;
   text-transform: uppercase;
   color: var(--text-muted);
@@ -4967,13 +5440,13 @@ button.settings-row-clickable:hover .settings-row-label {
   align-items: center;
   gap: 8px;
   font-weight: 700;
-  font-size: 14px;
+  font-size: calc(14px * var(--font-scale, 1));
   color: var(--heading-text);
 }
 
 .mute-vote-modal-timer {
   margin-top: 4px;
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale, 1));
   color: var(--text-muted);
 }
 
@@ -4991,7 +5464,7 @@ button.settings-row-clickable:hover .settings-row-label {
   gap: 6px;
   padding: 8px;
   border-radius: 4px;
-  font-size: 13px;
+  font-size: calc(13px * var(--font-scale, 1));
   font-weight: 600;
   color: #fff;
 }
@@ -5058,7 +5531,7 @@ button.settings-row-clickable:hover .settings-row-label {
   justify-content: center;
   background: var(--channel-active);
   color: var(--text-muted);
-  font-size: 10px;
+  font-size: calc(10px * var(--font-scale, 1));
   font-weight: 700;
 }
 
@@ -5072,13 +5545,13 @@ button.settings-row-clickable:hover .settings-row-label {
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
-  font-size: 13px;
+  font-size: calc(13px * var(--font-scale, 1));
   color: var(--text-normal);
 }
 
 .staged-file-meta {
   display: block;
-  font-size: 11px;
+  font-size: calc(11px * var(--font-scale, 1));
   color: var(--text-muted);
 }
 
@@ -5170,7 +5643,7 @@ button.settings-row-clickable:hover .settings-row-label {
 }
 
 .attachment-audio .attachment-name {
-  font-size: 13px;
+  font-size: calc(13px * var(--font-scale, 1));
   color: var(--text-normal);
 }
 
@@ -5206,12 +5679,12 @@ button.settings-row-clickable:hover .settings-row-label {
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
-  font-size: 14px;
+  font-size: calc(14px * var(--font-scale, 1));
   color: var(--blurple);
 }
 
 .attachment-file-size {
-  font-size: 11px;
+  font-size: calc(11px * var(--font-scale, 1));
   color: var(--text-muted);
 }
 
@@ -5249,7 +5722,7 @@ button.settings-row-clickable:hover .settings-row-label {
 }
 
 .lightbox-name {
-  font-size: 14px;
+  font-size: calc(14px * var(--font-scale, 1));
   opacity: 0.85;
 }
 
@@ -5261,7 +5734,7 @@ button.settings-row-clickable:hover .settings-row-label {
   border-radius: 4px;
   background: rgba(255, 255, 255, 0.1);
   color: #fff;
-  font-size: 14px;
+  font-size: calc(14px * var(--font-scale, 1));
   text-decoration: none;
 }
 
@@ -5288,7 +5761,7 @@ button.settings-row-clickable:hover .settings-row-label {
   border-radius: 8px;
   background: var(--surface-2);
   color: var(--text-normal);
-  font-size: 14px;
+  font-size: calc(14px * var(--font-scale, 1));
   line-height: 1;
 }
 
@@ -5304,7 +5777,7 @@ button.settings-row-clickable:hover .settings-row-label {
 }
 
 .reaction-count {
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale, 1));
   font-weight: 600;
   color: var(--text-muted);
 }
@@ -5338,7 +5811,7 @@ button.settings-row-clickable:hover .settings-row-label {
 }
 
 .message-action-emoji {
-  font-size: 15px;
+  font-size: calc(15px * var(--font-scale, 1));
 }
 
 /* ---- пикер эмодзи ---- */
@@ -5366,7 +5839,7 @@ button.settings-row-clickable:hover .settings-row-label {
   border-radius: 4px;
   padding: 7px 10px;
   color: var(--text-normal);
-  font-size: 14px;
+  font-size: calc(14px * var(--font-scale, 1));
   outline: none;
 }
 
@@ -5383,7 +5856,7 @@ button.settings-row-clickable:hover .settings-row-label {
   width: 30px;
   height: 30px;
   border-radius: 4px;
-  font-size: 17px;
+  font-size: calc(17px * var(--font-scale, 1));
   opacity: 0.6;
 }
 
@@ -5401,7 +5874,7 @@ button.settings-row-clickable:hover .settings-row-label {
 
 .emoji-category-label {
   padding: 6px 4px 4px;
-  font-size: 11px;
+  font-size: calc(11px * var(--font-scale, 1));
   font-weight: 700;
   text-transform: uppercase;
   color: var(--text-muted);
@@ -5417,7 +5890,7 @@ button.settings-row-clickable:hover .settings-row-label {
   width: 34px;
   height: 34px;
   border-radius: 4px;
-  font-size: 21px;
+  font-size: calc(21px * var(--font-scale, 1));
   line-height: 1;
 }
 
@@ -5429,7 +5902,7 @@ button.settings-row-clickable:hover .settings-row-label {
   padding: 20px;
   text-align: center;
   color: var(--text-muted);
-  font-size: 14px;
+  font-size: calc(14px * var(--font-scale, 1));
 }
 
 /* ---- статус доставки ---- */
@@ -5470,7 +5943,7 @@ button.settings-row-clickable:hover .settings-row-label {
 }
 
 .message-failed-text {
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale, 1));
   color: var(--red);
 }
 
@@ -5479,7 +5952,7 @@ button.settings-row-clickable:hover .settings-row-label {
   align-items: center;
   gap: 5px;
   padding: 4px 10px;
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale, 1));
   background: var(--input-secondary-bg);
   color: var(--text-normal);
 }
@@ -5530,12 +6003,12 @@ button.settings-row-clickable:hover .settings-row-label {
 }
 
 .message-delete-pending-text {
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale, 1));
   color: var(--text-muted);
 }
 
 .message-delete-undo {
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale, 1));
   font-weight: 600;
   color: var(--blurple);
 }
@@ -5553,7 +6026,7 @@ button.settings-row-clickable:hover .settings-row-label {
 .delete-message-question {
   margin: 0 0 16px;
   color: var(--text-normal);
-  font-size: 14px;
+  font-size: calc(14px * var(--font-scale, 1));
 }
 
 .delete-message-preview {
@@ -5577,24 +6050,24 @@ button.settings-row-clickable:hover .settings-row-label {
 .delete-message-preview-name {
   font-weight: 600;
   color: var(--heading-text);
-  font-size: 14px;
+  font-size: calc(14px * var(--font-scale, 1));
 }
 
 .delete-message-preview-time {
-  font-size: 11px;
+  font-size: calc(11px * var(--font-scale, 1));
   color: var(--text-muted);
 }
 
 .delete-message-preview-text {
   margin-top: 2px;
-  font-size: 14px;
+  font-size: calc(14px * var(--font-scale, 1));
   color: var(--text-normal);
   overflow-wrap: anywhere;
 }
 
 .delete-message-hint {
   margin: 14px 0 0;
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale, 1));
   color: var(--text-muted);
 }
 
@@ -5611,7 +6084,7 @@ button.settings-row-clickable:hover .settings-row-label {
   font-weight: 600;
   padding: 8px 14px;
   border-radius: 4px;
-  font-size: 13px;
+  font-size: calc(13px * var(--font-scale, 1));
   transition: background 0.15s;
 }
 
@@ -5628,7 +6101,7 @@ button.settings-row-clickable:hover .settings-row-label {
   border-radius: 4px;
   padding: 9px 12px;
   color: var(--text-normal);
-  font-size: 14px;
+  font-size: calc(14px * var(--font-scale, 1));
   outline: none;
 }
 
@@ -5723,7 +6196,7 @@ button.settings-row-clickable:hover .settings-row-label {
   gap: 6px;
   padding: 8px 10px;
   border-radius: 4px;
-  font-size: 14px;
+  font-size: calc(14px * var(--font-scale, 1));
   color: var(--text-normal);
   text-align: left;
 }
@@ -5744,7 +6217,7 @@ button.settings-row-clickable:hover .settings-row-label {
   gap: 8px;
   padding: 7px 10px;
   border-radius: 4px;
-  font-size: 13px;
+  font-size: calc(13px * var(--font-scale, 1));
   color: var(--text-normal);
   cursor: pointer;
 }
@@ -5814,7 +6287,7 @@ button.settings-row-clickable:hover .settings-row-label {
 }
 
 .privacy-modal-server {
-  font-size: 14px;
+  font-size: calc(14px * var(--font-scale, 1));
   font-weight: 400;
   color: var(--text-muted);
 }
@@ -5835,20 +6308,20 @@ button.settings-row-clickable:hover .settings-row-label {
 }
 
 .privacy-row-label {
-  font-size: 14px;
+  font-size: calc(14px * var(--font-scale, 1));
   font-weight: 600;
   color: var(--text-normal);
 }
 
 .privacy-row-hint {
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale, 1));
   color: var(--text-muted);
   max-width: 300px;
 }
 
 .privacy-modal-note {
   margin-top: 16px;
-  font-size: 13px;
+  font-size: calc(13px * var(--font-scale, 1));
   color: var(--text-muted);
   text-align: center;
 }
@@ -5924,7 +6397,7 @@ button.settings-row-clickable:hover .settings-row-label {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale, 1));
   color: var(--text-muted);
 }
 
@@ -5979,14 +6452,14 @@ button.settings-row-clickable:hover .settings-row-label {
 }
 
 .invite-card-title {
-  font-size: 11px;
+  font-size: calc(11px * var(--font-scale, 1));
   text-transform: uppercase;
   letter-spacing: 0.02em;
   color: var(--text-muted);
 }
 
 .invite-card-server {
-  font-size: 14px;
+  font-size: calc(14px * var(--font-scale, 1));
   font-weight: 600;
   color: var(--text-normal);
   white-space: nowrap;
@@ -5998,7 +6471,7 @@ button.settings-row-clickable:hover .settings-row-label {
   display: flex;
   align-items: center;
   gap: 4px;
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale, 1));
   color: var(--text-muted);
 }
 
@@ -6014,12 +6487,12 @@ button.settings-row-clickable:hover .settings-row-label {
   align-items: center;
   gap: 5px;
   padding: 6px 12px;
-  font-size: 13px;
+  font-size: calc(13px * var(--font-scale, 1));
   white-space: nowrap;
 }
 
 .invite-card-status {
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale, 1));
   color: var(--text-muted);
   white-space: nowrap;
 }
@@ -6044,7 +6517,7 @@ button.settings-row-clickable:hover .settings-row-label {
   align-items: center;
   gap: 8px;
   padding: 6px 0;
-  font-size: 14px;
+  font-size: calc(14px * var(--font-scale, 1));
   color: var(--text-normal);
   cursor: pointer;
 }
@@ -6077,11 +6550,14 @@ button.settings-row-clickable:hover .settings-row-label {
      16px для десктопа — !important здесь оправдан: это не стилевое
      предпочтение, а обход конкретного браузерного поведения, патчить
      каждый класс по отдельности означало бы держать список синхронным
-     вручную при каждом новом поле. */
+     вручную при каждом новом поле. max(), а не жёсткие 16px: если в
+     настройках читаемости (см. --font-scale, settings.tsx) выбран размер
+     БОЛЬШЕ 16, поле должно расти вместе с остальным текстом, а не
+     обрезаться до 16 — важен только пол, не потолок. */
   input,
   textarea,
   select {
-    font-size: 16px !important;
+    font-size: max(16px, calc(16px * var(--font-scale, 1))) !important;
   }
 
   /* Композер растёт под текст через JS (MessageInput.autoGrow — меряет

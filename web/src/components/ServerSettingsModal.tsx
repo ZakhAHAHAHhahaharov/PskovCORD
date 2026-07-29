@@ -1,4 +1,6 @@
-import { useEffect, useRef, useState, ChangeEvent } from 'react'
+import {
+  forwardRef, useEffect, useImperativeHandle, useRef, useState, ChangeEvent,
+} from 'react'
 import {
   Camera, Check, ChevronLeft, ChevronRight, Crown, Loader2, Plus, Shield,
   ShieldBan, SlidersHorizontal, Trash2, UserRoundCheck, X,
@@ -13,7 +15,20 @@ import {
   parseGradient,
 } from '../images'
 import { useEscToClose } from '../modalStack'
+import { useUnsavedChangesGuard } from '../hooks/useUnsavedChangesGuard'
 import Avatar from './Avatar'
+import UnsavedChangesNudge from './UnsavedChangesNudge'
+
+/** Общий контракт вкладки с черновиком + кнопкой "Сохранить" (Профиль/Роли/
+ * Доступ) — родитель (ServerSettingsModal) держит ref на АКТИВНУЮ вкладку и
+ * через него же и проверяет isDirty при клике мимо, и запускает
+ * save/discard из плашки "Изменения не сохранены" (см. useUnsavedChangesGuard).
+ * Вкладки без черновика (Запросы/ЧС) этот контракт не реализуют. */
+interface TabHandle {
+  isDirty: boolean
+  save: () => Promise<void>
+  discard: () => void
+}
 
 type TabId = 'profile' | 'roles' | 'requests' | 'access' | 'bans'
 
@@ -179,6 +194,30 @@ export default function ServerSettingsModal({
   const [mobileTabOpen, setMobileTabOpen] = useState(false)
   const currentTab = availableTabs.find((t) => t.id === tab)
 
+  // Ref на АКТИВНУЮ вкладку с черновиком (Профиль/Роли/Доступ — см. TabHandle
+  // выше) — вкладки без черновика (Запросы/ЧС) его не проставляют, тогда
+  // getIsDirty ниже просто вернёт false (кликать мимо там нечего защищать).
+  const activeTabRef = useRef<TabHandle>(null)
+  const [nudgeSaving, setNudgeSaving] = useState(false)
+  const { modalRef, showNudge, handleOverlayClick, dismissNudge } = useUnsavedChangesGuard(
+    () => activeTabRef.current?.isDirty ?? false,
+    onClose,
+  )
+  const handleNudgeSave = async () => {
+    setNudgeSaving(true)
+    try {
+      await activeTabRef.current?.save()
+      dismissNudge()
+    } finally {
+      setNudgeSaving(false)
+    }
+  }
+  const handleNudgeDiscard = () => {
+    activeTabRef.current?.discard()
+    dismissNudge()
+    onClose()
+  }
+
   // Esc закрывает редактор — он занимает весь экран, кликать мимо неудобно.
   // Общий стек модалок (см. modalStack.ts): если поверх редактора открыто
   // что-то ещё (например, мини-профиль), Esc сначала закроет ЕГО, а не оба разом.
@@ -191,9 +230,11 @@ export default function ServerSettingsModal({
     // модалкой (её 860px десктопной ширины клампит только базовый
     // .modal{max-width:92vw}), а внутренний mobile-category-open toggle
     // (список вкладок ↔ контент вкладки) рассчитан ровно на полный экран.
-    <div className="modal-overlay settings-overlay" onClick={onClose}>
+    <div className="modal-overlay settings-overlay" onClick={handleOverlayClick}>
+      <div className="unsaved-guard-stack">
       <div
         className="modal settings-modal server-settings-modal"
+        ref={modalRef}
         onClick={(e) => e.stopPropagation()}
       >
         <h2 className="modal-title settings-modal-title">
@@ -239,10 +280,11 @@ export default function ServerSettingsModal({
               <div className="modal-empty">Нет прав на настройку этого сервера.</div>
             )}
             {tab === 'profile' && (
-              <ProfileTab server={server} onServerUpdated={onServerUpdated} />
+              <ProfileTab ref={activeTabRef} server={server} onServerUpdated={onServerUpdated} />
             )}
             {tab === 'roles' && (
               <RolesTab
+                ref={activeTabRef}
                 server={server}
                 members={members}
                 onMembersChanged={onMembersChanged}
@@ -252,12 +294,23 @@ export default function ServerSettingsModal({
             {tab === 'requests' && (
               <RequestsTab server={server} onMembersChanged={onMembersChanged} />
             )}
-            {tab === 'access' && <AccessTab server={server} onServerUpdated={onServerUpdated} />}
+            {tab === 'access' && (
+              <AccessTab ref={activeTabRef} server={server} onServerUpdated={onServerUpdated} />
+            )}
             {tab === 'bans' && (
               <BansTab server={server} members={members} onMembersChanged={onMembersChanged} />
             )}
           </div>
         </div>
+      </div>
+
+      {showNudge && (
+        <UnsavedChangesNudge
+          onSave={handleNudgeSave}
+          onDiscard={handleNudgeDiscard}
+          saving={nudgeSaving}
+        />
+      )}
       </div>
     </div>
   )
@@ -265,13 +318,8 @@ export default function ServerSettingsModal({
 
 // --- 1. Профиль сервера ---------------------------------------------------
 
-function ProfileTab({
-  server,
-  onServerUpdated,
-}: {
-  server: Server
-  onServerUpdated: (s: Server) => void
-}) {
+const ProfileTab = forwardRef<TabHandle, { server: Server; onServerUpdated: (s: Server) => void }>(
+  function ProfileTab({ server, onServerUpdated }, ref) {
   const iconFileRef = useRef<HTMLInputElement>(null)
   const bannerFileRef = useRef<HTMLInputElement>(null)
 
@@ -283,9 +331,8 @@ function ProfileTab({
   const [isPrivate, setIsPrivate] = useState(server.is_private)
 
   const initial = parseGradient(server.banner_gradient)
-  const [bannerMode, setBannerMode] = useState<'gradient' | 'gif'>(
-    server.banner_image ? 'gif' : 'gradient',
-  )
+  const initialBannerMode: 'gradient' | 'gif' = server.banner_image ? 'gif' : 'gradient'
+  const [bannerMode, setBannerMode] = useState<'gradient' | 'gif'>(initialBannerMode)
   const [gradientFrom, setGradientFrom] = useState(initial.from)
   const [gradientTo, setGradientTo] = useState(initial.to)
   const [gradientAngle, setGradientAngle] = useState(initial.angle)
@@ -300,6 +347,32 @@ function ProfileTab({
   const desiredBannerImage = bannerMode === 'gif' ? bannerImage : ''
 
   const touch = () => setSaved(false)
+
+  const isDirty =
+    name !== server.name ||
+    icon !== server.icon ||
+    description !== server.description ||
+    isPrivate !== server.is_private ||
+    tags.length !== server.tags.length ||
+    tags.some((t, i) => t !== server.tags[i]) ||
+    bannerMode !== initialBannerMode ||
+    gradientFrom !== initial.from ||
+    gradientTo !== initial.to ||
+    gradientAngle !== initial.angle ||
+    bannerImage !== server.banner_image
+
+  const discard = () => {
+    setName(server.name)
+    setIcon(server.icon)
+    setDescription(server.description)
+    setTags(server.tags)
+    setIsPrivate(server.is_private)
+    setBannerMode(initialBannerMode)
+    setGradientFrom(initial.from)
+    setGradientTo(initial.to)
+    setGradientAngle(initial.angle)
+    setBannerImage(server.banner_image)
+  }
 
   const handleIconFile = async (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
@@ -364,6 +437,8 @@ function ProfileTab({
       setSaving(false)
     }
   }
+
+  useImperativeHandle(ref, () => ({ isDirty, save: handleSave, discard }))
 
   return (
     <div className="srv-tab">
@@ -603,21 +678,19 @@ function ProfileTab({
       </button>
     </div>
   )
-}
+})
 
 // --- 2. Роли --------------------------------------------------------------
 
-function RolesTab({
-  server,
-  members,
-  onMembersChanged,
-  onRolesChanged,
-}: {
-  server: Server
-  members: Member[]
-  onMembersChanged: () => void
-  onRolesChanged: () => void
-}) {
+const RolesTab = forwardRef<
+  TabHandle,
+  {
+    server: Server
+    members: Member[]
+    onMembersChanged: () => void
+    onRolesChanged: () => void
+  }
+>(function RolesTab({ server, members, onMembersChanged, onRolesChanged }, ref) {
   const [roles, setRoles] = useState<Role[]>([])
   const [selectedId, setSelectedId] = useState<number | null>(null)
   const [loading, setLoading] = useState(true)
@@ -679,6 +752,19 @@ function RolesTab({
       setSaving(false)
     }
   }
+
+  // Правка роли — со сравнением ЦЕЛЫХ объектов (JSON), а не полем за полем:
+  // Role — плоский набор булевых прав + пара строк/чисел, ничего, что не
+  // сериализуется, а полей десятки (см. PERMISSION_GROUPS) — перечислять
+  // каждое вручную только ради isDirty незачем.
+  const originalRole = draft ? roles.find((r) => r.id === draft.id) ?? null : null
+  const isDirty =
+    draft != null && originalRole != null && JSON.stringify(draft) !== JSON.stringify(originalRole)
+  const discardDraft = () => {
+    if (originalRole) setDraft(originalRole)
+  }
+
+  useImperativeHandle(ref, () => ({ isDirty, save: handleSave, discard: discardDraft }))
 
   const handleDelete = async () => {
     if (!draft || draft.is_default) return
@@ -929,7 +1015,7 @@ function RolesTab({
       </div>
     </div>
   )
-}
+})
 
 // --- 3. Запросы на вступление ---------------------------------------------
 
@@ -1014,13 +1100,8 @@ function RequestsTab({
 
 // --- 4. Доступ ------------------------------------------------------------
 
-function AccessTab({
-  server,
-  onServerUpdated,
-}: {
-  server: Server
-  onServerUpdated: (s: Server) => void
-}) {
+const AccessTab = forwardRef<TabHandle, { server: Server; onServerUpdated: (s: Server) => void }>(
+  function AccessTab({ server, onServerUpdated }, ref) {
   const [accessMode, setAccessMode] = useState<ServerAccessMode>(server.access_mode)
   const [ageRestricted, setAgeRestricted] = useState(server.age_restricted)
   const [rules, setRules] = useState<ServerRule[]>(server.rules)
@@ -1055,6 +1136,19 @@ function AccessTab({
       setSaving(false)
     }
   }
+
+  const isDirty =
+    accessMode !== server.access_mode ||
+    ageRestricted !== server.age_restricted ||
+    rules.length !== server.rules.length ||
+    rules.some((r, i) => r.title !== server.rules[i]?.title || r.text !== server.rules[i]?.text)
+  const discard = () => {
+    setAccessMode(server.access_mode)
+    setAgeRestricted(server.age_restricted)
+    setRules(server.rules)
+  }
+
+  useImperativeHandle(ref, () => ({ isDirty, save: handleSave, discard }))
 
   return (
     <div className="srv-tab">
@@ -1140,7 +1234,7 @@ function AccessTab({
       </button>
     </div>
   )
-}
+})
 
 // --- 5. ЧС списочек xD ----------------------------------------------------
 

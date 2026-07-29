@@ -7,6 +7,7 @@ import {
 } from 'lucide-react'
 import { ChatMessageBase, MentionCandidate } from '../api'
 import { escapeRegExp, WORD_CHAR } from '../mentions'
+import { styledNameProps } from '../nameStyle'
 import { DeliveryStatus, DELIVERY_STATUS_PRESENTATION } from '../outbox'
 import { QUICK_REACTIONS } from '../emoji'
 import Avatar from './Avatar'
@@ -327,7 +328,8 @@ export default function MessageList({
               )}
               <div className="message-meta">
                 <span
-                  className="message-author profile-trigger-name"
+                  className={`message-author profile-trigger-name ${styledNameProps(m.author).className}`}
+                  style={styledNameProps(m.author).style}
                   onClick={(e) => onOpenProfile(m.author, e)}
                 >
                   {m.author.username}

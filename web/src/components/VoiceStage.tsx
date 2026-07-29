@@ -16,6 +16,8 @@ import {
   Users,
   PictureInPicture2,
 } from 'lucide-react'
+import { NameEffect } from '../api'
+import { styledNameProps } from '../nameStyle'
 import Avatar from './Avatar'
 import MicButton from './MicButton'
 import ScreenShareButton from './ScreenShareButton'
@@ -93,6 +95,11 @@ export interface VoiceRosterMember {
   muted: boolean
   deafened: boolean
   sharing_screen: boolean
+  /** Стиль ника (см. nameStyle.ts) — применяется к подписи тайла участника. */
+  name_font: number | null
+  name_effect: NameEffect
+  name_color_1: string
+  name_color_2: string
 }
 
 /** Живой `<video>`, привязанный к MediaStream по ref — не пересоздаётся при
@@ -197,7 +204,8 @@ function ParticipantTile({
         />
       </button>
       <span
-        className="participant-tile-name profile-trigger-name"
+        className={`participant-tile-name profile-trigger-name ${styledNameProps(member).className}`}
+        style={styledNameProps(member).style}
         onClick={(e) => {
           e.stopPropagation()
           onOpenProfile(member, e)

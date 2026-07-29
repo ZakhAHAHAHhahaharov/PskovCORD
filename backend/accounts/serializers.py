@@ -8,6 +8,7 @@ from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import serializers
 
 from .avatar_color import compute_avatar_color
+from .models import NameFont
 
 User = get_user_model()
 
@@ -44,6 +45,20 @@ GRADIENT_RE = re.compile(
     r"^linear-gradient\(\d{1,3}deg, #[0-9a-fA-F]{6} 0%, #[0-9a-fA-F]{6} 100%\)$"
 )
 
+# Для banner_color/name_color_1/name_color_2 — простой хекс, без альфа-канала
+# (в отличие от GRADIENT_RE это не CSS-выражение, а именно значение цвета).
+HEX_COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
+
+
+def validate_hex_color(value):
+    """Пусто — сброс к цвету по умолчанию (тема/обычный текст), см. модели
+    User.banner_color/name_color_1/name_color_2."""
+    if not value:
+        return value
+    if not HEX_COLOR_RE.match(value):
+        raise serializers.ValidationError("Ожидался цвет в формате #RRGGBB.")
+    return value
+
 
 def validate_data_url(value, allowed_mime, max_bytes, what):
     """Разбор и проверка картинки-data-URL: формат → mime → base64 → размер.
@@ -69,24 +84,41 @@ def validate_data_url(value, allowed_mime, max_bytes, what):
     return value
 
 
+class NameFontSerializer(serializers.ModelSerializer):
+    """Каталог шрифтов ника — GET /api/auth/name-fonts. Публичный список (не
+    привязан к конкретному пользователю), см. accounts.models.NameFont."""
+
+    file = serializers.FileField(use_url=True)
+
+    class Meta:
+        model = NameFont
+        fields = ["id", "label", "file"]
+
+
 class UserSerializer(serializers.ModelSerializer):
     """Публичный профиль — то, что видят ДРУГИЕ.
 
-    Отсюда убраны banner_image и dm_privacy. banner_image — гифка-баннер
-    data-URL'ом до 4 МБ, а этот сериализатор подставляется в КАЖДОЕ сообщение
-    (author и reply_to.author) и в каждую строку ростера: баннер уезжал
-    десятки раз за один ответ. Сама модель (accounts.models.User) прямо
-    говорит, что транслировать его другим не нужно, — REST-путь это правило
-    нарушал. Для чужой карточки профиля баннер теперь отдаётся отдельной
-    ручкой, ровно когда карточку открыли (chat.views.UserProfileCard).
-    dm_privacy — личная настройка приватности, другим её знать незачем.
-    """
+    Отсюда убраны banner_image, banner_color и dm_privacy. banner_image —
+    гифка-баннер data-URL'ом до 4 МБ, а этот сериализатор подставляется в
+    КАЖДОЕ сообщение (author и reply_to.author) и в каждую строку ростера:
+    баннер уезжал десятки раз за один ответ. Сама модель (accounts.models.User)
+    прямо говорит, что транслировать его другим не нужно, — REST-путь это
+    правило нарушал. Для чужой карточки профиля баннер (и banner_color вместе
+    с ним) теперь отдаётся отдельной ручкой, ровно когда карточку открыли
+    (chat.views.UserProfileCard). dm_privacy — личная настройка приватности,
+    другим её знать незачем.
+
+    name_font/name_effect/name_color_1/name_color_2 — ровно наоборот: их СМЫСЛ
+    в том, чтобы другие видели стиль ника в сообщениях/голосовом ростере,
+    поэтому они здесь, а не только в MeSerializer (это лёгкие поля — id
+    шрифта + пара строк, не гифка)."""
 
     class Meta:
         model = User
         fields = [
             "id", "username", "display_name", "avatar_color", "avatar_image",
             "status", "banner_gradient",
+            "name_font", "name_effect", "name_color_1", "name_color_2",
         ]
 
 
@@ -105,7 +137,9 @@ class MeSerializer(serializers.ModelSerializer):
             "id", "username", "display_name", "bio", "pronouns",
             "custom_status", "custom_status_emoji", "date_joined",
             "avatar_color", "avatar_image",
-            "status", "banner_gradient", "banner_image", "dm_privacy",
+            "status", "banner_gradient", "banner_image", "banner_color",
+            "dm_privacy",
+            "name_font", "name_effect", "name_color_1", "name_color_2",
         ]
 
 
@@ -164,7 +198,9 @@ class ProfileUpdateSerializer(serializers.ModelSerializer):
         fields = [
             "username", "display_name", "bio", "pronouns", "custom_status",
             "custom_status_emoji",
-            "avatar_image", "banner_gradient", "banner_image", "dm_privacy",
+            "avatar_image", "banner_gradient", "banner_image", "banner_color",
+            "dm_privacy",
+            "name_font", "name_effect", "name_color_1", "name_color_2",
             "current_password",
         ]
         extra_kwargs = {
@@ -177,7 +213,12 @@ class ProfileUpdateSerializer(serializers.ModelSerializer):
             "avatar_image": {"required": False, "allow_blank": True},
             "banner_gradient": {"required": False, "allow_blank": True},
             "banner_image": {"required": False, "allow_blank": True},
+            "banner_color": {"required": False, "allow_blank": True},
             "dm_privacy": {"required": False},
+            "name_font": {"required": False, "allow_null": True},
+            "name_effect": {"required": False},
+            "name_color_1": {"required": False, "allow_blank": True},
+            "name_color_2": {"required": False, "allow_blank": True},
         }
 
     def validate_username(self, value):
@@ -210,6 +251,15 @@ class ProfileUpdateSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError(
                 f"Слишком длинное описание (максимум {self.MAX_BIO_LENGTH} символов).")
         return value
+
+    def validate_banner_color(self, value):
+        return validate_hex_color(value)
+
+    def validate_name_color_1(self, value):
+        return validate_hex_color(value)
+
+    def validate_name_color_2(self, value):
+        return validate_hex_color(value)
 
     def update(self, instance, validated_data):
         # Новый аватар — сразу же пересчитываем avatar_color как средний
