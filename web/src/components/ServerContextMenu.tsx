@@ -2,16 +2,29 @@ import { useLayoutEffect, useRef } from 'react'
 import {
   BellOff, BellRing, Check, ChevronRight, LogOut, Mail, Settings, ShieldCheck,
 } from 'lucide-react'
-import { Server } from '../api'
+import { NotificationLevel, Server } from '../api'
+import { useHoverFlyout } from '../hooks/useHoverFlyout'
+
+const MUTE_OPTIONS: { label: string; minutes: number }[] = [
+  { label: '15 минут', minutes: 15 },
+  { label: '30 минут', minutes: 30 },
+  { label: '1 час', minutes: 60 },
+  { label: '3 часа', minutes: 180 },
+  { label: '8 часов', minutes: 480 },
+  { label: '24 часа', minutes: 1440 },
+]
+
+const NOTIFICATION_LEVELS: { value: NotificationLevel; label: string }[] = [
+  { value: 'all', label: 'Все сообщения' },
+  { value: 'mentions', label: 'Только @упоминания' },
+  { value: 'none', label: 'Ничего' },
+]
 
 /**
  * Правый клик по пилюле сервера в ServerRail — управление уведомлениями,
  * приглашение, доступ к настройкам/приватности, выход. Позиционирование и
- * закрытие по клику вне себя — тот же приём, что в ParticipantContextMenu.
- *
- * Заглушение и параметры уведомлений открывают отдельные модальные окна
- * (ServerMuteModal/ServerNotificationsModal), а не подменю-флауты: их списки
- * не помещались в попап, и он обзаводился полосами прокрутки.
+ * закрытие по клику вне себя — тот же приём, что в ParticipantContextMenu;
+ * подменю по наведению — тот же useHoverFlyout, что и в StatusMenu.
  */
 export default function ServerContextMenu({
   server,
@@ -22,8 +35,11 @@ export default function ServerContextMenu({
   onClose,
   onMarkRead,
   onInvite,
-  onOpenMute,
-  onOpenNotifications,
+  onMute,
+  onUnmute,
+  onNotificationLevel,
+  onToggleIgnoreAtHere,
+  onToggleSuppressRoleMentions,
   onOpenServerSettings,
   onOpenPrivacy,
   onLeave,
@@ -38,13 +54,18 @@ export default function ServerContextMenu({
   onClose: () => void
   onMarkRead: () => void
   onInvite: () => void
-  onOpenMute: () => void
-  onOpenNotifications: () => void
+  onMute: (minutes: number | 'forever') => void
+  onUnmute: () => void
+  onNotificationLevel: (level: NotificationLevel) => void
+  onToggleIgnoreAtHere: (value: boolean) => void
+  onToggleSuppressRoleMentions: (value: boolean) => void
   onOpenServerSettings: () => void
   onOpenPrivacy: () => void
   onLeave: () => void
 }) {
   const ref = useRef<HTMLDivElement>(null)
+  const muteFlyout = useHoverFlyout()
+  const notifyFlyout = useHoverFlyout()
   const settings = server.my_settings
 
   useLayoutEffect(() => {
@@ -117,33 +138,112 @@ export default function ServerContextMenu({
           <Mail size={15} /> Пригласить на сервер
         </button>
 
-        <button
-          type="button"
-          className="profile-popup-item status-row"
-          onClick={() => {
-            onOpenMute()
-            onClose()
-          }}
+        <div
+          className="status-row-wrap"
+          onMouseEnter={muteFlyout.onMouseEnter}
+          onMouseLeave={muteFlyout.onMouseLeave}
         >
-          <BellOff size={15} />
-          <span className="server-context-menu-text">
+          <button type="button" className="profile-popup-item status-row">
+            <BellOff size={15} />
             {settings.muted ? 'Сервер заглушён' : 'Заглушить сервер'}
-          </span>
-          <ChevronRight size={15} className="status-row-chevron" />
-        </button>
+            <ChevronRight size={15} className="status-row-chevron" />
+          </button>
 
-        <button
-          type="button"
-          className="profile-popup-item status-row"
-          onClick={() => {
-            onOpenNotifications()
-            onClose()
-          }}
+          {muteFlyout.open && (
+            <div className="status-flyout server-menu-flyout">
+              <div className="status-flyout-scroll">
+                {settings.muted && (
+                  <>
+                    <button
+                      type="button"
+                      className="server-flyout-item"
+                      onClick={() => {
+                        onUnmute()
+                        onClose()
+                      }}
+                    >
+                      <BellRing size={14} /> Включить уведомления
+                    </button>
+                    <div className="profile-popup-divider" />
+                  </>
+                )}
+                {MUTE_OPTIONS.map((o) => (
+                  <button
+                    key={o.minutes}
+                    type="button"
+                    className="server-flyout-item"
+                    onClick={() => {
+                      onMute(o.minutes)
+                      onClose()
+                    }}
+                  >
+                    {o.label}
+                  </button>
+                ))}
+                <button
+                  type="button"
+                  className={`server-flyout-item ${settings.muted_forever ? 'active' : ''}`}
+                  onClick={() => {
+                    onMute('forever')
+                    onClose()
+                  }}
+                >
+                  До тех пор, пока не включу
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div
+          className="status-row-wrap"
+          onMouseEnter={notifyFlyout.onMouseEnter}
+          onMouseLeave={notifyFlyout.onMouseLeave}
         >
-          <BellRing size={15} />
-          <span className="server-context-menu-text">Параметры уведомлений</span>
-          <ChevronRight size={15} className="status-row-chevron" />
-        </button>
+          <button type="button" className="profile-popup-item status-row">
+            <BellRing size={15} /> Параметры уведомлений
+            <ChevronRight size={15} className="status-row-chevron" />
+          </button>
+
+          {notifyFlyout.open && (
+            <div className="status-flyout server-menu-flyout">
+              <div className="status-flyout-scroll">
+                {NOTIFICATION_LEVELS.map((o) => (
+                  <button
+                    key={o.value}
+                    type="button"
+                    className={`server-flyout-item ${
+                      settings.notification_level === o.value ? 'active' : ''
+                    }`}
+                    onClick={() => onNotificationLevel(o.value)}
+                  >
+                    {settings.notification_level === o.value && <Check size={13} />}
+                    {o.label}
+                  </button>
+                ))}
+
+                <div className="profile-popup-divider" />
+
+                <label className="server-flyout-checkbox">
+                  <input
+                    type="checkbox"
+                    checked={settings.ignore_at_here}
+                    onChange={(e) => onToggleIgnoreAtHere(e.target.checked)}
+                  />
+                  Игнорировать @all и @here
+                </label>
+                <label className="server-flyout-checkbox">
+                  <input
+                    type="checkbox"
+                    checked={settings.suppress_role_mentions}
+                    onChange={(e) => onToggleSuppressRoleMentions(e.target.checked)}
+                  />
+                  Отключить все @упоминания ролей
+                </label>
+              </div>
+            </div>
+          )}
+        </div>
       </div>
 
       <div className="profile-popup-divider" />

@@ -1,11 +1,14 @@
 import { useCallback, useEffect, useRef, useState, MouseEvent as ReactMouseEvent } from 'react'
 import {
+  ChevronDown,
   ChevronLeft,
+  ChevronUp,
   Maximize2,
   Minimize2,
   Monitor,
   MicOff,
   HeadphoneOff,
+  Volume2,
   X,
   Eye,
   Video,
@@ -20,6 +23,14 @@ import { ProfilePopupUser } from './MiniProfilePopup'
 import { useSettings } from '../settings'
 import { useVoice } from '../voice'
 import { useLongPress } from '../hooks/useLongPress'
+
+/** Document Picture-in-Picture (Chromium 116+) — в lib.dom его ещё нет.
+ * Именно он, а не video.requestPictureInPicture, умеет вынести в плавающее
+ * окно произвольный кусок DOM: нам нужен весь экран звонка с тулбаром. */
+interface DocumentPip {
+  readonly window: Window | null
+  requestWindow(options?: { width?: number; height?: number }): Promise<Window>
+}
 
 /** Зазор между тайлами сетки — используется и в CSS (.voice-stage-grid gap),
  * и здесь при расчёте ширины тайла, оба места обязаны совпадать. */
@@ -88,25 +99,38 @@ export interface VoiceRosterMember {
 function StreamVideo({
   stream,
   muted,
-  videoRef,
+  onAspect,
 }: {
   stream: MediaStream
   muted: boolean
-  /** Наружу — только чтобы развёрнутая демонстрация могла отдать этот самый
-   * элемент в Picture-in-Picture (см. handleTogglePip). Внутренняя привязка
-   * потока продолжает работать через тот же ref. */
-  videoRef?: React.RefObject<HTMLVideoElement>
+  /** Реальное соотношение сторон потока числом (1920/1080 = 1.7778) —
+   * развёрнутая демонстрация задаёт им размер своего бокса, чтобы подпись
+   * легла на саму картинку, а не в чёрное поле рядом (см.
+   * .voice-stage-expanded-media). */
+  onAspect?: (aspect: number) => void
 }) {
-  const localRef = useRef<HTMLVideoElement>(null)
-  const ref = videoRef ?? localRef
+  const ref = useRef<HTMLVideoElement>(null)
   const { outputVolume } = useSettings()
   useEffect(() => {
     if (ref.current) ref.current.srcObject = stream
-  }, [ref, stream])
+  }, [stream])
   useEffect(() => {
     if (ref.current) ref.current.volume = outputVolume
-  }, [ref, outputVolume])
-  return <video ref={ref} autoPlay playsInline muted={muted} />
+  }, [outputVolume])
+  return (
+    <video
+      ref={ref}
+      autoPlay
+      playsInline
+      muted={muted}
+      onLoadedMetadata={(e) => {
+        const v = e.currentTarget
+        if (onAspect && v.videoWidth > 0 && v.videoHeight > 0) {
+          onAspect(v.videoWidth / v.videoHeight)
+        }
+      }}
+    />
+  )
 }
 
 function ParticipantTile({
@@ -384,27 +408,98 @@ export default function VoiceStage({
   // демки) — по умолчанию скрыта, разворачивается кнопкой «Участники»,
   // сама демка при этом ужимается по высоте (см. .with-filmstrip в CSS).
   const [filmstripOpen, setFilmstripOpen] = useState(false)
-  // Свернули развёрнутый тайл — лента больше не к чему прилагается.
+  // Соотношение сторон развёрнутой демонстрации — приходит из loadedmetadata
+  // самого потока (см. StreamVideo.onAspect); до него честнее 16:9, чем
+  // растянутый на весь контейнер бокс.
+  const [demoAspect, setDemoAspect] = useState(16 / 9)
+  // Свернули развёрнутый тайл — лента больше не к чему прилагается, и
+  // соотношение сторон следующей демки будет своё.
   useEffect(() => {
-    if (expanded == null) setFilmstripOpen(false)
+    if (expanded == null) {
+      setFilmstripOpen(false)
+      setDemoAspect(16 / 9)
+    }
   }, [expanded])
 
-  // Picture-in-Picture — это и есть «отдельное окно» для видео: плавающее
-  // системное окно поверх остальных, переживает уход на другую вкладку.
-  // Собственный popup тут не годится — MediaStream в другое окно так просто
-  // не передать.
-  const pipVideoRef = useRef<HTMLVideoElement>(null)
-  const pipSupported =
-    typeof document !== 'undefined' && document.pictureInPictureEnabled === true
-  const handleTogglePip = () => {
-    const video = pipVideoRef.current
-    if (!video) return
-    if (document.pictureInPictureElement) {
-      void document.exitPictureInPicture().catch(() => {})
-    } else {
-      void video.requestPictureInPicture().catch(() => {})
+  // «Открыть в отдельном окне» — Document Picture-in-Picture: плавающее
+  // системное окно поверх остальных, переживает уход на другую вкладку. Туда
+  // переезжает ВЕСЬ .voice-stage целиком (сетка, демка, тулбар), а не только
+  // <video>, как было раньше, — иначе в окне нельзя было ни выключить
+  // микрофон, ни повесить трубку.
+  //
+  // Узел физически перемещается в документ pip-окна и возвращается обратно
+  // при его закрытии; React продолжает владеть тем же самым DOM-узлом, так
+  // что состояние и обработчики переживают переезд. На месте остаётся
+  // распорка (placeholder), чтобы main не схлопнулся в ноль.
+  const pipPlaceholderRef = useRef<HTMLDivElement>(null)
+  const [inPip, setInPip] = useState(false)
+  const pipSupported = typeof window !== 'undefined' && 'documentPictureInPicture' in window
+
+  const handleTogglePip = async () => {
+    const stage = containerRef.current
+    const placeholder = pipPlaceholderRef.current
+    if (!stage || !placeholder || !pipSupported) return
+    const dpip = (window as unknown as { documentPictureInPicture: DocumentPip })
+      .documentPictureInPicture
+    if (dpip.window) {
+      dpip.window.close()
+      return
     }
+    const rect = stage.getBoundingClientRect()
+    let pipWindow: Window
+    try {
+      pipWindow = await dpip.requestWindow({
+        width: Math.round(rect.width) || 960,
+        height: Math.round(rect.height) || 540,
+      })
+    } catch {
+      // Отказ пользователя или неподдерживаемый браузер — молча остаёмся на месте.
+      return
+    }
+    // Стили в pip-окно не наследуются — переносим их копией. cssRules
+    // недоступны у кросс-доменных стилей (их тут нет, но CORS-исключение
+    // всё равно ловим), для них остаётся <link>.
+    for (const sheet of Array.from(document.styleSheets)) {
+      try {
+        const css = Array.from(sheet.cssRules).map((r) => r.cssText).join('')
+        const style = pipWindow.document.createElement('style')
+        style.textContent = css
+        pipWindow.document.head.appendChild(style)
+      } catch {
+        if (sheet.href) {
+          const link = pipWindow.document.createElement('link')
+          link.rel = 'stylesheet'
+          link.href = sheet.href
+          pipWindow.document.head.appendChild(link)
+        }
+      }
+    }
+    pipWindow.document.body.style.margin = '0'
+    pipWindow.document.body.style.height = '100vh'
+    // Тему приложения держит data-атрибут на <html> (см. settings.tsx) —
+    // без него окно откроется в дефолтной палитре.
+    for (const attr of Array.from(document.documentElement.attributes)) {
+      pipWindow.document.documentElement.setAttribute(attr.name, attr.value)
+    }
+    placeholder.style.display = 'flex'
+    pipWindow.document.body.appendChild(stage)
+    setInPip(true)
+    pipWindow.addEventListener('pagehide', () => {
+      placeholder.style.display = ''
+      placeholder.parentElement?.insertBefore(stage, placeholder)
+      setInPip(false)
+    })
   }
+
+  // Окно могло остаться открытым, когда VoiceStage размонтируется (вышли из
+  // канала) — закрываем его, иначе узел так и висел бы в чужом документе.
+  useEffect(() => {
+    return () => {
+      const dpip = (window as unknown as { documentPictureInPicture?: DocumentPip })
+        .documentPictureInPicture
+      dpip?.window?.close()
+    }
+  }, [])
 
   // Плавающая панель мут/камера/демка/сброс — как в полноэкранном
   // видеоплеере: скрыта, пока не двинуть мышью над экраном звонка, и снова
@@ -570,6 +665,12 @@ export default function VoiceStage({
   }
 
   return (
+    <>
+    {/* Распорка на месте .voice-stage, пока тот уехал в pip-окно (см.
+        handleTogglePip): без неё main схлопнулся бы в нулевую высоту. */}
+    <div ref={pipPlaceholderRef} className="voice-stage-pip-placeholder">
+      <span>Звонок открыт в отдельном окне</span>
+    </div>
     <div
       ref={containerRef}
       className={`voice-stage ${isFullscreen ? 'is-fullscreen' : ''} ${!showControls ? 'controls-hidden' : ''}`}
@@ -583,22 +684,19 @@ export default function VoiceStage({
       // не нужно.
       onClick={handleStageMouseMove}
     >
-      <header className="voice-stage-header">
+      {/* Шапка и подвал — накладки поверх содержимого, а не полосы в колонке:
+          живут по тем же правилам, что и voice-controls-bar (появляются по
+          движению мыши, уходят вместе с курсором), поэтому не должны отъедать
+          высоту у сетки/демонстрации, пока их не видно. */}
+      <header className={`voice-stage-header ${showControls ? 'visible' : ''}`}>
         {isMobile && (
           <button className="chat-back-btn" title="Назад к списку" onClick={onBack}>
             <ChevronLeft size={20} />
           </button>
         )}
         <span className="voice-stage-title">
-          <Monitor size={16} /> {roomName}
+          <Volume2 size={14} /> {roomName}
         </span>
-        <button
-          className="icon-btn"
-          onClick={toggleFullscreen}
-          title={isFullscreen ? 'Свернуть из полноэкранного режима' : 'На весь экран'}
-        >
-          {isFullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
-        </button>
       </header>
 
       {expanded != null ? (
@@ -608,92 +706,71 @@ export default function VoiceStage({
             title="Свернуть"
             onClick={() => setExpanded(null)}
           >
-            {expanded.mode === 'screen' ? (
-              expandedStream ? (
-                <StreamVideo
-                  stream={expandedStream}
-                  muted={expanded.userId === selfUserId || deafened}
-                  videoRef={pipVideoRef}
-                />
-              ) : (
-                <div className="screen-preview-placeholder">
-                  <Monitor size={40} />
-                  <span>Подключение…</span>
-                </div>
-              )
-            ) : (
-              <div className="participant-expanded">
-                <Avatar
-                  name={expandedMember?.username ?? nameOf(expanded.userId)}
-                  color={expandedMember?.avatar_color ?? '#5865f2'}
-                  image={expandedMember?.avatar_image ?? ''}
-                  size={200}
-                  speaking={speakingUserIds.has(expanded.userId)}
-                />
-              </div>
-            )}
-
-            {/* Подпись и «перестать смотреть» — в левом нижнем углу, поверх
-                видео (как и у тайлов в сетке); отдельной «шапки» сверху нет.
-                Открыть-в-окне/полноэкран уехали в правый нижний угол, а
-                «Показать участников» — наверх, над voice-controls-bar (см.
-                .voice-stage-participants-toggle ниже). stopPropagation —
-                иначе клик по кнопке свернул бы весь тайл. */}
+            {/* Бокс ровно по соотношению сторон самого потока (до метаданных
+                — 16:9), а не на всю ширину контейнера: подпись и «перестать
+                смотреть» прибиты к его нижнему левому углу и потому лежат НА
+                картинке, как у мини-тайлов, а не в чёрном поле рядом с ней. */}
             <div
-              className="voice-stage-expanded-overlay"
-              onClick={(e) => e.stopPropagation()}
+              className="voice-stage-expanded-media"
+              style={{ '--demo-ar': demoAspect } as React.CSSProperties}
             >
-              <span className="screen-tile-label">
-                {expanded.mode === 'screen' ? (
-                  <>
-                    <Monitor size={13} />{' '}
-                    {expanded.userId === selfUserId
-                      ? 'Ваша демонстрация'
-                      : `Демонстрация — ${nameOf(expanded.userId)}`}
-                  </>
+              {expanded.mode === 'screen' ? (
+                expandedStream ? (
+                  <StreamVideo
+                    stream={expandedStream}
+                    muted={expanded.userId === selfUserId || deafened}
+                    onAspect={setDemoAspect}
+                  />
                 ) : (
-                  nameOf(expanded.userId)
-                )}
-              </span>
-              {expanded.mode === 'screen' && expanded.userId !== selfUserId && (
-                <div className="voice-stage-expanded-actions">
-                  <button
-                    className="icon-btn"
-                    title="Перестать смотреть"
-                    onClick={() => {
-                      unwatchScreen(expanded.userId)
-                      setExpanded(null)
-                    }}
-                  >
-                    <X size={16} />
-                  </button>
+                  <div className="screen-preview-placeholder">
+                    <Monitor size={40} />
+                    <span>Подключение…</span>
+                  </div>
+                )
+              ) : (
+                <div className="participant-expanded">
+                  <Avatar
+                    name={expandedMember?.username ?? nameOf(expanded.userId)}
+                    color={expandedMember?.avatar_color ?? '#5865f2'}
+                    image={expandedMember?.avatar_image ?? ''}
+                    size={200}
+                    speaking={speakingUserIds.has(expanded.userId)}
+                  />
                 </div>
               )}
-            </div>
 
-            {/* Открыть в отдельном окне / на весь экран — в правом нижнем
-                углу демонстрации (не зависят от того, звонок это или
-                участник — полноэкранный режим есть у обоих). */}
-            <div
-              className="voice-stage-expanded-corner"
-              onClick={(e) => e.stopPropagation()}
-            >
-              {expanded.mode === 'screen' && pipSupported && expandedStream && (
-                <button
-                  className="icon-btn"
-                  title="Открыть в отдельном окне"
-                  onClick={handleTogglePip}
-                >
-                  <PictureInPicture2 size={16} />
-                </button>
-              )}
-              <button
-                className="icon-btn"
-                title={isFullscreen ? 'Выйти из полноэкранного режима' : 'На весь экран'}
-                onClick={toggleFullscreen}
+              {/* stopPropagation — иначе клик по кнопке свернул бы весь тайл. */}
+              <div
+                className="voice-stage-expanded-overlay"
+                onClick={(e) => e.stopPropagation()}
               >
-                {isFullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
-              </button>
+                <span className="screen-tile-label">
+                  {expanded.mode === 'screen' ? (
+                    <>
+                      <Monitor size={13} />{' '}
+                      {expanded.userId === selfUserId
+                        ? 'Ваша демонстрация'
+                        : `Демонстрация — ${nameOf(expanded.userId)}`}
+                    </>
+                  ) : (
+                    nameOf(expanded.userId)
+                  )}
+                </span>
+                {expanded.mode === 'screen' && expanded.userId !== selfUserId && (
+                  <div className="voice-stage-expanded-actions">
+                    <button
+                      className="icon-btn"
+                      title="Перестать смотреть"
+                      onClick={() => {
+                        unwatchScreen(expanded.userId)
+                        setExpanded(null)
+                      }}
+                    >
+                      <X size={16} />
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
 
@@ -733,9 +810,11 @@ export default function VoiceStage({
         })()
       )}
 
-      {/* Наверху, над панелью отключения/прекращения демонстрации — а не в
-          углу самой демки: это переключатель ленты участников, а не свойство
-          видео (в отличие от открыть-в-окне/полноэкран рядом с ним). */}
+      {/* Переключатель ленты участников — ярлычок самой ленты, а не свойство
+          демонстрации, поэтому ездит вместе с ней: лента закрыта — стоит над
+          voice-controls-bar, открыта — переезжает на её верхнюю кромку и
+          лежит поверх миниатюр (см. .voice-stage-participants-toggle.active).
+          Шеврон показывает, куда лента поедет по клику. */}
       {expanded?.mode === 'screen' && (
         <button
           className={`voice-stage-participants-toggle ${filmstripOpen ? 'active' : ''} ${
@@ -744,6 +823,7 @@ export default function VoiceStage({
           title={filmstripOpen ? 'Скрыть участников' : 'Показать участников'}
           onClick={() => setFilmstripOpen((v) => !v)}
         >
+          {filmstripOpen ? <ChevronDown size={15} /> : <ChevronUp size={15} />}
           <Users size={16} />
         </button>
       )}
@@ -764,7 +844,31 @@ export default function VoiceStage({
           <PhoneOff size={18} />
         </button>
       </div>
+
+      {/* Подвал — зеркало шапки: появляется и уходит вместе с ней. Здесь
+          живут действия над ВСЕМ экраном звонка (окно, полный экран), а не
+          над конкретной демонстрацией — у неё своих кнопок раскрытия больше
+          нет. */}
+      <footer className={`voice-stage-footer ${showControls ? 'visible' : ''}`}>
+        {pipSupported && (
+          <button
+            className="icon-btn"
+            title={inPip ? 'Вернуть звонок во вкладку' : 'Открыть в отдельном окне'}
+            onClick={handleTogglePip}
+          >
+            <PictureInPicture2 size={16} />
+          </button>
+        )}
+        <button
+          className="icon-btn"
+          title={isFullscreen ? 'Выйти из полноэкранного режима' : 'На весь экран'}
+          onClick={toggleFullscreen}
+        >
+          {isFullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+        </button>
+      </footer>
     </div>
+    </>
   )
 }
 

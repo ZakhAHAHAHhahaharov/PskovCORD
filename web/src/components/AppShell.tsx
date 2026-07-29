@@ -39,8 +39,6 @@ import ParticipantContextMenu, {
 } from './ParticipantContextMenu'
 import MuteVoteModal from './MuteVoteModal'
 import ServerContextMenu from './ServerContextMenu'
-import ServerMuteModal from './ServerMuteModal'
-import ServerNotificationsModal from './ServerNotificationsModal'
 import ServerPrivacyModal from './ServerPrivacyModal'
 import ServerInviteModal from './ServerInviteModal'
 
@@ -267,8 +265,6 @@ export default function AppShell() {
   } | null>(null)
   const [showServerInviteId, setShowServerInviteId] = useState<number | null>(null)
   const [showServerPrivacyId, setShowServerPrivacyId] = useState<number | null>(null)
-  const [showServerMuteId, setShowServerMuteId] = useState<number | null>(null)
-  const [showServerNotificationsId, setShowServerNotificationsId] = useState<number | null>(null)
 
   const currentServer = servers.find((s) => s.id === serverId) || null
   const channels = currentServer?.channels || []
@@ -2214,8 +2210,11 @@ export default function AppShell() {
             onClose={() => setServerContextMenuServerId(null)}
             onMarkRead={() => handleMarkServerRead(menuServer)}
             onInvite={() => setShowServerInviteId(menuServer.id)}
-            onOpenMute={() => setShowServerMuteId(menuServer.id)}
-            onOpenNotifications={() => setShowServerNotificationsId(menuServer.id)}
+            onMute={(minutes) => handleMuteServer(menuServer, minutes)}
+            onUnmute={() => handleUnmuteServer(menuServer)}
+            onNotificationLevel={(level) => handleSetNotificationLevel(menuServer, level)}
+            onToggleIgnoreAtHere={(v) => handleToggleIgnoreAtHere(menuServer, v)}
+            onToggleSuppressRoleMentions={(v) => handleToggleSuppressRoleMentions(menuServer, v)}
             onOpenServerSettings={() => {
               selectServer(menuServer)
               setShowServerSettings(true)
@@ -2233,31 +2232,6 @@ export default function AppShell() {
             server={inviteServer}
             people={knownPeople}
             onClose={() => setShowServerInviteId(null)}
-          />
-        )
-      })()}
-      {showServerMuteId != null && (() => {
-        const muteServer = servers.find((s) => s.id === showServerMuteId)
-        if (!muteServer) return null
-        return (
-          <ServerMuteModal
-            server={muteServer}
-            onClose={() => setShowServerMuteId(null)}
-            onMute={(minutes) => handleMuteServer(muteServer, minutes)}
-            onUnmute={() => handleUnmuteServer(muteServer)}
-          />
-        )
-      })()}
-      {showServerNotificationsId != null && (() => {
-        const notifyServer = servers.find((s) => s.id === showServerNotificationsId)
-        if (!notifyServer) return null
-        return (
-          <ServerNotificationsModal
-            server={notifyServer}
-            onClose={() => setShowServerNotificationsId(null)}
-            onNotificationLevel={(level) => handleSetNotificationLevel(notifyServer, level)}
-            onToggleIgnoreAtHere={(v) => handleToggleIgnoreAtHere(notifyServer, v)}
-            onToggleSuppressRoleMentions={(v) => handleToggleSuppressRoleMentions(notifyServer, v)}
           />
         )
       })()}
