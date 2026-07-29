@@ -850,6 +850,23 @@ class GatewayVoiceSignalingTests(TransactionTestCase):
                 return msg
         raise AssertionError(f"op={op!r} не пришёл за {max_messages} сообщений")
 
+    @staticmethod
+    async def _assert_op_not_received(comm, op, timeout=0.3, interval=0.01):
+        """Как receive_nothing (опрашивает очередь напрямую, БЕЗ вызова
+        receive_json_from — тот при таймауте отменяет таск consumer'а и ломает
+        последующий disconnect()), но допускает прочий шум в очереди (voice_join
+        сам рассылает себе сброс sharing_screen и т.п.) — падает, только если
+        среди накопившегося оказался именно указанный op."""
+        start = time.monotonic()
+        while time.monotonic() - start < timeout:
+            while not comm.output_queue.empty():
+                raw = comm.output_queue.get_nowait()
+                if "text" in raw:
+                    msg = json.loads(raw["text"])
+                    if msg.get("op") == op:
+                        raise AssertionError(f"op={op!r} не должен был прийти, но пришёл: {msg}")
+            await asyncio.sleep(interval)
+
     async def _join_and_drain(self, comm, channel_id, timeout=2, max_messages=10):
         """voice_join + дожидается СВОЕГО voice_peers, voice_state_update и
         voice_call_state — идут через group_send (Redis) и могут прийти
@@ -1043,6 +1060,81 @@ class GatewayVoiceSignalingTests(TransactionTestCase):
         ended = await self._receive_until(bob_ws, "voice_call_state")
         self.assertIsNone(ended["call_started_at"])
         self.assertIsNone(ended["topic"])
+
+        await alice_ws.disconnect()
+        await bob_ws.disconnect()
+
+    async def test_wake_user_delivered_when_target_muted(self):
+        """«Разбудить мальчика» (ParticipantContextMenu) — доходит, только
+        если у цели сейчас выключен микрофон или звук (см.
+        _handle_voice_wake_user)."""
+        alice_ws = await self._connect(self.alice)
+        bob_ws = await self._connect(self.bob)
+
+        await self._join_and_drain(alice_ws, self.voice_channel.id)
+        await self._join_and_drain(bob_ws, self.voice_channel.id)
+
+        await bob_ws.send_json_to({
+            "op": "voice_mute_update", "muted": True, "deafened": False,
+        })
+        await self._receive_until(bob_ws, "voice_mute_update")  # своя же рассылка
+
+        await alice_ws.send_json_to({"op": "voice_wake_user", "target_user_id": self.bob.id})
+        seen = await self._receive_until(bob_ws, "voice_wake_requested")
+        self.assertEqual(seen["channel_id"], self.voice_channel.id)
+        self.assertEqual(seen["from_user_id"], self.alice.id)
+        self.assertEqual(seen["from_username"], self.alice.username)
+
+        await alice_ws.disconnect()
+        await bob_ws.disconnect()
+
+    async def test_wake_user_delivered_when_target_deafened(self):
+        alice_ws = await self._connect(self.alice)
+        bob_ws = await self._connect(self.bob)
+
+        await self._join_and_drain(alice_ws, self.voice_channel.id)
+        await self._join_and_drain(bob_ws, self.voice_channel.id)
+
+        await bob_ws.send_json_to({
+            "op": "voice_mute_update", "muted": False, "deafened": True,
+        })
+        await self._receive_until(bob_ws, "voice_mute_update")
+
+        await alice_ws.send_json_to({"op": "voice_wake_user", "target_user_id": self.bob.id})
+        seen = await self._receive_until(bob_ws, "voice_wake_requested")
+        self.assertEqual(seen["from_user_id"], self.alice.id)
+
+        await alice_ws.disconnect()
+        await bob_ws.disconnect()
+
+    async def test_wake_user_ignored_when_target_not_muted_or_deafened(self):
+        alice_ws = await self._connect(self.alice)
+        bob_ws = await self._connect(self.bob)
+
+        await self._join_and_drain(alice_ws, self.voice_channel.id)
+        await self._join_and_drain(bob_ws, self.voice_channel.id)
+
+        await alice_ws.send_json_to({"op": "voice_wake_user", "target_user_id": self.bob.id})
+        await self._assert_op_not_received(bob_ws, "voice_wake_requested")
+
+        await alice_ws.disconnect()
+        await bob_ws.disconnect()
+
+    async def test_wake_user_ignored_when_not_in_same_channel(self):
+        other_channel = await database_sync_to_async(Channel.objects.create)(
+            server=self.server, name="v2", kind=Channel.VOICE, position=1)
+        alice_ws = await self._connect(self.alice)
+        bob_ws = await self._connect(self.bob)
+
+        await self._join_and_drain(alice_ws, self.voice_channel.id)
+        await self._join_and_drain(bob_ws, other_channel.id)
+        await bob_ws.send_json_to({
+            "op": "voice_mute_update", "muted": True, "deafened": False,
+        })
+        await self._receive_until(bob_ws, "voice_mute_update")
+
+        await alice_ws.send_json_to({"op": "voice_wake_user", "target_user_id": self.bob.id})
+        await self._assert_op_not_received(bob_ws, "voice_wake_requested")
 
         await alice_ws.disconnect()
         await bob_ws.disconnect()

@@ -17,6 +17,7 @@ import {
   playScreenShareRequestSound,
   playScreenShareStartSound,
   playScreenShareStopSound,
+  playWakeUpSound,
 } from '../sounds'
 import ServerRail from './ServerRail'
 import ChannelSidebar from './ChannelSidebar'
@@ -829,6 +830,15 @@ export default function AppShell() {
         playScreenShareRequestSound()
       }
     })
+    // «Разбудить мальчика» — кто-то из того же канала будит нас (см.
+    // ParticipantContextMenu), пока у нас выключен микрофон или звук.
+    // Нарочно противный звук, а не тихий пинг, как у демонстрации выше.
+    const offWakeRequested = gateway.on('voice_wake_requested', (d) => {
+      const current = voiceRef.current
+      if (current?.room.kind === 'channel' && current.room.id === d.channel_id) {
+        playWakeUpSound()
+      }
+    })
     // Смена ника/аватара — свою уже применили локально сразу после ответа
     // PATCH /api/auth/me (см. handleProfileUpdated), но остальным участникам
     // и старым сообщениям в списке нужно обновиться этим же событием.
@@ -1161,6 +1171,7 @@ export default function AppShell() {
       offMuteVoteStart()
       offMuteVoteResult()
       offScreenShareRequested()
+      offWakeRequested()
       offProfileUpdate()
       offChannelCreate()
       offChannelUpdate()
@@ -1268,6 +1279,14 @@ export default function AppShell() {
     (userId: number) => {
       if (voiceStatus !== 'connected') return
       gateway.voiceRequestScreenShare(userId)
+    },
+    [gateway, voiceStatus],
+  )
+
+  const handleWakeUser = useCallback(
+    (userId: number) => {
+      if (voiceStatus !== 'connected') return
+      gateway.voiceWakeUser(userId)
     },
     [gateway, voiceStatus],
   )
@@ -2362,6 +2381,7 @@ export default function AppShell() {
           onDisconnect={handleDisconnectUser}
           onStartMuteVote={handleStartMuteVote}
           onRequestScreenShare={handleRequestScreenShare}
+          onWakeUser={handleWakeUser}
         />
       )}
       {muteVote && voice?.room.kind === 'channel' && voice.room.id === muteVote.channelId && (

@@ -1,5 +1,5 @@
 import { useLayoutEffect, useRef } from 'react'
-import { AtSign, BellRing, Eye, EyeOff, Gavel, UserX, Volume2 } from 'lucide-react'
+import { AlarmClock, AtSign, BellRing, Eye, EyeOff, Gavel, UserX, Volume2 } from 'lucide-react'
 import { useUserVolume } from '../userVolume'
 import { useVoice } from '../voice'
 
@@ -7,6 +7,8 @@ export interface ParticipantContextMenuMember {
   id: number
   username: string
   sharing_screen: boolean
+  muted: boolean
+  deafened: boolean
 }
 
 export interface ParticipantContextMenuTarget {
@@ -39,6 +41,7 @@ export default function ParticipantContextMenu({
   onDisconnect,
   onStartMuteVote,
   onRequestScreenShare,
+  onWakeUser,
 }: {
   target: ParticipantContextMenuTarget
   /** Право "manage_members" на сервере — от него зависит пункт «Отключить от канала». */
@@ -55,6 +58,7 @@ export default function ParticipantContextMenu({
   onDisconnect: (userId: number) => void
   onStartMuteVote: (userId: number) => void
   onRequestScreenShare: (userId: number) => void
+  onWakeUser: (userId: number) => void
 }) {
   const ref = useRef<HTMLDivElement>(null)
   const { getUserVolume, setUserVolume } = useUserVolume()
@@ -166,6 +170,24 @@ export default function ParticipantContextMenu({
             onClick={() => onStartMuteVote(member.id)}
           >
             <Gavel size={15} /> Голосование за мут
+          </button>
+        )}
+
+        {isServerChannel && (
+          <button
+            type="button"
+            className="profile-popup-item"
+            disabled={!voiceActionsEnabled || !(member.muted || member.deafened)}
+            title={
+              !voiceActionsEnabled
+                ? disabledTitle
+                : !(member.muted || member.deafened)
+                  ? 'Работает, только если у участника выключен микрофон или звук'
+                  : undefined
+            }
+            onClick={() => onWakeUser(member.id)}
+          >
+            <AlarmClock size={15} /> Разбудить мальчика
           </button>
         )}
 

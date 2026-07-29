@@ -47,6 +47,11 @@ interface GatewayCtx {
   /** Попросить участника того же голосового канала включить демонстрацию —
    * персональный тихий пинг, слышен только адресату (voice_screen_share_requested). */
   voiceRequestScreenShare: (targetUserId: number) => void
+  /** «Разбудить мальчика» — участника того же голосового канала, у которого
+   * СЕЙЧАС выключен микрофон или звук (сервер молча игнорирует иначе, см.
+   * chat.consumers._handle_voice_wake_user). В отличие от
+   * voiceRequestScreenShare — не тихий пинг, а нарочно противный звук. */
+  voiceWakeUser: (targetUserId: number) => void
   setStatus: (status: UserStatus) => void
   dmSendMessage: (
     conversationId: number,
@@ -240,6 +245,8 @@ export function GatewayProvider({ children }: { children: ReactNode }) {
     voiceMuteVoteCast: (forMute) => raw({ op: 'voice_mute_vote_cast', for: forMute }),
     voiceRequestScreenShare: (targetUserId) =>
       raw({ op: 'voice_request_screen_share', target_user_id: targetUserId }),
+    voiceWakeUser: (targetUserId) =>
+      raw({ op: 'voice_wake_user', target_user_id: targetUserId }),
     setStatus: (status) => raw({ op: 'set_status', status }),
     dmSendMessage: (conversationId, content, opts) =>
       raw({
