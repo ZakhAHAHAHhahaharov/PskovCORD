@@ -382,7 +382,7 @@ function PasswordRow({ onOpen }: { onOpen: () => void }) {
  * ProfileUpdateSerializer.validate): ник виден всем и первое, что видит
  * владелец при угоне сессии, — проверка пароля ловит момент, когда кто-то с
  * чужим access-токеном пытается тихо переименовать аккаунт себе. */
-function UsernameChangeModal({ onClose }: { onClose: () => void }) {
+function UsernameChangeModal({ onClose, isMobile }: { onClose: () => void; isMobile?: boolean }) {
   useEscToClose(onClose)
   const { user, updateLocalUser } = useAuth()
   const [password, setPassword] = useState('')
@@ -411,9 +411,16 @@ function UsernameChangeModal({ onClose }: { onClose: () => void }) {
   }
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
+    <div className="modal-overlay settings-sub-overlay" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <h2 className="modal-title">Изменить имя пользователя</h2>
+        <h2 className="modal-title">
+          {isMobile && (
+            <button className="chat-back-btn" title="Назад" onClick={onClose}>
+              <ChevronLeft size={20} />
+            </button>
+          )}
+          Изменить имя пользователя
+        </h2>
 
         <div className="field-label">Текущий пароль</div>
         <PasswordInput
@@ -445,7 +452,7 @@ function UsernameChangeModal({ onClose }: { onClose: () => void }) {
   )
 }
 
-function PasswordChangeModal({ onClose }: { onClose: () => void }) {
+function PasswordChangeModal({ onClose, isMobile }: { onClose: () => void; isMobile?: boolean }) {
   useEscToClose(onClose)
   const [current, setCurrent] = useState('')
   const [next, setNext] = useState('')
@@ -475,9 +482,16 @@ function PasswordChangeModal({ onClose }: { onClose: () => void }) {
   }
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
+    <div className="modal-overlay settings-sub-overlay" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <h2 className="modal-title">Смена пароля</h2>
+        <h2 className="modal-title">
+          {isMobile && (
+            <button className="chat-back-btn" title="Назад" onClick={onClose}>
+              <ChevronLeft size={20} />
+            </button>
+          )}
+          Смена пароля
+        </h2>
 
         <div className="field-label">Текущий пароль</div>
         <PasswordInput
@@ -762,6 +776,13 @@ export default function SettingsModal({
 
   useEscToClose(onClose)
 
+  // На мобилке список категорий и контент категории — два разных полных
+  // экрана (тап по категории "открывает" контент, кнопка назад
+  // возвращает к списку), а не совмещённый вид, как на ПК. На ПК это
+  // состояние не используется вовсе (сайдбар и контент всегда видны
+  // разом), поэтому обычным переключением категорий (см.
+  // handleCategoryClick) не трогается, если !isMobile.
+  const [mobileCategoryOpen, setMobileCategoryOpen] = useState(false)
   const [activeCategory, setActiveCategory] = useState(CATEGORIES[0].id)
   const [activeSubcategory, setActiveSubcategory] = useState(CATEGORIES[0].subcategories[0].id)
   // "Посмотреть >" (например, Активные сеансы) подменяет собой весь
@@ -819,6 +840,7 @@ export default function SettingsModal({
 
   const handleCategoryClick = (category: Category) => {
     setDetailView(null)
+    if (isMobile) setMobileCategoryOpen(true)
     if (category.id === activeCategory) return
     setActiveCategory(category.id)
     setActiveSubcategory(category.subcategories[0].id)
@@ -853,7 +875,7 @@ export default function SettingsModal({
           Настройки
         </h2>
 
-        <div className="settings-body">
+        <div className={`settings-body${mobileCategoryOpen ? ' mobile-category-open' : ''}`}>
           <nav className="settings-sidebar">
             {CATEGORIES.map((c) => (
               <div key={c.id} className="settings-category-group">
@@ -862,8 +884,9 @@ export default function SettingsModal({
                   onClick={() => handleCategoryClick(c)}
                 >
                   {c.icon} {c.label}
+                  {isMobile && <ChevronRight size={15} className="settings-row-chevron" />}
                 </button>
-                {activeCategory === c.id && (
+                {!isMobile && activeCategory === c.id && (
                   <div className="settings-subcategory-list">
                     {c.subcategories.map((s) => (
                       <button
@@ -910,6 +933,14 @@ export default function SettingsModal({
           </nav>
 
           <div className="settings-content" ref={contentRef}>
+            {isMobile && (
+              <button
+                className="settings-detail-back settings-content-back"
+                onClick={() => setMobileCategoryOpen(false)}
+              >
+                <ChevronLeft size={16} /> {currentCategory.label}
+              </button>
+            )}
             {detailView === 'sessions' ? (
               <SessionsDetailView onBack={() => setDetailView(null)} />
             ) : activeCategory === 'account' ? (
@@ -1036,8 +1067,12 @@ export default function SettingsModal({
     {/* Не вложены в .modal-overlay настроек выше — иначе клик мимо этой
         под-модалки (но всё ещё внутри overlay настроек) всплыл бы до его
         onClick и закрыл заодно и Настройки целиком. */}
-    {activeModal === 'username' && <UsernameChangeModal onClose={() => setActiveModal(null)} />}
-    {activeModal === 'password' && <PasswordChangeModal onClose={() => setActiveModal(null)} />}
+    {activeModal === 'username' && (
+      <UsernameChangeModal onClose={() => setActiveModal(null)} isMobile={isMobile} />
+    )}
+    {activeModal === 'password' && (
+      <PasswordChangeModal onClose={() => setActiveModal(null)} isMobile={isMobile} />
+    )}
     {activeModal === 'qrScanner' && <QrScannerModal onClose={() => setActiveModal(null)} />}
     </>
   )
