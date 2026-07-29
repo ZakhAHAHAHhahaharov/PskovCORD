@@ -8,11 +8,20 @@ import { parseQrLoginToken } from './qrToken'
 import LoginScreen from './components/LoginScreen'
 import AppShell from './components/AppShell'
 import QrLoginConfirm from './components/QrLoginConfirm'
+import NotFoundScreen from './components/NotFoundScreen'
 
 function Inner() {
   const { user, loading } = useAuth()
-  if (loading) return <div className="fullscreen-center">Загрузка…</div>
   const qrToken = parseQrLoginToken()
+  // Клиентского роутера в приложении нет вообще (см. qrToken.ts) — вся
+  // "маршрутизация" это "/" (сам чат) и "/qr-login/:token" (единственный
+  // особый путь). Бэкенд (core.views.spa) отдаёт index.html на ЛЮБОЙ путь
+  // безусловно — это нормально для SPA, но раньше клиент никак не отличал
+  // неизвестный путь от корня и просто открывал обычный чат по любой
+  // ссылке. Проверяем ДО состояния авторизации — 404 не должен ждать,
+  // пока догрузится сессия.
+  if (!qrToken && window.location.pathname !== '/') return <NotFoundScreen />
+  if (loading) return <div className="fullscreen-center">Загрузка…</div>
   if (qrToken) {
     // Не залогинен на этом телефоне — сначала обычный вход, а не редирект:
     // тот же путь остаётся в адресной строке, после успешного login()
