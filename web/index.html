@@ -2,15 +2,13 @@
 <html lang="ru">
   <head>
     <meta charset="UTF-8" />
-    <!-- maximum-scale=1 + user-scalable=no убирают пинч-зум на мобилке (по
-         запросу — обычный зум клавиатурой/меню браузера на десктопе этим не
-         затрагивается, он вообще недоступен странице). Полноценно пинч
-         блокируют только вместе с gesturestart/wheel-перехватом в main.tsx —
-         сам по себе viewport на части современных iOS игнорируется. -->
-    <meta
-      name="viewport"
-      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"
-    />
+    <!-- maximum-scale/user-scalable=no здесь НЕ ставим: на части мобильных
+         браузеров это ломает штатное поведение при фокусе на поле ввода
+         (скролл/resize вьюпорта под клавиатуру) — привело к тому, что
+         композер чата съезжал и становился еле видим. Запрет пинч-зума
+         сделан отдельно, только через gesturestart/wheel в main.tsx —
+         тот путь клавиатуру не трогает вообще. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>PskovCord</title>
     <!--
       Пути стабильны, а какой именно favicon отдать (стандартный или личный

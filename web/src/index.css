@@ -4838,7 +4838,13 @@ button.settings-row-clickable:hover .settings-row-label {
 
 .attachment-image {
   display: block;
-  max-width: 420px;
+  /* min(420px, 100%), а не голый 420px — превью считается на бэке/фронте
+     (см. MessageAttachments.previewBox/MAX_PREVIEW_W) от фиксированной
+     "десктопной" ширины и не знает о реальной ширине вьюпорта. На узких
+     мобильных экранах 420px шире самого экрана — картинка (и вместе с
+     ней вся строка сообщения) вылезала за пределы и делала всю страницу
+     горизонтально скроллящейся. */
+  max-width: min(420px, 100%);
   max-height: 320px;
   width: auto;
   height: auto;
@@ -4850,7 +4856,7 @@ button.settings-row-clickable:hover .settings-row-label {
 }
 
 .attachment-video {
-  max-width: 420px;
+  max-width: min(420px, 100%);
   max-height: 320px;
   border-radius: 8px;
   background: #000;
@@ -5607,6 +5613,15 @@ button.settings-row-clickable:hover .settings-row-label {
   textarea,
   select {
     font-size: 16px !important;
+  }
+
+  /* Композер растёт под текст через JS (MessageInput.autoGrow — меряет
+     scrollHeight и выставляет inline height), но на случай, если высота
+     где-то не успела пересчитаться под увеличенный 16px-шрифт выше — CSS-
+     пол не даёт полю стать короче одной строки, плейсхолдер тогда не
+     обрезается сверху/снизу. */
+  .message-input textarea {
+    min-height: 46px;
   }
 
   /* ---- layout: nav-экран (.mobile-nav-pane — рельса+сайдбар каналов
