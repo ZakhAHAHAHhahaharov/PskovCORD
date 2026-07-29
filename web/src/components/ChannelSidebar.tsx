@@ -1,5 +1,5 @@
 import { MouseEvent as ReactMouseEvent } from 'react'
-import { Volume2, MicOff, HeadphoneOff, Monitor, Settings } from 'lucide-react'
+import { Volume2, MicOff, HeadphoneOff, Monitor, Settings, Pin } from 'lucide-react'
 import { Channel, Member, Server, User } from '../api'
 import { VoiceRosterMember } from './VoiceStage'
 import Avatar from './Avatar'
@@ -10,6 +10,7 @@ import { useVoice } from '../voice'
 import { VoiceState } from './AppShell'
 import { VoiceStatus } from './VoiceProvider'
 import { useLongPress } from '../hooks/useLongPress'
+import { maskName, useHiddenNames } from '../hiddenNames'
 
 function VoiceUserRow({
   member: m,
@@ -18,6 +19,7 @@ function VoiceUserRow({
   muted,
   deafened,
   canOpenMenu,
+  masked,
   onOpenParticipantProfile,
   onParticipantContextMenu,
   onWatchScreen,
@@ -28,6 +30,9 @@ function VoiceUserRow({
   muted: boolean
   deafened: boolean
   canOpenMenu: boolean
+  /** Включено «Скрыть имена» для этого канала (см. ChannelContextMenu) —
+   * ник виден только себе, остальным этот же список выглядит как обычно. */
+  masked: boolean
   onOpenParticipantProfile?: (member: Member, e: ReactMouseEvent) => void
   onParticipantContextMenu?: (
     member: Member,
@@ -64,11 +69,11 @@ function VoiceUserRow({
         size={20}
         speaking={speaking}
       />
-      <span className={speaking ? 'speaking' : ''}>{m.username}</span>
+      <span className={speaking ? 'speaking' : ''}>{masked ? maskName(m.username) : m.username}</span>
       {m.sharing_screen && (
         <span
           className="demo-badge"
-          title={`Смотреть демонстрацию экрана — ${m.username}`}
+          title={`Смотреть демонстрацию экрана — ${masked ? maskName(m.username) : m.username}`}
           onClick={(e) => {
             e.stopPropagation()
             onWatchScreen(m)
@@ -113,6 +118,7 @@ export default function ChannelSidebar({
   onOpenServerSettings,
   onParticipantContextMenu,
   onOpenParticipantProfile,
+  onChannelContextMenu,
 }: {
   server: Server | null
   channels: Channel[]
@@ -148,15 +154,30 @@ export default function ChannelSidebar({
   /** Левый клик на участнике голосового канала — открыть его мини-профиль
    * (см. MembersList.onOpenProfile — тот же попап, тот же коллбэк из AppShell). */
   onOpenParticipantProfile?: (member: Member, e: ReactMouseEvent) => void
+  /** Правый клик на самом голосовом канале (не на участнике) — меню
+   * приглашения/закрепления/ссылки/статуса/скрытия имён, см. ChannelContextMenu. */
+  onChannelContextMenu?: (channel: Channel, e: ReactMouseEvent) => void
 }) {
   const { speakingUserIds, muted, deafened } = useVoice()
+  const { isHidden } = useHiddenNames()
   // Для себя — локальное состояние mesh'а (мгновенный отклик на клик);
   // для остальных — то, что пришло в members (видно всем, даже не
   // подключённым к этому голосовому каналу вообще).
   const micStateOf = (member: Member): { muted: boolean; deafened: boolean } =>
     member.id === user.id ? { muted, deafened } : { muted: member.muted, deafened: member.deafened }
   const textChannels = channels.filter((c) => c.kind === 'text')
-  const voiceChannels = channels.filter((c) => c.kind === 'voice')
+  const pinnedIds = server?.my_settings.pinned_channel_ids ?? []
+  // Закреплённые — первыми, сверху вниз, порядок закрепления; остальные —
+  // как пришли с сервера (позиция канала), см. ChannelContextMenu «Закрепить
+  // канал вверху».
+  const voiceChannels = [...channels.filter((c) => c.kind === 'voice')].sort((a, b) => {
+    const ai = pinnedIds.indexOf(a.id)
+    const bi = pinnedIds.indexOf(b.id)
+    if (ai === -1 && bi === -1) return 0
+    if (ai === -1) return 1
+    if (bi === -1) return -1
+    return ai - bi
+  })
 
   const voiceMembersOf = (channelId: number) =>
     members.filter((m) => m.voice_channel === String(channelId))
@@ -236,6 +257,8 @@ export default function ChannelSidebar({
             {voiceChannels.map((c) => {
               const inChannel = voiceMembersOf(c.id)
               const isMyVoiceChannel = voice?.room.kind === 'channel' && voice.room.id === c.id
+              const isPinned = pinnedIds.includes(c.id)
+              const masked = isHidden(c.id)
               return (
                 <div key={c.id} className="voice-channel-block">
                   <button
@@ -243,12 +266,22 @@ export default function ChannelSidebar({
                       voice?.room.id === c.id ? 'active' : ''
                     }`}
                     onClick={() => onJoinVoice(c)}
+                    onContextMenu={
+                      onChannelContextMenu
+                        ? (e) => {
+                            e.preventDefault()
+                            onChannelContextMenu(c, e)
+                          }
+                        : undefined
+                    }
                   >
                     <span className={`channel-icon${isMyVoiceChannel ? ' in-voice' : ''}`}>
                       <Volume2 size={15} />
                     </span>
                     <span className="channel-name">{c.name}</span>
+                    {isPinned && <Pin size={12} className="channel-pin-badge" />}
                   </button>
+                  {c.status && <div className="voice-channel-status">{c.status}</div>}
                   {inChannel.length > 0 && (
                     <div className="voice-call-info">
                       {c.call_started_at != null && (
@@ -270,6 +303,7 @@ export default function ChannelSidebar({
                         muted={mic.muted}
                         deafened={mic.deafened}
                         canOpenMenu={canOpenMenu}
+                        masked={masked}
                         onOpenParticipantProfile={onOpenParticipantProfile}
                         onParticipantContextMenu={onParticipantContextMenu}
                         onWatchScreen={onWatchScreen}

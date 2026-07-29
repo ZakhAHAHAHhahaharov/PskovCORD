@@ -23,6 +23,7 @@ import { ProfilePopupUser } from './MiniProfilePopup'
 import { useSettings } from '../settings'
 import { useVoice } from '../voice'
 import { useLongPress } from '../hooks/useLongPress'
+import { maskName, useHiddenNames } from '../hiddenNames'
 
 /** Document Picture-in-Picture (Chromium 116+) — в lib.dom его ещё нет.
  * Именно он, а не video.requestPictureInPicture, умеет вынести в плавающее
@@ -360,6 +361,13 @@ export default function VoiceStage({
     watchScreen,
     unwatchScreen,
   } = useVoice()
+  const { isHidden } = useHiddenNames()
+  // «Скрыть имена» — только для голосовых каналов сервера (см.
+  // ChannelContextMenu), у звонков в личке/группе такого пункта меню нет.
+  const namesHidden = roomKind === 'channel' && isHidden(Number(roomId))
+  const displayRoster = namesHidden
+    ? roster.map((m) => ({ ...m, username: maskName(m.username) }))
+    : roster
 
   // mode:'screen' — развёрнута демонстрация экрана (видео/ожидание потока);
   // mode:'participant' — просто развёрнутая карточка участника без демки
@@ -565,23 +573,24 @@ export default function VoiceStage({
       if (!stillSharing) setExpanded(null)
     } else {
       const stillInRoom =
-        expanded.userId === selfUserId || roster.some((m) => m.id === expanded.userId)
+        expanded.userId === selfUserId || displayRoster.some((m) => m.id === expanded.userId)
       if (!stillInRoom) setExpanded(null)
     }
-  }, [expanded, isSharingScreen, availableScreenUserIds, roster, selfUserId])
+  }, [expanded, isSharingScreen, availableScreenUserIds, displayRoster, selfUserId])
 
   // Кто демонстрирует: свой стрим — сразу по факту isSharingScreen (без
   // ожидания round-trip через presence), остальные — по presence-флагу
   // (виден даже если мы ещё не забрали их producer через SFU).
-  const sharingOthers = roster.filter((m) => m.id !== selfUserId && m.sharing_screen)
+  const sharingOthers = displayRoster.filter((m) => m.id !== selfUserId && m.sharing_screen)
 
-  const nameOf = (uid: number) => roster.find((m) => m.id === uid)?.username ?? `Участник ${uid}`
+  const nameOf = (uid: number) =>
+    displayRoster.find((m) => m.id === uid)?.username ?? `Участник ${uid}`
 
   // Сколько всего тайлов в сетке (участники + свой показ + чужие демки) —
   // от этого и от размера контейнера зависят число колонок и ширина тайлов
   // (см. computeGridLayout) — мало тайлов -> они большие и заполняют main
   // (как в Discord), много -> сетка мельче.
-  const tileCount = roster.length + (isSharingScreen ? 1 : 0) + sharingOthers.length
+  const tileCount = displayRoster.length + (isSharingScreen ? 1 : 0) + sharingOthers.length
   const { cols: gridCols, tileWidth } = computeGridLayout(
     tileCount,
     gridSize.width,
@@ -595,14 +604,14 @@ export default function VoiceStage({
         ? ownScreenStream
         : screenShares.get(expanded.userId) ?? null
 
-  const expandedMember = expanded ? roster.find((m) => m.id === expanded.userId) ?? null : null
+  const expandedMember = expanded ? displayRoster.find((m) => m.id === expanded.userId) ?? null : null
 
   /** Все тайлы комнаты: участники, своя демка, чужие демки. Один и тот же
    * набор рисуется и в обычной сетке, и в ленте миниатюр под развёрнутой
    * демонстрацией — размер задаётся снаружи через --tile-w, поэтому
    * компоненты переиспользуются как есть. */
   const buildTiles = () => [
-    ...roster.map((m) => (
+    ...displayRoster.map((m) => (
       <ParticipantTile
         key={`p-${m.id}`}
         member={m}
@@ -659,7 +668,12 @@ export default function VoiceStage({
             <ChevronLeft size={20} />
           </button>
         )}
-        <VoiceLanding roomName={roomName} roster={roster} onJoin={onJoin} onOpenProfile={onOpenProfile} />
+        <VoiceLanding
+          roomName={roomName}
+          roster={displayRoster}
+          onJoin={onJoin}
+          onOpenProfile={onOpenProfile}
+        />
       </div>
     )
   }

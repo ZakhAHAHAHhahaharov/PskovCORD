@@ -107,6 +107,9 @@ export interface Channel {
   call_started_at: number | null
   /** Статус звонка, который видят все; null если пусто. Только voice. */
   topic: string | null
+  /** Персистентный статус канала (правый клик → «Установить статус канала»),
+   * в отличие от эфемерного topic выше — переживает опустение канала. */
+  status: string
 }
 
 /** Права роли на сервере — 1:1 с булевыми полями chat.models.Role
@@ -181,6 +184,19 @@ export interface ServerMemberSettings {
   /** Разрешить ЛС от других участников этого сервера (доп. к глобальному
    * accounts.dm_privacy — см. backend chat.permissions.can_dm). */
   allow_dms_from_server: boolean
+  /** Id закреплённых каналов этого сервера, лично для меня — see
+   * ChannelContextMenu «Закрепить канал вверху». Порядок = порядок закрепления. */
+  pinned_channel_ids: number[]
+}
+
+/** Предпросмотр ссылки-приглашения в конкретный голосовой канал — БЕЗ
+ * вступления на сервер (см. backend chat.views.InvitePreview). Показывается
+ * в модалке подтверждения перед тем, как реально дёрнуть redeemServerInvite. */
+export interface InvitePreview {
+  server: { id: number; name: string; icon: string }
+  channel: { id: number; name: string }
+  already_member: boolean
+  participant_count: number
 }
 
 export interface Server {
@@ -214,6 +230,9 @@ export type ServerInviteStatus = 'pending' | 'accepted' | 'declined'
 export interface ServerInviteEntry {
   id: number
   server: { id: number; name: string; icon: string }
+  /** Есть, только если приглашение — в конкретный голосовой канал (см.
+   * ChannelInviteModal), а не на сервер целиком. */
+  channel: { id: number; name: string } | null
   created_by: User
   created_at: string
   status: ServerInviteStatus
@@ -226,6 +245,7 @@ export interface ConversationServerInvite {
   id: number
   status: ServerInviteStatus
   server: { id: number; name: string; icon: string; member_count: number }
+  channel: { id: number; name: string } | null
 }
 
 export interface ServerJoinRequestEntry {
@@ -314,6 +334,16 @@ export interface Member extends Omit<User, 'status' | 'dm_privacy'> {
   deafened: boolean
   /** Демонстрирует ли сейчас экран — тоже видно всем, не только в канале. */
   sharing_screen: boolean
+}
+
+/** Минимум, нужный автокомплиту @упоминаний (MessageInput) и рендеру
+ * @упоминаний в тексте сообщения (MessageList) — и Member (ростер сервера),
+ * и User (участники диалога/группы) ему удовлетворяют без адаптации. */
+export interface MentionCandidate {
+  id: number
+  username: string
+  avatar_color: string
+  avatar_image: string
 }
 
 export interface DiscoverServer {
@@ -755,6 +785,7 @@ export const api = {
       mute_minutes: number
       mute_forever: boolean
       unmute: boolean
+      pinned_channel_ids: number[]
     }>,
   ): Promise<ServerMemberSettings> =>
     req(`/api/servers/${serverId}/settings`, {
@@ -765,22 +796,38 @@ export const api = {
   /** Личное приглашение конкретному человеку — работает даже для сервера
    * «только по приглашению» (сам факт приглашения от участника — уже
    * разрешение, см. backend). Само приглашение адресат получает карточкой
-   * в переписке (см. ChatMessageBase.server_invite), а не отсюда. */
-  inviteToServer: (serverId: number, userId: number): Promise<ServerInviteEntry> =>
+   * в переписке (см. ChatMessageBase.server_invite), а не отсюда.
+   * channelId — приглашение в конкретный голосовой канал (правый клик по
+   * каналу → «Пригласить в голосовой чат»); снимает запрет звать уже
+   * состоящего на сервере участника, см. backend ServerInvites.post. */
+  inviteToServer: (serverId: number, userId: number, channelId?: number): Promise<ServerInviteEntry> =>
     req(`/api/servers/${serverId}/invites`, {
       method: 'POST',
-      body: JSON.stringify({ user_id: userId }),
+      body: JSON.stringify({ user_id: userId, channel_id: channelId }),
     }),
-  acceptServerInvite: (inviteId: number): Promise<Server> =>
+  acceptServerInvite: (inviteId: number): Promise<Server & { invited_channel_id: number | null }> =>
     req(`/api/invites/${inviteId}`, { method: 'POST' }),
   declineServerInvite: (inviteId: number) =>
     req(`/api/invites/${inviteId}`, { method: 'DELETE' }),
   /** Постоянная многоразовая ссылка сервера — одна на сервер, повторные
-   * вызовы отдают тот же код. */
-  serverInviteLink: (serverId: number): Promise<{ code: string }> =>
-    req(`/api/servers/${serverId}/invite-link`),
-  redeemServerInvite: (code: string): Promise<Server> =>
+   * вызовы отдают тот же код. channelId — своя стабильная ссылка на
+   * конкретный голосовой канал вместо ссылки на сервер целиком. */
+  serverInviteLink: (serverId: number, channelId?: number): Promise<{ code: string }> =>
+    req(
+      `/api/servers/${serverId}/invite-link` +
+        (channelId != null ? `?channel_id=${channelId}` : ''),
+    ),
+  /** Предпросмотр ссылки БЕЗ вступления — только для ссылок на конкретный
+   * канал (см. backend InvitePreview); обычные серверные ссылки 404. */
+  invitePreview: (code: string): Promise<InvitePreview> =>
+    req(`/api/invites/preview?code=${encodeURIComponent(code)}`),
+  redeemServerInvite: (code: string): Promise<Server & { invited_channel_id: number | null }> =>
     req('/api/invites/redeem', { method: 'POST', body: JSON.stringify({ code }) }),
+  setChannelStatus: (channelId: number, status: string): Promise<Channel> =>
+    req(`/api/channels/${channelId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ status }),
+    }),
 
   /** before — страница старше указанного сообщения (скролл вверх),
    *  after — то, что появилось после (добор пропущенного, когда WS лежал). */

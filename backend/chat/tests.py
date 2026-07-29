@@ -2767,6 +2767,202 @@ class ServerInviteTests(APITestCase):
         self.assertEqual(resp.status_code, 403)
 
 
+class ChannelStatusAndPinTests(APITestCase):
+    """PATCH /api/channels/<id> (статус канала) и pinned_channel_ids личных
+    настроек (см. правый клик по голосовому каналу — ChannelContextMenu)."""
+
+    def setUp(self):
+        self.owner = User.objects.create_user(username="cs_owner", password="pw12345")
+        self.member = User.objects.create_user(username="cs_member", password="pw12345")
+        self.server = Server.objects.create(name="s", owner=self.owner)
+        Membership.objects.create(user=self.owner, server=self.server)
+        Membership.objects.create(user=self.member, server=self.server)
+        self.channel = Channel.objects.create(
+            server=self.server, name="general", kind=Channel.VOICE, position=0)
+        self.other_channel = Channel.objects.create(
+            server=self.server, name="afk", kind=Channel.VOICE, position=1)
+
+    def test_owner_can_set_channel_status(self):
+        self.client.force_authenticate(self.owner)
+        resp = self.client.patch(
+            f"/api/channels/{self.channel.id}", {"status": "играем в CS"}, format="json")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data["status"], "играем в CS")
+        self.channel.refresh_from_db()
+        self.assertEqual(self.channel.status, "играем в CS")
+
+    def test_status_is_trimmed_and_capped(self):
+        self.client.force_authenticate(self.owner)
+        resp = self.client.patch(
+            f"/api/channels/{self.channel.id}", {"status": "  " + "x" * 200 + "  "},
+            format="json")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(len(resp.data["status"]), 120)
+        self.assertFalse(resp.data["status"].startswith(" "))
+
+    def test_regular_member_cannot_set_status(self):
+        self.client.force_authenticate(self.member)
+        resp = self.client.patch(
+            f"/api/channels/{self.channel.id}", {"status": "тест"}, format="json")
+        self.assertEqual(resp.status_code, 403)
+
+    def test_pin_channel_persists(self):
+        self.client.force_authenticate(self.member)
+        resp = self.client.patch(
+            f"/api/servers/{self.server.id}/settings",
+            {"pinned_channel_ids": [self.channel.id]}, format="json")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data["pinned_channel_ids"], [self.channel.id])
+        # И правда сохранилось, не просто эхо запроса.
+        again = self.client.get(f"/api/servers/{self.server.id}/settings").data
+        self.assertEqual(again["pinned_channel_ids"], [self.channel.id])
+
+    def test_pin_rejects_channel_from_another_server(self):
+        other_server = Server.objects.create(name="s2", owner=self.owner)
+        Membership.objects.create(user=self.member, server=other_server)
+        foreign_channel = Channel.objects.create(
+            server=other_server, name="v", kind=Channel.VOICE, position=0)
+        self.client.force_authenticate(self.member)
+        resp = self.client.patch(
+            f"/api/servers/{self.server.id}/settings",
+            {"pinned_channel_ids": [foreign_channel.id]}, format="json")
+        self.assertEqual(resp.status_code, 400)
+
+
+class ChannelInviteTests(APITestCase):
+    """Приглашение в КОНКРЕТНЫЙ голосовой канал (ServerInvite.channel) —
+    отдельная ветка от общего серверного приглашения (см. ServerInviteTests):
+    можно звать уже состоящего на сервере друга, ссылка своя на каждый канал,
+    переход по ней сначала показывает предпросмотр (InvitePreview), а не
+    вступает мгновенно."""
+
+    def setUp(self):
+        self.owner = User.objects.create_user(username="ci_owner", password="pw12345")
+        self.member = User.objects.create_user(username="ci_member", password="pw12345")
+        self.friend = User.objects.create_user(username="ci_friend", password="pw12345")
+        self.server = Server.objects.create(name="s", owner=self.owner)
+        Membership.objects.create(user=self.owner, server=self.server)
+        Membership.objects.create(user=self.member, server=self.server)
+        self.channel = Channel.objects.create(
+            server=self.server, name="general", kind=Channel.VOICE, position=0)
+
+    def test_can_invite_existing_member_to_specific_channel(self):
+        self.client.force_authenticate(self.owner)
+        resp = self.client.post(
+            f"/api/servers/{self.server.id}/invites",
+            {"user_id": self.member.id, "channel_id": self.channel.id}, format="json")
+        self.assertEqual(resp.status_code, 201)
+        invite = ServerInvite.objects.get(id=resp.data["id"])
+        self.assertEqual(invite.channel_id, self.channel.id)
+
+    def test_general_invite_to_existing_member_still_blocked(self):
+        """Канал не указан — старое поведение (нельзя звать уже состоящего
+        на сервере) не сломано."""
+        self.client.force_authenticate(self.owner)
+        resp = self.client.post(
+            f"/api/servers/{self.server.id}/invites",
+            {"user_id": self.member.id}, format="json")
+        self.assertEqual(resp.status_code, 400)
+
+    def test_general_and_channel_invite_to_same_person_coexist(self):
+        self.client.force_authenticate(self.owner)
+        general = self.client.post(
+            f"/api/servers/{self.server.id}/invites",
+            {"user_id": self.friend.id}, format="json")
+        self.assertEqual(general.status_code, 201)
+        channel_invite = self.client.post(
+            f"/api/servers/{self.server.id}/invites",
+            {"user_id": self.friend.id, "channel_id": self.channel.id}, format="json")
+        self.assertEqual(channel_invite.status_code, 201)
+        self.assertNotEqual(general.data["id"], channel_invite.data["id"])
+
+    def test_channel_link_is_separate_from_server_link(self):
+        self.client.force_authenticate(self.owner)
+        server_link = self.client.get(
+            f"/api/servers/{self.server.id}/invite-link").data["code"]
+        channel_link = self.client.get(
+            f"/api/servers/{self.server.id}/invite-link",
+            {"channel_id": self.channel.id}).data["code"]
+        self.assertNotEqual(server_link, channel_link)
+        # Повторный запрос той же ссылки на канал — тот же код, не плодит новые.
+        channel_link_again = self.client.get(
+            f"/api/servers/{self.server.id}/invite-link",
+            {"channel_id": self.channel.id}).data["code"]
+        self.assertEqual(channel_link, channel_link_again)
+
+    def test_preview_returns_server_and_channel_without_joining(self):
+        self.client.force_authenticate(self.owner)
+        code = self.client.get(
+            f"/api/servers/{self.server.id}/invite-link",
+            {"channel_id": self.channel.id}).data["code"]
+
+        self.client.force_authenticate(self.friend)
+        preview = self.client.get("/api/invites/preview", {"code": code})
+        self.assertEqual(preview.status_code, 200)
+        self.assertEqual(preview.data["server"]["id"], self.server.id)
+        self.assertEqual(preview.data["channel"]["id"], self.channel.id)
+        self.assertFalse(preview.data["already_member"])
+        # Предпросмотр не должен был вступить на сервер.
+        self.assertFalse(
+            Membership.objects.filter(user=self.friend, server=self.server).exists())
+
+    def test_preview_unknown_code_404(self):
+        self.client.force_authenticate(self.friend)
+        resp = self.client.get("/api/invites/preview", {"code": "nope"})
+        self.assertEqual(resp.status_code, 404)
+
+    def test_preview_rejects_plain_server_link(self):
+        """/preview — только для приглашений с каналом; голый серверный код
+        (используемый мгновенным ServerInviteRedeem) сюда не годится."""
+        self.client.force_authenticate(self.owner)
+        code = self.client.get(f"/api/servers/{self.server.id}/invite-link").data["code"]
+        self.client.force_authenticate(self.friend)
+        resp = self.client.get("/api/invites/preview", {"code": code})
+        self.assertEqual(resp.status_code, 404)
+
+    def test_redeem_channel_link_returns_channel_id_and_joins(self):
+        self.client.force_authenticate(self.owner)
+        code = self.client.get(
+            f"/api/servers/{self.server.id}/invite-link",
+            {"channel_id": self.channel.id}).data["code"]
+
+        self.client.force_authenticate(self.friend)
+        resp = self.client.post("/api/invites/redeem", {"code": code}, format="json")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data["invited_channel_id"], self.channel.id)
+        self.assertTrue(
+            Membership.objects.filter(user=self.friend, server=self.server).exists())
+
+    def test_redeem_plain_server_link_has_null_channel_id(self):
+        self.client.force_authenticate(self.owner)
+        code = self.client.get(f"/api/servers/{self.server.id}/invite-link").data["code"]
+        self.client.force_authenticate(self.friend)
+        resp = self.client.post("/api/invites/redeem", {"code": code}, format="json")
+        self.assertIsNone(resp.data["invited_channel_id"])
+
+    def test_direct_channel_invite_card_shows_channel_and_accept_returns_id(self):
+        """Карточка «Пригласить в голосовой чат» другу (см. ChannelInviteModal)
+        — та же карточка server_invite, что и у обычного приглашения, но с
+        channel; принятие возвращает invited_channel_id для автоподключения."""
+        self.client.force_authenticate(self.owner)
+        invite = self.client.post(
+            f"/api/servers/{self.server.id}/invites",
+            {"user_id": self.friend.id, "channel_id": self.channel.id}, format="json").data
+        self.assertEqual(invite["channel"]["id"], self.channel.id)
+
+        self.client.force_authenticate(self.friend)
+        accept = self.client.post(f"/api/invites/{invite['id']}")
+        self.assertEqual(accept.status_code, 200)
+        self.assertEqual(accept.data["invited_channel_id"], self.channel.id)
+
+    def test_general_direct_invite_card_has_null_channel(self):
+        self.client.force_authenticate(self.owner)
+        invite = self.client.post(
+            f"/api/servers/{self.server.id}/invites",
+            {"user_id": self.friend.id}, format="json").data
+        self.assertIsNone(invite["channel"])
+
+
 class ServerLeaveTests(APITestCase):
     def setUp(self):
         self.owner = User.objects.create_user(username="lv_owner", password="pw12345")

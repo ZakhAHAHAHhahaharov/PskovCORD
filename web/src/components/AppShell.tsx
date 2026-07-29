@@ -2,8 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState, MouseEvent as ReactM
 import { ChevronLeft, Phone, PhoneOff, Users } from 'lucide-react'
 import { useIsMobile } from '../hooks/useIsMobile'
 import {
-  api, Channel, ChatMessageBase, Conversation, ConversationMessage, FriendsState, KnownPerson,
-  Member, Message, NotificationLevel, Role, Server, ServerMemberSettings,
+  api, Channel, ChatMessageBase, Conversation, ConversationMessage, FriendsState, InvitePreview,
+  KnownPerson, Member, Message, NotificationLevel, Role, Server, ServerMemberSettings,
 } from '../api'
 import { useAuth } from '../auth'
 import { useGateway } from '../gateway'
@@ -41,6 +41,9 @@ import MuteVoteModal from './MuteVoteModal'
 import ServerContextMenu from './ServerContextMenu'
 import ServerPrivacyModal from './ServerPrivacyModal'
 import ServerInviteModal from './ServerInviteModal'
+import ChannelContextMenu from './ChannelContextMenu'
+import ChannelInviteModal from './ChannelInviteModal'
+import VoiceInviteJoinModal from './VoiceInviteJoinModal'
 
 const APP_NAME: string = import.meta.env.VITE_APP_NAME || 'PskovCord'
 
@@ -285,6 +288,23 @@ export default function AppShell() {
   } | null>(null)
   const [showServerInviteId, setShowServerInviteId] = useState<number | null>(null)
   const [showServerPrivacyId, setShowServerPrivacyId] = useState<number | null>(null)
+  // --- контекстное меню голосового канала (правый клик, см. ChannelContextMenu) ---
+  // Тот же приём, что и у serverContextMenuServerId выше — храним только id
+  // канала и координаты, сам канал резолвим из currentServer при рендере,
+  // чтобы не работать со стухшим снимком после live-обновлений (channel_update).
+  const [channelContextMenuId, setChannelContextMenuId] = useState<{
+    id: number
+    x: number
+    y: number
+  } | null>(null)
+  const [showChannelInviteId, setShowChannelInviteId] = useState<number | null>(null)
+  // --- предпросмотр ссылки-приглашения в конкретный голосовой канал (?voiceInvite=) ---
+  const [voiceInvite, setVoiceInvite] = useState<{
+    code: string
+    preview: InvitePreview | null
+    loading: boolean
+    error: string
+  } | null>(null)
 
   const currentServer = servers.find((s) => s.id === serverId) || null
   const channels = currentServer?.channels || []
@@ -466,6 +486,22 @@ export default function AppShell() {
     }
   }, [serverId])
 
+  // Роли — отдельным callback'ом по той же причине: правка/создание/удаление
+  // роли в редакторе сервера (вкладка «Роли») меняет ТОЛЬКО его собственный
+  // локальный стейт (RolesTab), а MembersList в правом сайдбаре читает роли
+  // из serverRoles здесь же — без переоткрытия сервера тот кэш иначе не
+  // обновлялся вообще, и группировка/цвет/имя роли в сайдбаре отставали от
+  // редактора до перезагрузки страницы.
+  const reloadRoles = useCallback(async () => {
+    if (serverId == null) return
+    try {
+      const list = await api.roles(serverId)
+      setServerRoles((prev) => ({ ...prev, [serverId]: list }))
+    } catch {
+      /* используем то, что уже в кэше */
+    }
+  }, [serverId])
+
   useEffect(() => {
     void reloadMembers()
   }, [reloadMembers])
@@ -546,6 +582,28 @@ export default function AppShell() {
       }
     })()
   }, [selectServer])
+
+  // Ссылка-приглашение в конкретный голосовой канал (?voiceInvite=<код>) —
+  // в отличие от ?invite= выше, НЕ вступает мгновенно: сначала грузим
+  // предпросмотр (см. backend InvitePreview) и показываем подтверждение
+  // (VoiceInviteJoinModal), само вступление — только по явному клику там.
+  useEffect(() => {
+    const params = new URLSearchParams(location.search)
+    const code = params.get('voiceInvite')
+    if (!code) return
+    const url = new URL(location.href)
+    url.searchParams.delete('voiceInvite')
+    window.history.replaceState({}, '', url.toString())
+    setVoiceInvite({ code, preview: null, loading: true, error: '' })
+    void (async () => {
+      try {
+        const preview = await api.invitePreview(code)
+        setVoiceInvite({ code, preview, loading: false, error: '' })
+      } catch (e) {
+        setVoiceInvite({ code, preview: null, loading: false, error: (e as Error).message })
+      }
+    })()
+  }, [])
 
   // История сообщений выбранного диалога/группы.
   useEffect(() => {
@@ -799,6 +857,18 @@ export default function AppShell() {
                   ? s.channels
                   : [...s.channels, d.channel],
               }
+            : s,
+        ),
+      )
+    })
+    // Статус канала подправили правым кликом → «Установить статус канала»
+    // (см. ChannelDetail.patch на бэке) — персистентное поле Channel.status,
+    // в отличие от эфемерного CallTopic (voice_call_state/CallTopic.tsx).
+    const offChannelUpdate = gateway.on('channel_update', (d) => {
+      setServers((prev) =>
+        prev.map((s) =>
+          s.id === d.server_id
+            ? { ...s, channels: s.channels.map((c) => (c.id === d.channel.id ? d.channel : c)) }
             : s,
         ),
       )
@@ -1093,6 +1163,7 @@ export default function AppShell() {
       offScreenShareRequested()
       offProfileUpdate()
       offChannelCreate()
+      offChannelUpdate()
       offServerUpdate()
       offJoinApproved()
       offCallState()
@@ -1352,15 +1423,21 @@ export default function AppShell() {
   // ServerInviteCard/MessageList) — статус на ней обновится сам, живым
   // dm_message_update от бэкенда (см. chat.views._broadcast_invite_message_update),
   // отдельно патчить локальное состояние не нужно.
-  const handleAcceptServerInvite = useCallback(async (inviteId: number) => {
+  const handleAcceptServerInvite = async (inviteId: number) => {
     try {
       const server = await api.acceptServerInvite(inviteId)
       setServers((prev) => (prev.some((s) => s.id === server.id) ? prev : [...prev, server]))
       selectServer(server)
+      // Приглашение было в конкретный голосовой канал (см. ChannelInviteModal)
+      // — сразу заходим в него, а не просто открываем сервер.
+      if (server.invited_channel_id != null) {
+        const ch = server.channels.find((c) => c.id === server.invited_channel_id)
+        if (ch) handleJoinVoice(ch)
+      }
     } catch (e) {
       alert((e as Error).message)
     }
-  }, [selectServer])
+  }
 
   const handleDeclineServerInvite = useCallback(async (inviteId: number) => {
     try {
@@ -1387,6 +1464,69 @@ export default function AppShell() {
         s.id === serverId ? { ...s, channels: [...s.channels, ch] } : s,
       ),
     )
+  }
+
+  // Закрепить/открепить голосовой канал — личная настройка (Membership.
+  // pinned_channel_ids), см. ChannelContextMenu «Закрепить канал вверху».
+  const handleTogglePinChannel = async (server: Server, channel: Channel) => {
+    const current = server.my_settings.pinned_channel_ids
+    const next = current.includes(channel.id)
+      ? current.filter((id) => id !== channel.id)
+      : [...current, channel.id]
+    patchServerSettings(server.id, { pinned_channel_ids: next })
+    try {
+      await api.updateServerSettings(server.id, { pinned_channel_ids: next })
+    } catch (e) {
+      patchServerSettings(server.id, { pinned_channel_ids: current })
+      alert('Не удалось закрепить канал: ' + (e as Error).message)
+    }
+  }
+
+  // «Копировать ссылку» — прямое действие без модалки, в отличие от
+  // ChannelInviteModal (та тоже умеет копировать ту же ссылку, но открыта
+  // ради выбора друга). Ссылка та же самая (get_or_create на бэке — один
+  // код на канал), просто более короткий путь.
+  const handleCopyChannelLink = async (server: Server, channel: Channel) => {
+    try {
+      const { code } = await api.serverInviteLink(server.id, channel.id)
+      const link = `${location.origin}${location.pathname}?voiceInvite=${code}`
+      await navigator.clipboard.writeText(link)
+    } catch (e) {
+      alert('Не удалось получить ссылку: ' + (e as Error).message)
+    }
+  }
+
+  const handleSetChannelStatus = async (channel: Channel, status: string) => {
+    try {
+      const updated = await api.setChannelStatus(channel.id, status)
+      setServers((prev) =>
+        prev.map((s) => ({
+          ...s,
+          channels: s.channels.map((c) => (c.id === updated.id ? updated : c)),
+        })),
+      )
+    } catch (e) {
+      alert('Не удалось установить статус канала: ' + (e as Error).message)
+    }
+  }
+
+  // Подтверждение из VoiceInviteJoinModal — вступаем (если ещё не участник)
+  // и сразу подключаемся к каналу, тем же путём, что и приглашение-карточка
+  // в переписке (см. handleAcceptServerInvite).
+  const handleConfirmVoiceInvite = async () => {
+    if (!voiceInvite) return
+    try {
+      const server = await api.redeemServerInvite(voiceInvite.code)
+      setServers((prev) => (prev.some((s) => s.id === server.id) ? prev : [...prev, server]))
+      selectServer(server)
+      if (server.invited_channel_id != null) {
+        const ch = server.channels.find((c) => c.id === server.invited_channel_id)
+        if (ch) handleJoinVoice(ch)
+      }
+      setVoiceInvite(null)
+    } catch (e) {
+      alert('Не удалось подключиться: ' + (e as Error).message)
+    }
   }
 
   // Отправка идёт не напрямую в сокет, а через очередь: та рисует сообщение
@@ -1930,6 +2070,7 @@ export default function AppShell() {
           onOpenServerSettings={() => setShowServerSettings(true)}
           onParticipantContextMenu={openParticipantContextMenu}
           onOpenParticipantProfile={openProfilePopup}
+          onChannelContextMenu={(c, e) => setChannelContextMenuId({ id: c.id, x: e.clientX, y: e.clientY })}
         />
       )}
       </div>
@@ -2009,6 +2150,7 @@ export default function AppShell() {
                     ? user!.username
                     : activeConversation.participants.find((p) => p.id === id)?.username
                 }
+                mentionCandidates={[user!, ...activeConversation.participants]}
                 onRetry={(nonce) => outbox.retry(nonce)}
                 onDiscard={(nonce) => outbox.discard(nonce)}
                 onAcceptServerInvite={handleAcceptServerInvite}
@@ -2089,6 +2231,7 @@ export default function AppShell() {
               onOpenProfile={openProfilePopup}
               onToggleReaction={handleToggleReaction}
               resolveUsername={(id) => members.find((m) => m.id === id)?.username}
+              mentionCandidates={members}
               onRetry={(nonce) => outbox.retry(nonce)}
               onDiscard={(nonce) => outbox.discard(nonce)}
             />
@@ -2173,6 +2316,7 @@ export default function AppShell() {
           onClose={() => setShowServerSettings(false)}
           onServerUpdated={handleServerUpdated}
           onMembersChanged={reloadMembers}
+          onRolesChanged={reloadRoles}
           isMobile={isMobile}
         />
       )}
@@ -2289,6 +2433,47 @@ export default function AppShell() {
           />
         )
       })()}
+      {channelContextMenuId && (() => {
+        // Сервер/канал могли исчезнуть (канал удалили, сами вышли) прямо
+        // пока меню открыто — тогда просто не рендерим (см. serverContextMenuServerId).
+        const menuChannel = currentServer?.channels.find((c) => c.id === channelContextMenuId.id)
+        if (!currentServer || !menuChannel) return null
+        return (
+          <ChannelContextMenu
+            channel={menuChannel}
+            x={channelContextMenuId.x}
+            y={channelContextMenuId.y}
+            canManageChannels={!!currentServer.my_permissions?.manage_channels}
+            isPinned={currentServer.my_settings.pinned_channel_ids.includes(menuChannel.id)}
+            onClose={() => setChannelContextMenuId(null)}
+            onInvite={() => setShowChannelInviteId(menuChannel.id)}
+            onTogglePin={() => handleTogglePinChannel(currentServer, menuChannel)}
+            onCopyLink={() => handleCopyChannelLink(currentServer, menuChannel)}
+            onSetStatus={(status) => handleSetChannelStatus(menuChannel, status)}
+          />
+        )
+      })()}
+      {showChannelInviteId != null && (() => {
+        const inviteChannel = currentServer?.channels.find((c) => c.id === showChannelInviteId)
+        if (!currentServer || !inviteChannel) return null
+        return (
+          <ChannelInviteModal
+            server={currentServer}
+            channel={inviteChannel}
+            people={knownPeople}
+            onClose={() => setShowChannelInviteId(null)}
+          />
+        )
+      })()}
+      {voiceInvite && (
+        <VoiceInviteJoinModal
+          preview={voiceInvite.preview}
+          loading={voiceInvite.loading}
+          error={voiceInvite.error}
+          onConfirm={handleConfirmVoiceInvite}
+          onClose={() => setVoiceInvite(null)}
+        />
+      )}
     </div>
     </VoiceProvider>
   )

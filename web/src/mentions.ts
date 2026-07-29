@@ -38,14 +38,16 @@ export interface MentionContext {
   suppressRoleMentions: boolean
 }
 
-function escapeRegExp(s: string): string {
+export function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
 // Символ "слова" — латиница/кириллица/цифры/подчёркивание. Нужен, чтобы
 // "@Ник" не срабатывал внутри "@Никита" и чтобы не сработать на email-адресах
 // вида "name@nickname.com" (перед "@" стоит буква — не начало упоминания).
-const WORD_CHAR = 'a-zA-Zа-яА-ЯёЁ0-9_'
+// Экспортирован — та же граница токена нужна MessageList при рендере
+// упоминаний кликабельными кнопками (см. renderMentions там).
+export const WORD_CHAR = 'a-zA-Zа-яА-ЯёЁ0-9_'
 
 function mentionsToken(content: string, token: string): boolean {
   if (!token) return false

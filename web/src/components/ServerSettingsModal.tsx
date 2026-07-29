@@ -147,6 +147,7 @@ export default function ServerSettingsModal({
   onClose,
   onServerUpdated,
   onMembersChanged,
+  onRolesChanged,
   isMobile,
 }: {
   server: Server
@@ -155,6 +156,10 @@ export default function ServerSettingsModal({
   onServerUpdated: (s: Server) => void
   /** Список участников менялся (роли/кик/бан) — попросить AppShell перезагрузить. */
   onMembersChanged: () => void
+  /** Роль создана/изменена/удалена — попросить AppShell перечитать роли
+   * сервера (см. AppShell.reloadRoles): иначе MembersList в правом сайдбаре
+   * (группировка/цвет/имя роли) видел бы старые данные до смены сервера. */
+  onRolesChanged: () => void
   /** На мобилке — список вкладок и содержимое активной вкладки два разных
    * полных "экрана" (тап по вкладке открывает её на весь экран, кнопка
    * назад закрывает ТОЛЬКО её), а не таб-строка сверху и контент под ней
@@ -241,6 +246,7 @@ export default function ServerSettingsModal({
                 server={server}
                 members={members}
                 onMembersChanged={onMembersChanged}
+                onRolesChanged={onRolesChanged}
               />
             )}
             {tab === 'requests' && (
@@ -605,10 +611,12 @@ function RolesTab({
   server,
   members,
   onMembersChanged,
+  onRolesChanged,
 }: {
   server: Server
   members: Member[]
   onMembersChanged: () => void
+  onRolesChanged: () => void
 }) {
   const [roles, setRoles] = useState<Role[]>([])
   const [selectedId, setSelectedId] = useState<number | null>(null)
@@ -650,6 +658,7 @@ function RolesTab({
       })
       setRoles([created, ...roles])
       select(created)
+      onRolesChanged()
     } catch (err) {
       setError((err as Error).message)
     }
@@ -663,6 +672,7 @@ function RolesTab({
       const updated = await api.updateRole(server.id, draft.id, draft)
       setRoles(roles.map((r) => (r.id === updated.id ? updated : r)))
       setDraft(updated)
+      onRolesChanged()
     } catch (err) {
       setError((err as Error).message)
     } finally {
@@ -679,6 +689,7 @@ function RolesTab({
       setRoles(rest)
       setSelectedId(rest[0]?.id ?? null)
       setDraft(rest[0] ?? null)
+      onRolesChanged()
       onMembersChanged()
     } catch (err) {
       setError((err as Error).message)

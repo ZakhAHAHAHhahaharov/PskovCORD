@@ -853,11 +853,14 @@ class MyServerSettings(APIView):
 
 
 class ServerInvites(APIView):
-    """POST /api/servers/<id>/invites {"user_id"} — пригласить конкретного
-    человека напрямую. Может любой участник сервера — приглашать друзей на
-    свой сервер не требует прав модерации, это не изменение самого сервера.
-    Байпасит access_mode ЦЕЛИКОМ (в т.ч. «только по приглашению») — в этом и
-    смысл приглашения; бан по-прежнему блокирует.
+    """POST /api/servers/<id>/invites {"user_id", "channel_id"?} —
+    пригласить конкретного человека напрямую, на сервер целиком или (если
+    передан channel_id, см. правый клик по голосовому каналу →
+    "Пригласить в голосовой чат") в конкретный канал. Может любой участник
+    сервера — приглашать друзей на свой сервер не требует прав модерации,
+    это не изменение самого сервера. Байпасит access_mode ЦЕЛИКОМ (в т.ч.
+    «только по приглашению») — в этом и смысл приглашения; бан по-прежнему
+    блокирует.
 
     Само приглашение адресат видит не отдельным списком, а карточкой сервера
     прямо в переписке с пригласившим — см. _send_invite_message."""
@@ -869,13 +872,22 @@ class ServerInvites(APIView):
         target = get_object_or_404(User, id=request.data.get("user_id"))
         if target.id == request.user.id:
             return Response({"detail": "Нельзя пригласить самого себя."}, status=400)
-        if is_member(target, server):
+        channel = None
+        channel_id = request.data.get("channel_id")
+        if channel_id is not None:
+            channel = get_object_or_404(
+                Channel, id=channel_id, server=server, kind=Channel.VOICE)
+        # Пригласить в КОНКРЕТНЫЙ канал можно и уже состоящего на сервере
+        # друга (позвать в голосовой чат — не то же самое, что позвать на
+        # сервер) — блокируем "уже на сервере" только для общего приглашения.
+        if channel is None and is_member(target, server):
             return Response({"detail": "Этот пользователь уже на сервере."}, status=400)
         if ServerBan.objects.filter(server=server, user=target).exists():
             return Response({"detail": "Этот пользователь забанен на сервере."}, status=400)
         invite, created = ServerInvite.objects.get_or_create(
             server=server, invited_user=target, kind=ServerInvite.DIRECT,
-            status=ServerInvite.PENDING, defaults={"created_by": request.user},
+            status=ServerInvite.PENDING, channel=channel,
+            defaults={"created_by": request.user},
         )
         if created:
             _send_invite_message(request, target, invite)
@@ -921,8 +933,9 @@ class ServerInviteDecision(APIView):
         invite.save(update_fields=["status"])
         _grant_server_membership(server, request.user.id)
         _broadcast_invite_message_update(invite)
-        return Response(
-            ServerSerializer(server, context=server_context(request, server)).data)
+        data = ServerSerializer(server, context=server_context(request, server)).data
+        data["invited_channel_id"] = invite.channel_id
+        return Response(data)
 
     def delete(self, request, invite_id):
         invite = get_object_or_404(
@@ -937,23 +950,60 @@ class ServerInviteDecision(APIView):
 
 
 class ServerInviteLink(APIView):
-    """GET /api/servers/<id>/invite-link — постоянная многоразовая ссылка
-    сервера. Одна на сервер (get_or_create) — повторные запросы отдают ту же
-    ссылку, а не плодят новые коды."""
+    """GET /api/servers/<id>/invite-link?channel_id=<id>? — постоянная
+    многоразовая ссылка. Без channel_id — ссылка сервера целиком, одна на
+    сервер (get_or_create). С channel_id (правый клик по голосовому каналу →
+    "Копировать ссылку"/"Пригласить в голосовой чат") — своя отдельная
+    ссылка на КАЖДЫЙ канал, тоже get_or_create (повторные запросы для того
+    же канала отдают тот же код, а не плодят новые)."""
 
     def get(self, request, server_id):
         server = get_object_or_404(Server, id=server_id)
         if not is_member(request.user, server):
             return Response({"detail": "Вы не участник сервера."}, status=403)
+        channel = None
+        channel_id = request.query_params.get("channel_id")
+        if channel_id is not None:
+            channel = get_object_or_404(
+                Channel, id=channel_id, server=server, kind=Channel.VOICE)
         invite, _created = ServerInvite.objects.get_or_create(
-            server=server, kind=ServerInvite.LINK,
+            server=server, kind=ServerInvite.LINK, channel=channel,
             defaults={"created_by": request.user, "code": _invite_code()},
         )
         return Response({"code": invite.code})
 
 
+class InvitePreview(APIView):
+    """GET /api/invites/preview?code=<code> — предпросмотр ссылки БЕЗ
+    вступления, только для приглашений в конкретный канал (см. правый клик
+    → "Пригласить в голосовой чат"/"Копировать ссылку"): переход по такой
+    ссылке показывает модалку-подтверждение (см. web/src/components/
+    VoiceInviteJoinModal.tsx) вместо мгновенного входа, который у обычной
+    серверной ссылки (ServerInviteRedeem) остаётся как был."""
+
+    def get(self, request):
+        code = (request.query_params.get("code") or "").strip()
+        invite = ServerInvite.objects.filter(
+            kind=ServerInvite.LINK, code=code, channel__isnull=False,
+        ).select_related("server", "channel").first()
+        if invite is None:
+            return Response({"detail": "Ссылка недействительна."}, status=404)
+        server = invite.server
+        if ServerBan.objects.filter(server=server, user=request.user).exists():
+            return Response({"detail": "Вы забанены на этом сервере."}, status=403)
+        roster = presence.voice_member_ids(invite.channel_id)
+        return Response({
+            "server": {"id": server.id, "name": server.name, "icon": server.icon},
+            "channel": {"id": invite.channel_id, "name": invite.channel.name},
+            "already_member": is_member(request.user, server),
+            "participant_count": len(roster),
+        })
+
+
 class ServerInviteRedeem(APIView):
-    """POST /api/invites/redeem {"code"} — войти на сервер по ссылке.
+    """POST /api/invites/redeem {"code"} — войти на сервер (и, если ссылка
+    была на конкретный канал, вернуть его id, чтобы фронт сразу подключил
+    к голосу — см. AppShell обработку ?voiceInvite=).
 
     Обладание кодом — это и есть авторизация (см. ServerInvite docstring):
     access_mode сервера здесь не смотрим вовсе, только бан.
@@ -966,15 +1016,14 @@ class ServerInviteRedeem(APIView):
         if invite is None:
             return Response({"detail": "Ссылка недействительна."}, status=404)
         server = invite.server
-        if is_member(request.user, server):
-            return Response(
-                ServerSerializer(server, context=server_context(request, server)).data)
-        if ServerBan.objects.filter(server=server, user=request.user).exists():
-            return Response({"detail": "Вы забанены на этом сервере."}, status=403)
-        Membership.objects.get_or_create(user=request.user, server=server)
-        _grant_server_membership(server, request.user.id)
-        return Response(
-            ServerSerializer(server, context=server_context(request, server)).data)
+        if not is_member(request.user, server):
+            if ServerBan.objects.filter(server=server, user=request.user).exists():
+                return Response({"detail": "Вы забанены на этом сервере."}, status=403)
+            Membership.objects.get_or_create(user=request.user, server=server)
+            _grant_server_membership(server, request.user.id)
+        data = ServerSerializer(server, context=server_context(request, server)).data
+        data["invited_channel_id"] = invite.channel_id
+        return Response(data)
 
 
 class FriendsView(APIView):
@@ -1410,6 +1459,40 @@ class ChannelCreate(APIView):
                 "channel": data,
             }})
         return Response(data, status=201)
+
+
+class ChannelDetail(APIView):
+    """PATCH /api/channels/<id> {"status"} — правый клик по каналу →
+    "Установить статус канала" (см. web/src/components/ChannelContextMenu.tsx).
+
+    Персистентный Channel.status, а НЕ эфемерная тема звонка
+    (presence.call_topic/voice_topic_update, chat.consumers
+    ._handle_voice_topic_update) — та живёт только пока в голосовом канале
+    кто-то есть, эта видна всегда, пока её явно не поменяют/не очистят
+    (пустая строка). name/kind/position сюда намеренно не входят — их
+    сейчас нигде не редактируют после создания канала, расширять ручку
+    ради них незачем, пока такой возможности не попросят отдельно."""
+
+    def patch(self, request, channel_id):
+        channel = get_object_or_404(Channel, id=channel_id)
+        server = channel.server
+        denied = _require_permission(request, server, "manage_channels")
+        if denied:
+            return denied
+        status_text = request.data.get("status")
+        if status_text is None:
+            return Response({"detail": "Нужно поле status."}, status=400)
+        channel.status = str(status_text).strip()[:120]
+        channel.save(update_fields=["status"])
+        data = ChannelSerializer(channel).data
+        channel_layer = get_channel_layer()
+        async_to_sync(channel_layer.group_send)(
+            f"server_{server.id}", {"type": "broadcast", "payload": {
+                "op": "channel_update",
+                "server_id": server.id,
+                "channel": data,
+            }})
+        return Response(data)
 
 
 class ChannelMessages(APIView):
