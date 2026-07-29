@@ -3032,6 +3032,14 @@ textarea.inline-editable-input {
   color: var(--red);
 }
 
+/* Стрелка "открывает экран" у категории — только на мобилке (см.
+   SettingsModal.tsx, рендерится там при isMobile). */
+.settings-row-chevron {
+  margin-left: auto;
+  color: var(--text-faint);
+  flex-shrink: 0;
+}
+
 /* Подкатегории — раскрываются под кликнутой категорией (см.
    activeCategory в SettingsModal), сама подсветка активной внутри них уже
    не по клику, а по скроллу контента (scrollspy) — они якоря на странице
@@ -5379,37 +5387,82 @@ button.settings-row-clickable:hover .settings-row-label {
     height: 40px;
   }
 
-  /* ---- модалка настроек — колонка (таб-строка сверху) вместо строки
-     (сайдбар слева + контент справа), иначе 208px сайдбара внутри
-     92vw-модалки на телефоне почти не оставляют места контенту. Высота —
-     flex:1 вместо фиксированного max-height: модалка сама теперь на весь
-     экран (.settings-overlay/.settings-modal выше), а не центрированный
-     блок с интринсик-высотой — max-height оставлял бы пустое место снизу. */
+  /* ---- модалка настроек — колонка вместо строки (сайдбар слева +
+     контент справа), иначе 208px сайдбара внутри 92vw-модалки на телефоне
+     почти не оставляют места контенту. Список категорий и контент
+     конкретной категории — два РАЗНЫХ полных "экрана" (см.
+     mobileCategoryOpen в SettingsModal.tsx: тап по категории показывает
+     её контент на весь экран, кнопка назад — .settings-content-back —
+     возвращает к списку), а не таб-строка сверху + контент под ней
+     сразу оба видны, как было раньше. display:none/block — тот же
+     проверенный приём, что и для nav/content экранов всего приложения
+     (см. .app main.chat выше в файле) — простой toggle без
+     position:absolute/transform, которые там ломались. */
   .settings-body {
     flex-direction: column;
     height: auto;
     flex: 1;
     min-height: 0;
-    overflow-y: auto;
+    overflow: hidden;
   }
 
   .settings-sidebar {
     width: 100%;
-    flex-direction: row;
-    overflow-x: auto;
-    overflow-y: visible;
+    flex-direction: column;
+    overflow-x: visible;
+    overflow-y: auto;
     border-right: none;
     padding-right: 0;
-    padding-bottom: 8px;
-    border-bottom: 1px solid var(--channel-hover);
   }
 
-  /* .settings-body теперь flex-column (см. выше) — .settings-content
-     растягивается по ЭТОЙ (вертикальной) оси через тот же flex:1, что и на
-     ПК по горизонтальной, но для корректного скролла внутри колонки нужен
-     ещё и min-height:0 (min-width:0 в базовом правиле тут не помогает). */
+  /* Вложенный аккордеон подкатегорий под активной категорией на мобилке не
+     рендерится вовсе (см. !isMobile && в SettingsModal.tsx) — те же
+     заголовки подкатегорий уже есть в самом контенте (SettingsSection),
+     дублировать их в списке категорий незачем.  */
+
   .settings-content {
+    display: none;
+  }
+
+  .settings-body.mobile-category-open .settings-sidebar {
+    display: none;
+  }
+
+  .settings-body.mobile-category-open .settings-content {
+    display: block;
+    flex: 1;
     min-height: 0;
+    overflow-y: auto;
+  }
+
+  .settings-content-back {
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--heading-text);
+  }
+
+  /* ---- под-модалки настроек (смена ника/пароля) — тоже полноэкранные на
+     мобилке, тот же приём, что .settings-overlay выше, но без
+     .settings-modal (у неё десктопная ширина 700px, для маленькой формы
+     ни к чему) — просто растягиваем сам .modal. ---- */
+  .settings-sub-overlay {
+    padding: 0;
+    align-items: stretch;
+    justify-content: stretch;
+  }
+
+  .settings-sub-overlay .modal {
+    width: 100%;
+    max-width: 100%;
+    height: 100%;
+    max-height: 100%;
+    border-radius: 0;
+  }
+
+  .settings-sub-overlay .modal-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
   }
 
   /* ---- редактор ролей сервера — список ролей над редактором, а не рядом
