@@ -40,6 +40,9 @@ export interface Me extends User {
    * карточке. Пусто — в панели используется обычная подпись статуса,
    * в карточке облачко не рисуется. */
   custom_status: string
+  /** Один эмодзи-символ перед текстом статуса в облачке — своё поле, а не
+   * префикс внутри custom_status (см. StatusEditModal). */
+  custom_status_emoji: string
   /** ISO-дата регистрации — "В числе участников с" в карточке. */
   date_joined: string
   dm_privacy: DmPrivacy
@@ -53,6 +56,7 @@ export interface ProfileCard {
   bio: string
   pronouns: string
   custom_status: string
+  custom_status_emoji: string
   date_joined: string
 }
 
@@ -607,6 +611,7 @@ export const api = {
     bio?: string
     pronouns?: string
     custom_status?: string
+    custom_status_emoji?: string
     avatar_image?: string
     banner_gradient?: string
     banner_image?: string

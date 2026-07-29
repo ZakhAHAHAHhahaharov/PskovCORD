@@ -6,6 +6,7 @@ import { useEscToClose } from '../modalStack'
 import { AVATAR_SIZE, fileToSquareDataUrl } from '../images'
 import ProfileCardHeader from './ProfileCardHeader'
 import BannerEditorModal from './BannerEditorModal'
+import StatusEditModal from './StatusEditModal'
 import InlineEditableText from './InlineEditableText'
 
 const BIO_MAX_LENGTH = 300
@@ -32,6 +33,7 @@ export default function ProfileModal({ onClose }: { onClose: () => void }) {
   const { user, updateLocalUser } = useAuth()
   const fileRef = useRef<HTMLInputElement>(null)
   const [showBannerEditor, setShowBannerEditor] = useState(false)
+  const [showStatusEditor, setShowStatusEditor] = useState(false)
   const [avatarError, setAvatarError] = useState('')
   const [copied, setCopied] = useState(false)
   const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -91,6 +93,7 @@ export default function ProfileModal({ onClose }: { onClose: () => void }) {
             bannerImage={user.banner_image}
             status={user.status}
             customStatus={user.custom_status}
+            customStatusEmoji={user.custom_status_emoji}
             pronouns={user.pronouns}
             edit={{
               onEditAvatar: () => fileRef.current?.click(),
@@ -101,7 +104,8 @@ export default function ProfileModal({ onClose }: { onClose: () => void }) {
               canRemoveBanner: !!(user.banner_gradient || user.banner_image),
               onSaveDisplayName: (v) => patch({ display_name: v }),
               onSavePronouns: (v) => patch({ pronouns: v }),
-              onSaveCustomStatus: (v) => patch({ custom_status: v }),
+              onEditStatus: () => setShowStatusEditor(true),
+              onClearStatus: () => patch({ custom_status: '', custom_status_emoji: '' }),
             }}
           />
           <input
@@ -181,6 +185,20 @@ export default function ProfileModal({ onClose }: { onClose: () => void }) {
             patch({ banner_gradient: gradient, banner_image: image })
           }
           onClose={() => setShowBannerEditor(false)}
+        />
+      )}
+
+      {showStatusEditor && (
+        <StatusEditModal
+          currentEmoji={user.custom_status_emoji}
+          currentText={user.custom_status}
+          username={user.username}
+          avatarColor={user.avatar_color}
+          avatarImage={user.avatar_image}
+          onSave={(emoji, text) =>
+            patch({ custom_status_emoji: emoji, custom_status: text })
+          }
+          onClose={() => setShowStatusEditor(false)}
         />
       )}
     </>

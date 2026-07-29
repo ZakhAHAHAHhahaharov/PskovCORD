@@ -1,7 +1,8 @@
-import { MessageCircle, Pencil, Sparkles } from 'lucide-react'
+import { Pencil, Sparkles } from 'lucide-react'
 import Avatar from './Avatar'
 import ImageHoverMenu from './ImageHoverMenu'
 import InlineEditableText from './InlineEditableText'
+import StatusBubble from './StatusBubble'
 
 const PRONOUN_SUGGESTIONS = [
   'he/him', 'she/her', 'they/them', 'he/they', 'she/they',
@@ -14,13 +15,18 @@ const AVATAR_SIZE = 84
  * Банер + аватарка (внахлёст на границу баннера и тела карточки — тот же
  * приём, что у профиль-карточек Discord/LinkedIn: без него аватар просто
  * "заперт" внутри цветного прямоугольника и карточка читается плоско) +
- * статус-пилюля + имя + строка username • местоимения • значок — общий
- * верх карточки профиля, переиспользуется в StatusMenu (свой профиль),
- * MiniProfilePopup (чужой) и ProfileModal (живое превью по мере ввода).
+ * облачко статуса, растущее от аватарки (StatusBubble) + имя + строка
+ * username • местоимения • значок — общий верх карточки профиля,
+ * переиспользуется в StatusMenu (свой профиль), MiniProfilePopup (чужой) и
+ * ProfileModal (живое превью по мере ввода).
  * Сам по себе — только для чтения; чтобы включить редактирование прямо в
  * карточке (используется только в ProfileModal), передать проп `edit`:
- * тогда аватар/баннер оборачиваются в ImageHoverMenu, а имя/местоимения/
- * статус — в InlineEditableText вместо обычного текста.
+ * тогда аватар/баннер/облачко статуса оборачиваются в ImageHoverMenu (клик —
+ * мини-меню "Изменить"/"Очистить"), а имя/местоимения — в InlineEditableText
+ * вместо обычного текста. Само облачко статуса НЕ редактируется инлайн —
+ * "Изменить" открывает StatusEditModal (см. edit.onEditStatus), у него два
+ * независимых поля (эмодзи + текст), которым инлайн-текстовому полю не
+ * место.
  */
 export default function ProfileCardHeader({
   username,
@@ -31,6 +37,7 @@ export default function ProfileCardHeader({
   bannerImage,
   status,
   customStatus,
+  customStatusEmoji,
   pronouns,
   edit,
 }: {
@@ -41,8 +48,9 @@ export default function ProfileCardHeader({
   bannerGradient?: string
   bannerImage?: string
   status?: 'online' | 'dnd' | 'offline' | 'invisible'
-  /** Пусто — пилюля статуса не рисуется вовсе (только для чтения). */
+  /** Пусто (вместе с customStatusEmoji) — облачко не рисуется вовсе (только для чтения). */
   customStatus: string
+  customStatusEmoji: string
   /** Пусто — вторая строка обходится без " · местоимения". */
   pronouns: string
   edit?: {
@@ -54,7 +62,9 @@ export default function ProfileCardHeader({
     canRemoveBanner: boolean
     onSaveDisplayName: (value: string) => Promise<void>
     onSavePronouns: (value: string) => Promise<void>
-    onSaveCustomStatus: (value: string) => Promise<void>
+    /** Открывает StatusEditModal (эмодзи + текст, со своей кнопкой «Сохранить»). */
+    onEditStatus: () => void
+    onClearStatus: () => Promise<void>
   }
 }) {
   const avatarNode = (
@@ -67,6 +77,8 @@ export default function ProfileCardHeader({
       showStatus={!!status}
     />
   )
+
+  const hasStatus = !!(customStatus || customStatusEmoji)
 
   return (
     <div className="profile-card">
@@ -91,45 +103,51 @@ export default function ProfileCardHeader({
       </div>
 
       <div className="profile-card-body">
-        <div className="profile-card-avatar-wrap">
+        <div className="profile-card-top-row">
+          <div className="profile-card-avatar-wrap">
+            {edit ? (
+              <ImageHoverMenu
+                className="profile-avatar-hover-menu"
+                onEdit={edit.onEditAvatar}
+                onRemove={edit.onRemoveAvatar}
+                canRemove={edit.canRemoveAvatar}
+                removeConfirm="Удалить аватар?"
+              >
+                {avatarNode}
+              </ImageHoverMenu>
+            ) : (
+              avatarNode
+            )}
+          </div>
+
           {edit ? (
-            <ImageHoverMenu
-              className="profile-avatar-hover-menu"
-              onEdit={edit.onEditAvatar}
-              onRemove={edit.onRemoveAvatar}
-              canRemove={edit.canRemoveAvatar}
-              removeConfirm="Удалить аватар?"
-            >
-              {avatarNode}
-            </ImageHoverMenu>
+            // В режиме редактирования облачко рисуем ВСЕГДА (даже пустым,
+            // с плейсхолдером) — иначе никак не догадаться, что статус
+            // вообще можно задать.
+            <div className="profile-status-bubble-slot">
+              <ImageHoverMenu
+                className="profile-status-hover-menu"
+                onEdit={edit.onEditStatus}
+                onRemove={edit.onClearStatus}
+                removeLabel="Очистить"
+                removeConfirm="Очистить статус?"
+                canRemove={hasStatus}
+              >
+                <StatusBubble
+                  emoji={customStatusEmoji}
+                  text={customStatus}
+                  placeholder="Добавить статус"
+                />
+              </ImageHoverMenu>
+            </div>
           ) : (
-            avatarNode
+            hasStatus && (
+              <div className="profile-status-bubble-slot">
+                <StatusBubble emoji={customStatusEmoji} text={customStatus} />
+              </div>
+            )
           )}
         </div>
-
-        {edit ? (
-          // В режиме редактирования пилюлю статуса рисуем ВСЕГДА (даже
-          // пустой) — иначе никак не догадаться, что статус-текст вообще
-          // можно задать: у самого поля нет отдельной подписи за её
-          // пределами.
-          <div className="profile-status-pill profile-status-pill-editable">
-            <MessageCircle size={12} className="profile-status-pill-icon" />
-            <InlineEditableText
-              className="profile-status-pill-text"
-              value={customStatus}
-              placeholder="Добавить статус"
-              maxLength={64}
-              onSave={edit.onSaveCustomStatus}
-            />
-          </div>
-        ) : (
-          !!customStatus && (
-            <div className="profile-status-pill">
-              <MessageCircle size={12} className="profile-status-pill-icon" />
-              <span className="profile-status-pill-text">{customStatus}</span>
-            </div>
-          )
-        )}
 
         {edit ? (
           <InlineEditableText
