@@ -1835,7 +1835,11 @@ export default function AppShell() {
         десктопную grid-сетку, где main обязательно виден рядом с
         сайдбаром. isMobile ниже используется только для вещей, которые
         JS ДОЛЖЕН явно знать (кнопка назад, история браузера). */}
-    <div className={`app screen-${mobileScreen}`}>
+    <div
+      className={`app screen-${mobileScreen} ${
+        currentChannel?.kind === 'voice' ? 'app-no-members-col' : ''
+      }`}
+    >
       {/* Единая "nav-панель" — рельса+сайдбар каналов вместе, всегда
           настоящий flex-контейнер (см. .mobile-nav-pane в index.css; на ПК
           это первая 312px-колонка общей grid, на мобилке — nav-экран на
@@ -2077,11 +2081,13 @@ export default function AppShell() {
         )}
       </main>
 
-      {/* Список участников — только для текстового канала (voice-канал и его
-          заглушка "Присоединиться", DM/группа, пустой экран без выбранного
-          канала — все прячут его, места справа под сетку/лендинг звонка не
-          остаётся). showMembersList — ещё один тумблер поверх этого, из
-          иконки в chat-header, действует только пока мы и так в тексте. */}
+      {/* Список участников — только для текстового канала (DM/группа, пустой
+          экран без выбранного канала — прячут его, но колонку под пустой
+          aside всё равно держат для консистентности раскладки). Голосовой
+          канал — исключение: там колонки нет вообще (см. .app-no-members-col
+          выше), сетке/демонстрации нужна вся ширина main. showMembersList —
+          ещё один тумблер поверх этого, из иконки в chat-header, действует
+          только пока мы и так в тексте. */}
       {serverId != null && currentChannel?.kind === 'text' && showMembersList ? (
         <MembersList
           members={members}
@@ -2090,7 +2096,7 @@ export default function AppShell() {
           ownerId={currentServer?.owner ?? -1}
           onOpenProfile={openProfilePopup}
         />
-      ) : (
+      ) : currentChannel?.kind === 'voice' ? null : (
         <aside className="members-list" />
       )}
 

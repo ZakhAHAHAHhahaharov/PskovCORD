@@ -511,6 +511,14 @@ input {
   overflow: hidden;
 }
 
+/* Голосовой канал — без третьей колонки вообще (см. AppShell.tsx: aside
+   .members-list там не рендерится даже пустышкой), а не просто со скрытым
+   содержимым: сетке участников/демонстрации отдаём всю освободившуюся
+   ширину main, а не оставляем от неё пустую 240px-полосу справа. */
+.app.app-no-members-col {
+  grid-template-columns: 312px 1fr;
+}
+
 .mobile-nav-pane {
   display: flex;
   height: 100%;
@@ -2188,8 +2196,12 @@ textarea.inline-editable-input {
   transition: opacity 0.2s ease;
 }
 
+/* Тень падает НА видео под накладкой (вниз у шапки, вверх у подвала) — сама
+   накладка без заливки, тень — единственное, что отделяет её от картинки под
+   ней и держит белые иконки читаемыми на светлом фоне демки. */
 .voice-stage-header {
   top: 0;
+  box-shadow: 0 12px 20px -8px rgba(0, 0, 0, 0.6);
 }
 
 /* Действия над всем экраном звонка (окно, полный экран) — в правом нижнем
@@ -2197,6 +2209,7 @@ textarea.inline-editable-input {
 .voice-stage-footer {
   bottom: 0;
   justify-content: flex-end;
+  box-shadow: 0 -12px 20px -8px rgba(0, 0, 0, 0.6);
 }
 
 .voice-stage-header.visible,
@@ -2313,6 +2326,16 @@ textarea.inline-editable-input {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  transition: opacity 0.2s ease;
+}
+
+/* Та же логика, что и у лейбла демки ниже (.voice-stage-expanded-overlay):
+   курсор надолго замер — не важно, над самим тайлом, над демкой или просто
+   над пустым местом main — .controls-hidden гасит подпись вместе с
+   остальным тулбаром (тот же таймер, см. VoiceStage.scheduleHideControls). */
+.voice-stage.controls-hidden .participant-tile-name {
+  opacity: 0;
+  pointer-events: none;
 }
 
 .participant-tile-badge {
@@ -2440,6 +2463,15 @@ textarea.inline-editable-input {
   align-items: center;
   gap: 8px;
   max-width: calc(100% - 24px);
+  transition: opacity 0.2s ease;
+}
+
+/* Курсор надолго замер над демкой (или где угодно ещё в main) — подпись и
+   «перестать смотреть» уходят вместе с остальным тулбаром, тем же таймером
+   (.voice-stage.controls-hidden, см. VoiceStage.scheduleHideControls). */
+.voice-stage.controls-hidden .voice-stage-expanded-overlay {
+  opacity: 0;
+  pointer-events: none;
 }
 
 .voice-stage-expanded-actions {
@@ -2451,7 +2483,12 @@ textarea.inline-editable-input {
   background: rgba(0, 0, 0, 0.6);
 }
 
+/* Тот же размер, что у кнопок voice-controls-bar (42x42) — единый масштаб
+   кнопок по всему экрану звонка, а не мельче только потому, что эти сидят в
+   углу демки, а не в нижней панели. */
 .voice-stage-expanded-actions .icon-btn {
+  width: 42px;
+  height: 42px;
   color: #fff;
 }
 
@@ -2577,14 +2614,6 @@ textarea.inline-editable-input {
 .voice-stage-expanded-media .screen-preview-placeholder {
   position: absolute;
   inset: 0;
-}
-
-/* Развёрнутый УЧАСТНИК — не видео, соотношение сторон ему ни к чему: пусть
-   аватар просто стоит по центру всей области. */
-.voice-stage-expanded-media:has(.participant-expanded) {
-  width: 100%;
-  height: 100%;
-  aspect-ratio: auto;
 }
 
 /* ---- chat ---- */
