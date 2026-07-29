@@ -78,6 +78,15 @@ class Role(models.Model):
     # Роль по умолчанию (аналог @everyone): её права действуют на всех
     # участников сервера, её нельзя удалить и не нужно никому выдавать.
     is_default = models.BooleanField(default=False)
+    # Синтетическая роль-зеркало прав владельца сервера — см.
+    # chat.roles.owner_permissions/create_owner_role. Не выдаётся никому (её
+    # обладатель определяется полем Server.owner, а не Membership.roles),
+    # редактировать её может только сам владелец (см. ServerRoleDetail.patch),
+    # и manage_server/manage_roles на ней всегда форсятся в True на бэке
+    # (chat.roles.OWNER_LOCKED_PERMISSIONS) — иначе владелец мог бы снять их
+    # с себя и НАВСЕГДА потерять доступ к настройкам/ролям собственного
+    # сервера (никто другой не выше него в иерархии, чтобы вернуть их).
+    is_owner_role = models.BooleanField(default=False)
 
     # --- общие права сервера ---
     view_channels = models.BooleanField(default=True)

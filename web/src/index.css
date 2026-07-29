@@ -3009,6 +3009,48 @@ textarea.inline-editable-input {
   pointer-events: none;
 }
 
+/* ---- автокомплит @упоминаний (MessageInput) ---- */
+.mention-popup {
+  position: absolute;
+  left: 16px;
+  right: 16px;
+  bottom: 100%;
+  margin-bottom: 6px;
+  max-height: 220px;
+  overflow-y: auto;
+  background: var(--modal-bg);
+  border-radius: 8px;
+  box-shadow: 0 8px 16px rgba(0, 0, 0, 0.32);
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  z-index: 5;
+}
+
+.mention-popup-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  font-size: 14px;
+  color: var(--text-normal);
+  text-align: left;
+}
+
+.mention-popup-item:hover,
+.mention-popup-item.active {
+  background: var(--channel-hover);
+}
+
+.mention-popup-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .reply-banner {
   display: flex;
   align-items: center;
@@ -4617,6 +4659,17 @@ button.settings-row-clickable:hover .settings-row-label {
   color: var(--text-muted);
 }
 
+/* Заблокированные права роли "Владелец" (manage_server/manage_roles) —
+   видно, что чекбокс не просто выключен, а недоступен принципиально. */
+.srv-toggle.disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.srv-toggle.disabled input {
+  cursor: default;
+}
+
 /* ---- вкладка «Роли»: список слева, редактор выбранной роли справа ---- */
 .srv-roles {
   display: grid;
@@ -4664,6 +4717,10 @@ button.settings-row-clickable:hover .settings-row-label {
   width: 12px;
   height: 12px;
   border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.srv-role-owner-icon {
   flex-shrink: 0;
 }
 
@@ -4739,6 +4796,21 @@ button.settings-row-clickable:hover .settings-row-label {
 
 .srv-member-row input {
   accent-color: var(--blurple);
+}
+
+/* Владелец в списке «Кому выдана» — права у него и так все, роль не
+   назначить (см. RolesTab), чекбокс только для вида. */
+.srv-member-row.disabled {
+  cursor: default;
+}
+
+.srv-member-row.disabled:hover {
+  background: none;
+}
+
+.srv-member-row input:disabled {
+  cursor: default;
+  opacity: 0.5;
 }
 
 /* ---- вкладки «Запросы» / «ЧС списочек» / правила ---- */
@@ -5144,6 +5216,7 @@ button.settings-row-clickable:hover .settings-row-label {
 }
 
 .reaction-pill {
+  position: relative;
   display: inline-flex;
   align-items: center;
   gap: 5px;
@@ -5354,6 +5427,136 @@ button.settings-row-clickable:hover .settings-row-label {
   color: #fff;
 }
 
+/* ---- окно отмены удаления сообщения (10с, см. MessageList) ---- */
+.message-content-deleting {
+  opacity: 0.5;
+  text-decoration: line-through;
+}
+
+.message-delete-pending-bar {
+  position: relative;
+  margin-top: 6px;
+  padding-top: 8px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  overflow: hidden;
+}
+
+/* Линия сверху, а не просто фон — тает слева направо синхронно с самим
+   таймером (10s linear, тот же 10s, что и в MessageList.PENDING_DELETE_MS),
+   так что видно ровно сколько времени осталось на отмену. */
+.message-delete-pending-bar::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: var(--red);
+  transform-origin: left;
+  animation: message-delete-countdown 10s linear forwards;
+}
+
+@keyframes message-delete-countdown {
+  from {
+    transform: scaleX(1);
+  }
+  to {
+    transform: scaleX(0);
+  }
+}
+
+.message-delete-pending-text {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.message-delete-undo {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--blurple);
+}
+
+.message-delete-undo:hover {
+  text-decoration: underline;
+}
+
+/* ---- модалка подтверждения удаления (DeleteMessageModal) ---- */
+.delete-message-modal {
+  position: relative;
+  width: 440px;
+}
+
+.delete-message-question {
+  margin: 0 0 16px;
+  color: var(--text-normal);
+  font-size: 14px;
+}
+
+.delete-message-preview {
+  display: flex;
+  gap: 10px;
+  padding: 10px;
+  background: var(--input-secondary-bg);
+  border-radius: 8px;
+}
+
+.delete-message-preview-body {
+  min-width: 0;
+}
+
+.delete-message-preview-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.delete-message-preview-name {
+  font-weight: 600;
+  color: var(--heading-text);
+  font-size: 14px;
+}
+
+.delete-message-preview-time {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.delete-message-preview-text {
+  margin-top: 2px;
+  font-size: 14px;
+  color: var(--text-normal);
+  overflow-wrap: anywhere;
+}
+
+.delete-message-hint {
+  margin: 14px 0 0;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.delete-message-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 20px;
+}
+
+.btn-danger {
+  background: var(--red);
+  color: #fff;
+  font-weight: 600;
+  padding: 8px 14px;
+  border-radius: 4px;
+  font-size: 13px;
+  transition: background 0.15s;
+}
+
+.btn-danger:hover {
+  background: #c8393c;
+}
+
 /* ---- поиск серверов ---- */
 .discover-search {
   width: 100%;
@@ -5421,16 +5624,25 @@ button.settings-row-clickable:hover .settings-row-label {
   box-shadow: 0 8px 16px rgba(0, 0, 0, 0.32);
 }
 
-/* Длинное имя сервера режем многоточием, а не переносом: иначе заголовок
-   распирал бы меню по ширине. */
-.server-context-menu .profile-popup-label {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .server-context-menu .profile-popup-item svg {
   flex-shrink: 0;
+}
+
+/* Плотнее, чем в остальных .profile-popup (StatusMenu, MiniProfilePopup) —
+   там ещё есть крупный баннер/аватар наверху, задающие масштаб отступов,
+   здесь сразу список пунктов и без имени сервера сверху воздух между ними
+   не нужен. */
+.server-context-menu .profile-popup-menu {
+  padding: 4px;
+  gap: 1px;
+}
+
+.server-context-menu .profile-popup-item {
+  padding: 6px 10px;
+}
+
+.server-context-menu .profile-popup-divider {
+  margin: 4px 4px;
 }
 
 /* Подменю по наведению (заглушение/уведомления) — тот же визуальный язык,

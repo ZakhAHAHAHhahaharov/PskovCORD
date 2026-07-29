@@ -357,6 +357,9 @@ class ServerListCreate(APIView):
         # Роль по умолчанию (аналог @everyone) — есть на каждом сервере,
         # именно её права действуют на всех участников без ролей.
         roles.create_default_role(server)
+        # Зеркало прав владельца — редактируемое им самим (см.
+        # chat.roles.create_owner_role/owner_permissions).
+        roles.create_owner_role(server)
         # Каналы по умолчанию — как в Discord.
         Channel.objects.create(server=server, name="general",
                                kind=Channel.TEXT, position=0)
@@ -601,6 +604,13 @@ class ServerRoles(APIView):
         server = get_object_or_404(Server, id=server_id)
         if not is_member(request.user, server):
             return Response({"detail": "Вы не участник сервера."}, status=403)
+        # Серверы, заведённые до появления редактируемой роли "Владелец" —
+        # досоздаём её лениво здесь, а не разовой data-миграцией на все
+        # существующие серверы разом (та же логика оправдания, что была бы у
+        # такой миграции, просто размазанная по первому обращению каждого
+        # сервера, а не по единому деплою).
+        if not server.roles.filter(is_owner_role=True).exists():
+            roles.create_owner_role(server)
         return Response(RoleSerializer(server.roles.all(), many=True).data)
 
     def post(self, request, server_id):
@@ -613,27 +623,45 @@ class ServerRoles(APIView):
         denied = _require_role_hierarchy(request, server, serializer.validated_data)
         if denied:
             return denied
-        # Роль по умолчанию на сервере ровно одна и создаётся вместе с ним —
-        # через API вторую завести нельзя.
-        serializer.save(server=server, is_default=False)
+        # Роль по умолчанию и роль владельца — по одной на сервер и создаются
+        # только вместе с ним/при первом ленивом обращении — через этот API
+        # вторую такую не завести.
+        serializer.save(server=server, is_default=False, is_owner_role=False)
         return Response(serializer.data, status=201)
 
 
 class ServerRoleDetail(APIView):
     def patch(self, request, server_id, role_id):
         server = get_object_or_404(Server, id=server_id)
-        denied = _require_permission(request, server, "manage_roles")
-        if denied:
-            return denied
         role = get_object_or_404(Role, id=role_id, server=server)
+        if role.is_owner_role:
+            # Роль-зеркало прав владельца — не "выдаваемая", обычная
+            # проверка manage_roles здесь неуместна: её редактирует только
+            # сам владелец, своя же собственная (см. models.Role.is_owner_role).
+            if request.user.id != server.owner_id:
+                return Response(
+                    {"detail": "Роль «Владелец» может редактировать только сам владелец."},
+                    status=403)
+        else:
+            denied = _require_permission(request, server, "manage_roles")
+            if denied:
+                return denied
         serializer = RoleSerializer(
             role, data=request.data, partial=True, context={"server": server})
         serializer.is_valid(raise_exception=True)
-        denied = _require_role_hierarchy(
-            request, server, serializer.validated_data, current_position=role.position)
-        if denied:
-            return denied
-        serializer.save(is_default=role.is_default)
+        if not role.is_owner_role:
+            denied = _require_role_hierarchy(
+                request, server, serializer.validated_data, current_position=role.position)
+            if denied:
+                return denied
+        # OWNER_LOCKED_PERMISSIONS форсим здесь ещё раз (страховка поверх
+        # задизейбленных чекбоксов на фронте) — иначе прямой запрос в обход
+        # UI мог бы снять владельцу доступ к его же настройкам/ролям навсегда,
+        # заступиться некому — см. roles.owner_permissions.
+        extra = {"is_default": role.is_default, "is_owner_role": role.is_owner_role}
+        if role.is_owner_role:
+            extra.update({name: True for name in roles.OWNER_LOCKED_PERMISSIONS})
+        serializer.save(**extra)
         return Response(serializer.data)
 
     def delete(self, request, server_id, role_id):
@@ -645,6 +673,9 @@ class ServerRoleDetail(APIView):
         if role.is_default:
             return Response(
                 {"detail": "Роль по умолчанию удалить нельзя."}, status=400)
+        if role.is_owner_role:
+            return Response(
+                {"detail": "Роль «Владелец» удалить нельзя."}, status=400)
         if not roles.can_manage_role(request.user, server, role.position):
             return Response(
                 {"detail": "Нельзя удалить роль не ниже вашей."}, status=403)

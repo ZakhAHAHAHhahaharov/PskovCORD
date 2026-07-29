@@ -52,6 +52,12 @@ BASE_MEMBER_PERMISSIONS = {
     "view_channels", "send_messages", "speak", "video",
 }
 
+# Права, которые нельзя снять с роли "Владелец" (см. models.Role.is_owner_role)
+# даже через редактор — без них у никого на сервере не осталось бы способа
+# вернуть их обратно (владелец всегда выше всех в иерархии, см.
+# can_manage_role/highest_role_position — заступиться некому).
+OWNER_LOCKED_PERMISSIONS = {"manage_server", "manage_roles"}
+
 
 def all_permissions() -> dict:
     """Полный набор прав — то, что есть у владельца сервера."""
@@ -66,11 +72,34 @@ def base_member_permissions() -> dict:
     return {name: name in BASE_MEMBER_PERMISSIONS for name in PERMISSION_NAMES}
 
 
+def owner_permissions(server) -> dict:
+    """Права владельца сервера. По умолчанию — все (см. all_permissions), но
+    владелец может сознательно урезать себе часть через редактируемую роль
+    "Владелец" (Role.is_owner_role, см. create_owner_role/ServerRoleDetail) —
+    например, чтобы не мелькать в списке тех, кто может удалять чужие
+    сообщения. OWNER_LOCKED_PERMISSIONS форсится в True независимо от того,
+    что стоит на самой роли — без этого владелец мог бы случайно (или
+    специально) заблокировать себе доступ к настройкам/ролям НАВСЕГДА: он
+    всегда выше всех в иерархии (highest_role_position), заступиться некому.
+
+    Сервер без own роли (ещё не создана — см. ServerRoles.get, лениво
+    создаёт её при первом обращении к вкладке "Роли") — всё как раньше,
+    полный набор прав."""
+    from .models import Role
+
+    owner_role = Role.objects.filter(server=server, is_owner_role=True).first()
+    if owner_role is None:
+        return all_permissions()
+    result = {name: bool(getattr(owner_role, name, False)) for name in PERMISSION_NAMES}
+    for name in OWNER_LOCKED_PERMISSIONS:
+        result[name] = True
+    return result
+
+
 def permissions_for(user, server) -> dict:
     """Итоговые права участника на сервере: объединение (OR) прав роли по
-    умолчанию и всех выданных ему ролей. Владелец сервера всегда получает
-    всё — иначе он мог бы случайно лишить себя доступа к собственному
-    серверу, отредактировав роль по умолчанию.
+    умолчанию и всех выданных ему ролей. Владелец сервера получает права по
+    owner_permissions (по умолчанию — все, см. её докстринг).
 
     Не участник сервера прав не имеет вообще (даже прав роли по умолчанию).
     """
@@ -79,7 +108,7 @@ def permissions_for(user, server) -> dict:
     if not user or not user.is_authenticated:
         return no_permissions()
     if server.owner_id == user.id:
-        return all_permissions()
+        return owner_permissions(server)
 
     membership = Membership.objects.filter(
         user=user, server=server).prefetch_related("roles").first()
@@ -189,7 +218,10 @@ def member_ids_with_permission(server, permission: str) -> list:
     else:
         default_grants = permission in BASE_MEMBER_PERMISSIONS
 
-    ids = [server.owner_id]
+    # Раньше владелец попадал сюда безусловно — но он мог сознательно снять
+    # с себя это самое право через owner_permissions (см. её докстринг),
+    # и тогда список "у кого есть право" продолжал бы врать, что оно есть.
+    ids = [server.owner_id] if owner_permissions(server).get(permission) else []
     for membership in Membership.objects.filter(
         server=server
     ).prefetch_related("roles"):
@@ -223,3 +255,18 @@ def create_default_role(server):
 
     return Role.objects.create(
         server=server, name="Участник", is_default=True, position=0)
+
+
+def create_owner_role(server):
+    """Роль «Владелец» — зеркало прав владельца сервера (см.
+    owner_permissions), редактируемая только им самим (ServerRoleDetail.patch).
+    Создаётся вместе с сервером; для серверов, заведённых до появления этой
+    фичи, лениво досоздаётся при первом обращении к вкладке "Роли" (см.
+    ServerRoles.get) — все PERMISSION_NAMES=True по умолчанию (all_permissions),
+    то есть поведение таких серверов не меняется, пока владелец сам что-то
+    не снимет."""
+    from .models import Role
+
+    return Role.objects.create(
+        server=server, name="Владелец", color="#f0b232",
+        is_owner_role=True, position=0, **all_permissions())

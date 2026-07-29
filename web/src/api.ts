@@ -142,6 +142,9 @@ export interface Role extends ServerPermissions {
   position: number
   /** Роль «для всех» (аналог @everyone) — её нельзя удалить и не нужно выдавать. */
   is_default: boolean
+  /** Роль-зеркало прав владельца сервера — редактирует только он сам (см.
+   * backend chat.roles.owner_permissions), никому не выдаётся, удалить нельзя. */
+  is_owner_role: boolean
   mention_permission: MentionPermission
   /** id ролей, чьи участники вправе пинговать ЭТУ роль — используется только
    * при mention_permission='roles'. */

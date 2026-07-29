@@ -108,9 +108,6 @@ export default function ServerContextMenu({
       className="profile-popup server-context-menu"
       style={{ left: x, top: y }}
     >
-      <div className="profile-popup-label">{server.name}</div>
-      <div className="profile-popup-divider" />
-
       <div className="profile-popup-menu">
         <button
           type="button"
