@@ -6171,6 +6171,18 @@ button.settings-row-clickable:hover .settings-row-label {
     height: 40px;
   }
 
+  /* ---- индикатор статуса (кружок online/dnd/offline) на аватарке
+     профиль-карточки (ProfileCardHeader — StatusMenu/ProfileModal/
+     MiniProfilePopup) на мобилке был тем же 12px, что и у мелких
+     аватарок в списках — на большом 84px аватаре профиля и без мыши,
+     чтобы разглядеть навести курсор, это нечитаемо мелко. Увеличиваем
+     только тут (base-правило .status-dot для списков не трогаем). ---- */
+  .profile-card-avatar-wrap .status-dot {
+    width: 18px;
+    height: 18px;
+    border-width: 4px;
+  }
+
   /* ---- модалка настроек — колонка вместо строки (сайдбар слева +
      контент справа), иначе 208px сайдбара внутри 92vw-модалки на телефоне
      почти не оставляют места контенту. Список категорий и контент
@@ -6242,6 +6254,18 @@ button.settings-row-clickable:hover .settings-row-label {
     display: flex;
     align-items: center;
     gap: 8px;
+  }
+
+  /* QR-сканер на мобилке — окно камеры растягивается на всё доступное
+     место под шапкой (а не квадратик по ширине карточки, как на десктопе,
+     где модалка узкая и центрированная) — .qr-scanner-modal уже
+     display:flex;flex-direction:column, а .modal сама на этом брейкпоинте
+     на весь экран (см. правило выше), так что flex:1 растит вьюпорт
+     до низа доступной высоты. */
+  .qr-scanner-viewport {
+    flex: 1;
+    width: auto;
+    aspect-ratio: auto;
   }
 
   /* ---- редактор ролей сервера — список ролей над редактором, а не рядом
