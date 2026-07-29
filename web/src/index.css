@@ -2175,57 +2175,56 @@ textarea.inline-editable-input {
   filter: brightness(1.1);
 }
 
-/* Шапка и подвал — накладки поверх содержимого, прозрачные и без тени, и
-   появляются/уходят вместе с .voice-controls-bar (класс visible вешает
-   VoiceStage по showControls). Раньше шапка была полосой в колонке: она
-   постоянно занимала 48px высоты и отделяла звонок рамкой от остального
-   интерфейса даже тогда, когда смотреть в неё незачем. */
-.voice-stage-header,
-.voice-stage-footer {
+/* Шапка — своё содержимое (кнопка назад + название) поверх градиента-
+   затемнения, появляется/уходит вместе с .voice-controls-bar (класс visible
+   вешает VoiceStage по showControls). Никакой заливки/тени у самой полосы —
+   только мягкое затемнение видео под ней, чтобы белые иконки/текст были
+   читаемы. Раньше шапка была полосой в колонке и постоянно занимала 48px
+   высоты, отделяя звонок рамкой от остального интерфейса даже тогда, когда
+   смотреть в неё незачем. */
+.voice-stage-header {
   position: absolute;
+  top: 0;
   left: 0;
   right: 0;
   z-index: 21;
-  height: 34px;
+  height: 84px;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 6px;
-  padding: 0 10px;
+  padding: 14px 16px;
+  background: linear-gradient(to bottom, rgba(0, 0, 0, 0.5), transparent);
   opacity: 0;
   pointer-events: none;
   transition: opacity 0.2s ease;
 }
 
-/* Тень падает НА видео под накладкой (вниз у шапки, вверх у подвала) — сама
-   накладка без заливки, тень — единственное, что отделяет её от картинки под
-   ней и держит белые иконки читаемыми на светлом фоне демки. */
-.voice-stage-header {
-  top: 0;
-  box-shadow: 0 12px 20px -8px rgba(0, 0, 0, 0.6);
-}
-
-/* Действия над всем экраном звонка (окно, полный экран) — в правом нижнем
-   углу, поэтому подвал прижимает своё содержимое вправо. */
-.voice-stage-footer {
-  bottom: 0;
-  justify-content: flex-end;
-  box-shadow: 0 -12px 20px -8px rgba(0, 0, 0, 0.6);
-}
-
-.voice-stage-header.visible,
-.voice-stage-footer.visible {
+.voice-stage-header.visible {
   opacity: 1;
   pointer-events: auto;
 }
 
-.voice-stage-footer .icon-btn {
-  color: #fff;
-  background: rgba(0, 0, 0, 0.55);
-  backdrop-filter: blur(8px);
+/* Подвал — то же самое затемнение, но своей интерактивной начинки больше не
+   несёт (пустой div): и центральная пилюля мут/камера/демка/сброс, и кнопки
+   окна/полноэкрана — самостоятельные абсолютно спозиционированные группы
+   поверх этого градиента (см. .voice-controls-bar/.voice-stage-footer-actions
+   ниже), все на одной высоте — единый нижний футер, а не два независимых
+   ряда друг над другом. */
+.voice-stage-footer {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 19;
+  height: 130px;
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.5), transparent);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s ease;
 }
 
-.voice-stage-footer .icon-btn:hover {
-  background: rgba(255, 255, 255, 0.18);
+.voice-stage-footer.visible {
+  opacity: 1;
 }
 
 .voice-stage-title {
@@ -2233,13 +2232,10 @@ textarea.inline-editable-input {
   align-items: center;
   gap: 6px;
   min-width: 0;
-  padding: 3px 8px;
-  border-radius: 6px;
   font-size: 13px;
   font-weight: 600;
   color: #fff;
-  background: rgba(0, 0, 0, 0.55);
-  backdrop-filter: blur(8px);
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.6);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2247,6 +2243,75 @@ textarea.inline-editable-input {
 
 .voice-stage-title svg {
   flex-shrink: 0;
+}
+
+/* Кнопки «В отдельном окне» / «На весь экран» — теперь на той же высоте, что
+   и «Завершить звонок»: центр по Y совпадает с центром пилюли
+   .voice-controls-bar (24px её нижний отступ + 8px внутренний padding —
+   именно оттуда, а не от 24px, начинается сама кнопка внутри пилюли), только
+   кнопки прижаты к правому краю, а не к центру. */
+.voice-stage-footer-actions {
+  position: absolute;
+  right: 16px;
+  bottom: 32px;
+  z-index: 20;
+  height: 42px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s ease;
+}
+
+.voice-stage-footer-actions.visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* Без собственной заливки — как попросили: единственная разница с покоем —
+   лёгкая подсветка по hover, тот же приём, что у .voice-controls-bar .icon-btn. */
+.voice-stage-footer-actions .icon-btn {
+  position: relative;
+  width: 42px;
+  height: 42px;
+  color: #fff;
+}
+
+.voice-stage-footer-actions .icon-btn:hover {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+/* ---- всплывающая подпись кнопки по наведению (голосовой экран) ----
+   Не полагаемся на нативный title — он не стилизуется и появляется с
+   заметной задержкой. position: relative НЕ ставим тут же (специфичность
+   совпала бы с .voice-stage-participants-toggle{position:absolute} и порядок
+   правил в файле решал бы, кто выиграл) — у элементов, которым позиционный
+   контекст нужен отдельно, он либо уже свой (participants-toggle), либо
+   добавлен точечно (.voice-stage-footer-actions .icon-btn выше). */
+.hover-tip::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translate(-50%, 4px);
+  padding: 5px 9px;
+  border-radius: 5px;
+  background: rgba(0, 0, 0, 0.85);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease, transform 0.15s ease;
+  z-index: 30;
+}
+
+.hover-tip:hover::after,
+.hover-tip:focus-visible::after {
+  opacity: 1;
+  transform: translate(-50%, 0);
 }
 
 /* Распорка на месте экрана звонка, пока тот живёт в pip-окне. */
