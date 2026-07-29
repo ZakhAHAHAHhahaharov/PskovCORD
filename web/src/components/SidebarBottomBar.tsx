@@ -1,11 +1,14 @@
 import {
-  Wifi, WifiOff, Loader2, PhoneOff, Mic, Headphones, Circle, Settings, Volume2,
+  Wifi, WifiOff, Loader2, PhoneOff, Mic, MicOff, Headphones, HeadphoneOff, Circle,
+  Settings, Volume2,
 } from 'lucide-react'
 import { User } from '../api'
 import MicButton from './MicButton'
 import StatusMenu from './StatusMenu'
 import DeafenButton from './DeafenButton'
 import { useVoice } from '../voice'
+import { useSettings } from '../settings'
+import { playToggleSound } from '../sounds'
 import { VoiceState } from './AppShell'
 import { VoiceStatus } from './VoiceProvider'
 import { VoiceRosterMember } from './VoiceStage'
@@ -42,6 +45,26 @@ export default function SidebarBottomBar({
   onOpenProfile: () => void
 }) {
   const { speakingUserIds, pingMs } = useVoice()
+  // Вне звонка мьют/дефен — просто предпочтение на будущий вход (см. voice.ts
+  // useVoiceMesh — читает его как стартовое состояние), кнопки здесь не
+  // трогают ничего в WebRTC вообще, в отличие от MicButton/DeafenButton.
+  const { preferMicMuted, preferDeafened, setPreferMicMuted, setPreferDeafened } = useSettings()
+
+  const toggleMicPreference = () => {
+    const next = !preferMicMuted
+    playToggleSound(preferMicMuted) // preferMicMuted=true => сейчас включаем обратно
+    setPreferMicMuted(next)
+    // Как в Discord: включение микрофона снимает дефен.
+    if (!next && preferDeafened) setPreferDeafened(false)
+  }
+
+  const toggleDeafenPreference = () => {
+    const next = !preferDeafened
+    playToggleSound(preferDeafened)
+    setPreferDeafened(next)
+    // Дефен глушит и микрофон — не звучит просить "не слышать", но говорить.
+    if (next) setPreferMicMuted(true)
+  }
 
   return (
     <div className="sidebar-bottom">
@@ -106,11 +129,19 @@ export default function SidebarBottomBar({
             </>
           ) : (
             <>
-              <button className="icon-btn" title="Микрофон (войдите в голосовой канал)" disabled>
-                <Mic size={17} />
+              <button
+                className={`icon-btn ${preferMicMuted ? 'muted' : ''}`}
+                title={preferMicMuted ? 'Включить микрофон' : 'Выключить микрофон'}
+                onClick={toggleMicPreference}
+              >
+                {preferMicMuted ? <MicOff size={17} /> : <Mic size={17} />}
               </button>
-              <button className="icon-btn" title="Звук (войдите в голосовой канал)" disabled>
-                <Headphones size={17} />
+              <button
+                className={`icon-btn ${preferDeafened ? 'muted' : ''}`}
+                title={preferDeafened ? 'Включить звук' : 'Отключить звук (не слышать участников)'}
+                onClick={toggleDeafenPreference}
+              >
+                {preferDeafened ? <HeadphoneOff size={17} /> : <Headphones size={17} />}
               </button>
             </>
           )}

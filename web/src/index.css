@@ -2699,6 +2699,31 @@ textarea.inline-editable-input {
   padding: 16px 0;
 }
 
+/* Разделитель дня в ленте (см. MessageList.tsx showDateDivider) —
+   приглушённый, не должен спорить за внимание с самими сообщениями:
+   тонкие полупрозрачные линии по бокам, дата по центру мелким серым
+   текстом. */
+.date-divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 20px 0;
+}
+
+.date-divider-line {
+  flex: 1;
+  height: 1px;
+  background: var(--border-color);
+}
+
+.date-divider-label {
+  flex-shrink: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+
 .message-row {
   position: relative;
   display: flex;

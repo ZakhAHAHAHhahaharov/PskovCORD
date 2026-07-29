@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, MouseEvent as ReactMouseEvent } from 'react'
+import { Fragment, useEffect, useRef, useState, MouseEvent as ReactMouseEvent } from 'react'
 import {
   AlertCircle, Check, Clock, Reply, Pencil, RotateCw, SmilePlus, Trash2,
 } from 'lucide-react'
@@ -20,13 +20,39 @@ export type ListMessage = ChatMessageBase & {
   deliveryStatus?: DeliveryStatus
 }
 
+function isSameDay(a: Date, b: Date): boolean {
+  return (
+    a.getFullYear() === b.getFullYear() &&
+    a.getMonth() === b.getMonth() &&
+    a.getDate() === b.getDate()
+  )
+}
+
+/** Время у самого сообщения — сегодня достаточно HH:MM (день и так ясен из
+ * контекста), вчера — с явной пометкой, раньше — с полной датой: чем
+ * старше сообщение, тем меньше пользы от одного лишь времени без даты. */
 function formatTime(iso: string): string {
   const d = new Date(iso)
-  return d.toLocaleString('ru-RU', {
+  const now = new Date()
+  const hm = d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
+  if (isSameDay(d, now)) return hm
+  const yesterday = new Date(now)
+  yesterday.setDate(yesterday.getDate() - 1)
+  if (isSameDay(d, yesterday)) return `Вчера, ${hm}`
+  const dmy = d.toLocaleDateString('ru-RU', {
     day: '2-digit',
     month: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
+    year: 'numeric',
+  })
+  return `${dmy}, ${hm}`
+}
+
+/** Подпись разделителя между днями в ленте — см. .date-divider ниже. */
+function formatDateSeparator(iso: string): string {
+  return new Date(iso).toLocaleDateString('ru-RU', {
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
   })
 }
 
@@ -126,9 +152,14 @@ export default function MessageList({
       {messages.length === 0 && (
         <div className="message-empty">Пока нет сообщений. Напиши первым!</div>
       )}
-      {messages.map((m) => {
+      {messages.map((m, i) => {
         const isAuthor = m.author.id === currentUserId
         const pending = m.pendingNonce != null
+        // Разделитель дня — перед первым сообщением дня целиком (включая
+        // самое первое сообщение в ленте, если она не пуста), не перед
+        // каждым отдельным сообщением.
+        const showDateDivider =
+          i === 0 || !isSameDay(new Date(m.created_at), new Date(messages[i - 1].created_at))
         // Статус показываем только на СВОИХ сообщениях: чужое «доставлено»
         // ни о чём не говорит. У подтверждённого сообщения собственного
         // статуса уже нет — оно приехало с сервера обычным message_create,
@@ -140,8 +171,15 @@ export default function MessageList({
             : null
         const rowKey = m.pendingNonce ?? m.id
         return (
+          <Fragment key={rowKey}>
+            {showDateDivider && (
+              <div className="date-divider">
+                <span className="date-divider-line" />
+                <span className="date-divider-label">{formatDateSeparator(m.created_at)}</span>
+                <span className="date-divider-line" />
+              </div>
+            )}
           <div
-            key={rowKey}
             className={`message-row ${editingId === m.id ? 'editing' : ''} ${
               pending ? 'message-pending' : ''
             } ${m.deliveryStatus === 'failed' ? 'message-failed' : ''} ${
@@ -287,6 +325,7 @@ export default function MessageList({
               </div>
             )}
           </div>
+          </Fragment>
         )
       })}
       <div ref={bottomRef} />
