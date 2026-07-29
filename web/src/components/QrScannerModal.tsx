@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import jsQR from 'jsqr'
-import { CameraOff, Loader2 } from 'lucide-react'
+import { CameraOff, ChevronLeft, Loader2 } from 'lucide-react'
 import { useEscToClose } from '../modalStack'
 import { parseQrLoginText } from '../qrToken'
 import QrConfirmCard from './QrConfirmCard'
@@ -13,7 +13,16 @@ type Phase = 'starting' | 'scanning' | 'denied' | 'unavailable'
  * системной камерой (QrLoginConfirm), но без выхода из сайта: getUserMedia
  * + покадровое декодирование jsQR по холсту, снятому с видео.
  */
-export default function QrScannerModal({ onClose }: { onClose: () => void }) {
+export default function QrScannerModal({
+  onClose,
+  isMobile,
+}: {
+  onClose: () => void
+  /** Следующий полноэкранный "шаг" настроек на мобилке (см.
+   * .settings-sub-overlay/UsernameChangeModal/PasswordChangeModal) — та же
+   * стрелка назад в заголовке вместо кнопки "Отмена" снизу. */
+  isMobile?: boolean
+}) {
   useEscToClose(onClose)
 
   const [phase, setPhase] = useState<Phase>('starting')
@@ -87,13 +96,20 @@ export default function QrScannerModal({ onClose }: { onClose: () => void }) {
   }, [])
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
+    <div className="modal-overlay settings-sub-overlay" onClick={onClose}>
       <div className="modal qr-scanner-modal" onClick={(e) => e.stopPropagation()}>
         {token ? (
           <QrConfirmCard token={token} onClose={onClose} />
         ) : (
           <>
-            <h2 className="modal-title">Сканировать QR-код входа</h2>
+            <h2 className="modal-title">
+              {isMobile && (
+                <button className="chat-back-btn" title="Назад" onClick={onClose}>
+                  <ChevronLeft size={20} />
+                </button>
+              )}
+              Сканировать QR-код входа
+            </h2>
             <p className="login-sub">Наведите камеру на QR-код на экране входа</p>
 
             <div className="qr-scanner-viewport">
@@ -116,9 +132,12 @@ export default function QrScannerModal({ onClose }: { onClose: () => void }) {
               {phase === 'scanning' && <div className="qr-scanner-frame" />}
             </div>
 
-            <button className="modal-close" onClick={onClose}>
-              Отмена
-            </button>
+            {/* На мобилке эта кнопка дублирует стрелку назад в заголовке. */}
+            {!isMobile && (
+              <button className="modal-close" onClick={onClose}>
+                Отмена
+              </button>
+            )}
           </>
         )}
       </div>
