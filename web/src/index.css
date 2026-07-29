@@ -202,6 +202,25 @@ input {
   color: var(--text-muted);
 }
 
+/* ---- 404 (NotFoundScreen.tsx) — тот же login-card, что и у входа ---- */
+.not-found-card {
+  text-align: center;
+}
+
+.not-found-code {
+  margin: 4px 0;
+  font-size: 56px;
+  font-weight: 800;
+  letter-spacing: 1px;
+  color: var(--text-faint);
+}
+
+.not-found-home-link {
+  display: block;
+  text-decoration: none;
+  text-align: center;
+}
+
 .field-label {
   font-size: 12px;
   font-weight: 700;
