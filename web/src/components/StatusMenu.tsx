@@ -4,6 +4,7 @@ import {
 } from 'lucide-react'
 import { useAuth } from '../auth'
 import { useGateway } from '../gateway'
+import { useHoverFlyout } from '../hooks/useHoverFlyout'
 import { UserStatus } from '../api'
 import { MAX_ACCOUNTS } from '../accounts'
 import Avatar from './Avatar'
@@ -39,26 +40,6 @@ export const STATUS_LABELS: Record<UserStatus, string> = {
 }
 
 const ROSTER_PREVIEW_LIMIT = 5
-
-// Открытие/закрытие синхронно по mouseenter/mouseleave, без задержки: зазор
-// между строкой-триггером и флаутом (см. .status-flyout — left: calc(100% +
-// 8px)) перекрыт псевдоэлементом ::before самого флаута (.status-flyout::before
-// в index.css) — курсор в зазоре физически лежит над флаутом (его потомком в
-// DOM), поэтому mouseleave обёртки там не срабатывает и без искусственной
-// задержки. Раньше зазор был "мёртвой зоной" ничьей — курсор успевал выйти и
-// из триггера, и из флаута.
-//
-// Экспортирован — общий хук боковых флаутов по наведению для попапов,
-// которым нужны такие подменю.
-export function useHoverFlyout() {
-  const [open, setOpen] = useState(false)
-  return {
-    open,
-    onMouseEnter: () => setOpen(true),
-    onMouseLeave: () => setOpen(false),
-    close: () => setOpen(false),
-  }
-}
 
 /** Клик по своему аватару/имени в панели — открывает карточку профиля из 4
  * блоков: мини-профиль, (опционально) текущий голосовой звонок, редактирование
