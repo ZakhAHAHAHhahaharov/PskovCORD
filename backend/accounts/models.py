@@ -37,6 +37,11 @@ class User(AbstractUser):
     # в нижней панели используется обычная подпись статуса (В сети/Не
     # беспокоить/Невидимка), в карточке облачко не рисуется вовсе.
     custom_status = models.CharField(max_length=64, blank=True, default="")
+    # Один эмодзи-символ перед текстом статуса (рисуется в "облачке" рядом с
+    # аватаркой) — отдельное поле, а не префикс внутри custom_status: на
+    # фронте это два независимых инпута (StatusEditModal), да и парсить
+    # эмодзи-vs-текст из одной строки обратно было бы ненадёжно.
+    custom_status_emoji = models.CharField(max_length=8, blank=True, default="")
     # data-URL (data:image/jpeg;base64,...) — хранится прямо в БД, без
     # ImageField/MEDIA_ROOT/Pillow: аватарки маленькие (сжимаются клиентом до
     # 256x256 перед отправкой), а лишний медиа-сервинг (volume + nginx

@@ -84,6 +84,7 @@ export default function MiniProfilePopup({
     bio: string
     pronouns: string
     customStatus: string
+    customStatusEmoji: string
     dateJoined: string
   } | null>(null)
   useEffect(() => {
@@ -98,6 +99,7 @@ export default function MiniProfilePopup({
             bio: data.bio,
             pronouns: data.pronouns,
             customStatus: data.custom_status,
+            customStatusEmoji: data.custom_status_emoji,
             dateJoined: data.date_joined,
           })
         }
@@ -199,6 +201,7 @@ export default function MiniProfilePopup({
         bannerImage={bannerImage}
         status={user.status}
         customStatus={card?.customStatus || ''}
+        customStatusEmoji={card?.customStatusEmoji || ''}
         pronouns={card?.pronouns || ''}
       />
 

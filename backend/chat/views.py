@@ -1132,6 +1132,7 @@ class UserProfileCard(APIView):
             "bio": target.bio,
             "pronouns": target.pronouns,
             "custom_status": target.custom_status,
+            "custom_status_emoji": target.custom_status_emoji,
             "date_joined": target.date_joined,
         })
 
