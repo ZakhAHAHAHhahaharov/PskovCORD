@@ -95,11 +95,15 @@ function Toggle({
 }
 
 /**
- * Редактор сервера — раскрывается поверх всей страницы (как настройки в
- * Discord): затемнение на весь экран, а панель с вкладками и их содержимым
- * стоит по центру. Вкладки показываются только те, на которые у текущего
- * пользователя есть права (см. Server.my_permissions, они же считаются на
- * бэке в chat/roles.py — прятать кнопки без серверной проверки нельзя).
+ * Редактор сервера — та же оболочка, что и у настроек пользователя
+ * (SettingsModal): .modal-overlay + .modal.settings-modal, заголовок, слева
+ * колонка разделов, справа скроллящееся содержимое. Раньше это была своя
+ * полноэкранная панель с горизонтальным рядом вкладок — два визуально разных
+ * «окна настроек» в одном приложении.
+ *
+ * Разделы показываются только те, на которые у текущего пользователя есть
+ * права (см. Server.my_permissions, они же считаются на бэке в chat/roles.py —
+ * прятать кнопки без серверной проверки нельзя).
  */
 export default function ServerSettingsModal({
   server,
@@ -130,50 +134,52 @@ export default function ServerSettingsModal({
   useEscToClose(onClose)
 
   return (
-    <div className="server-settings-overlay">
-      <div className="server-settings">
-        <header className="server-settings-head">
-          <div className="server-settings-title">
-            <Avatar name={server.name} color="#5865f2" image={server.icon} size={28} />
-            <span>Редактор сервера — {server.name}</span>
+    <div className="modal-overlay" onClick={onClose}>
+      <div
+        className="modal settings-modal server-settings-modal"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <h2 className="modal-title settings-modal-title">
+          <Avatar name={server.name} color="#5865f2" image={server.icon} size={26} />
+          <span className="settings-modal-title-text">Настройки сервера — {server.name}</span>
+        </h2>
+
+        <div className="settings-body">
+          <nav className="settings-sidebar">
+            {availableTabs.map((t) => (
+              <button
+                key={t.id}
+                type="button"
+                className={`settings-sidebar-item${tab === t.id ? ' active' : ''}`}
+                onClick={() => setTab(t.id)}
+              >
+                {t.icon} {t.label}
+              </button>
+            ))}
+          </nav>
+
+          <div className="settings-content">
+            {availableTabs.length === 0 && (
+              <div className="modal-empty">Нет прав на настройку этого сервера.</div>
+            )}
+            {tab === 'profile' && (
+              <ProfileTab server={server} onServerUpdated={onServerUpdated} />
+            )}
+            {tab === 'roles' && (
+              <RolesTab
+                server={server}
+                members={members}
+                onMembersChanged={onMembersChanged}
+              />
+            )}
+            {tab === 'requests' && (
+              <RequestsTab server={server} onMembersChanged={onMembersChanged} />
+            )}
+            {tab === 'access' && <AccessTab server={server} onServerUpdated={onServerUpdated} />}
+            {tab === 'bans' && (
+              <BansTab server={server} members={members} onMembersChanged={onMembersChanged} />
+            )}
           </div>
-          <button type="button" className="icon-btn" title="Закрыть (Esc)" onClick={onClose}>
-            <X size={18} />
-          </button>
-        </header>
-
-        <nav className="server-settings-tabs">
-          {availableTabs.map((t) => (
-            <button
-              key={t.id}
-              type="button"
-              className={`server-settings-tab ${tab === t.id ? 'active' : ''}`}
-              onClick={() => setTab(t.id)}
-            >
-              {t.icon} {t.label}
-            </button>
-          ))}
-        </nav>
-
-        <div className="server-settings-body">
-          {availableTabs.length === 0 && (
-            <div className="modal-empty">Нет прав на настройку этого сервера.</div>
-          )}
-          {tab === 'profile' && (
-            <ProfileTab server={server} onServerUpdated={onServerUpdated} />
-          )}
-          {tab === 'roles' && (
-            <RolesTab
-              server={server}
-              members={members}
-              onMembersChanged={onMembersChanged}
-            />
-          )}
-          {tab === 'requests' && <RequestsTab server={server} onMembersChanged={onMembersChanged} />}
-          {tab === 'access' && <AccessTab server={server} onServerUpdated={onServerUpdated} />}
-          {tab === 'bans' && (
-            <BansTab server={server} members={members} onMembersChanged={onMembersChanged} />
-          )}
         </div>
       </div>
     </div>
