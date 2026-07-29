@@ -1460,9 +1460,9 @@ textarea.inline-editable-input {
   padding: 12px 12px 4px;
 }
 
-/* Только MiniProfilePopup (чужой профиль) — "Написать сообщение"/
-   "Копировать ID" друг НАД другом, а не по бокам (ProfileModal, свой
-   профиль, оставляем как есть — там первая кнопка всегда disabled). */
+/* И MiniProfilePopup (чужой профиль), и ProfileModal (свой, "Написать
+   сообщение" там всегда disabled) — "Написать сообщение"/"Копировать ID"
+   друг НАД другом, а не по бокам. */
 .profile-modal-actions-row-stacked {
   flex-direction: column;
 }
