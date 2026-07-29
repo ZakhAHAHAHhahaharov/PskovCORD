@@ -1,4 +1,5 @@
 import { Pencil, Sparkles, Trash2 } from 'lucide-react'
+import { useHoverFlyout } from '../hooks/useHoverFlyout'
 import Avatar from './Avatar'
 import ImageHoverMenu from './ImageHoverMenu'
 import InlineEditableText from './InlineEditableText'
@@ -81,6 +82,7 @@ export default function ProfileCardHeader({
   )
 
   const hasStatus = !!(customStatus || customStatusEmoji)
+  const statusActions = useHoverFlyout()
 
   return (
     <div className="profile-card">
@@ -130,32 +132,40 @@ export default function ProfileCardHeader({
             // только две иконки: карандаш (открывает StatusEditModal) и
             // корзина (очищает статус сразу, без window.confirm — это
             // короткий текст, а не тяжёлая картинка, отменить — секунда).
-            <div className="profile-status-bubble-slot status-bubble-hover-zone">
+            // Условный рендер + useHoverFlyout, а не CSS :hover/opacity —
+            // см. комментарий у .status-bubble-actions в index.css.
+            <div
+              className="profile-status-bubble-slot"
+              onMouseEnter={statusActions.onMouseEnter}
+              onMouseLeave={statusActions.onMouseLeave}
+            >
               <StatusBubble
                 emoji={customStatusEmoji}
                 text={customStatus}
                 placeholder="Добавить статус"
               />
-              <div className="status-bubble-actions">
-                <button
-                  type="button"
-                  className="status-bubble-action"
-                  title="Изменить"
-                  onClick={edit.onEditStatus}
-                >
-                  <Pencil size={12} />
-                </button>
-                {hasStatus && (
+              {statusActions.open && (
+                <div className="status-bubble-actions">
                   <button
                     type="button"
-                    className="status-bubble-action status-bubble-action-danger"
-                    title="Очистить"
-                    onClick={edit.onClearStatus}
+                    className="status-bubble-action"
+                    title="Изменить"
+                    onClick={edit.onEditStatus}
                   >
-                    <Trash2 size={12} />
+                    <Pencil size={12} />
                   </button>
-                )}
-              </div>
+                  {hasStatus && (
+                    <button
+                      type="button"
+                      className="status-bubble-action status-bubble-action-danger"
+                      title="Очистить"
+                      onClick={edit.onClearStatus}
+                    >
+                      <Trash2 size={12} />
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
           ) : (
             hasStatus && (
