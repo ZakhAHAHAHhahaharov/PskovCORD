@@ -44,11 +44,16 @@ def healthz(_request):
     return JsonResponse({"status": "ok", "app": settings.APP_NAME})
 
 
-def _serve(file_path):
+def _serve(file_path, cache_control=None):
     ctype = CONTENT_TYPES.get(file_path.suffix.lower())
-    if ctype:
-        return FileResponse(open(file_path, "rb"), content_type=ctype)
-    return FileResponse(open(file_path, "rb"))
+    resp = (
+        FileResponse(open(file_path, "rb"), content_type=ctype)
+        if ctype
+        else FileResponse(open(file_path, "rb"))
+    )
+    if cache_control:
+        resp["Cache-Control"] = cache_control
+    return resp
 
 
 def _resolve_favicon_id(request):
@@ -98,15 +103,47 @@ def favicon_manifest(request):
 
 
 def spa(_request, path=""):
-    """Отдаёт статику из web/dist, иначе index.html (клиентский роутинг)."""
+    """Отдаёт статику из web/dist, иначе index.html (клиентский роутинг).
+
+    Два момента, из-за которых после нескольких деплоев подряд вкладка,
+    открытая (или просто с прогретым кэшем) чуть раньше, показывала белый
+    экран без единой ошибки в сети:
+
+    1. index.html без Cache-Control браузер кэшировал эвристически (нет
+       Cache-Control — нет и явного запрета). Каждый деплой полностью
+       заменяет web/dist новыми хэшами ассетов; кэшированный index.html
+       продолжал ссылаться на файлы, которых уже нет на диске.
+    2. Запрос такого несуществующего /assets/<старый-хэш>.js не находил
+       файл (candidate.is_file() ложь) и проваливался в fallback ниже —
+       который отдавал index.html с кодом 200 на ЛЮБОЙ путь, в том числе
+       на путь ассета. Браузер получал HTML вместо JS-модуля, пытался его
+       исполнить и падал молча — снаружи это выглядело как "сайт умер"
+       без единой видимой ошибки (Failed to load module script разве что
+       в консоли, куда никто не смотрел).
+
+    Фикс: у путей внутри assets/ нет "запасного" толкования как
+    SPA-маршрута — это ВСЕГДА либо конкретный файл, либо настоящий 404
+    (пусть браузер сам покажет ошибку загрузки скрипта, а не тихо
+    подсовывает HTML). Плюс honest Cache-Control: index.html — no-cache
+    (перепроверяется каждый раз), сами хэшированные ассеты — immutable
+    (хэш в имени меняется вместе с содержимым, старое имя переиспользовать
+    просто нечем).
+    """
     dist_root = WEB_DIST.resolve()
     if path:
         candidate = (WEB_DIST / path).resolve()
         if str(candidate).startswith(str(dist_root)) and candidate.is_file():
-            return _serve(candidate)
+            cache_control = (
+                "public, max-age=31536000, immutable"
+                if path.startswith("assets/")
+                else "no-cache"
+            )
+            return _serve(candidate, cache_control)
+        if path.startswith("assets/"):
+            raise Http404("Ассет не найден — возможно, страница открыта до последнего деплоя.")
     index_file = WEB_DIST / "index.html"
     if index_file.is_file():
-        return _serve(index_file)
+        return _serve(index_file, "no-cache")
     raise Http404(
         "web/dist не собран. Выполни: cd web && npm run build"
     )
