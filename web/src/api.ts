@@ -34,6 +34,14 @@ export interface Me extends User {
    * профиля приходит сразу (не тяжёлая, в отличие от banner_image это
    * просто текст), догружать отдельно незачем. */
   bio: string
+  /** Короткая подпись рядом с username в карточке — пусто, если не задана. */
+  pronouns: string
+  /** Короткий статус-текст — в нижней панели и в облачке у аватарки в
+   * карточке. Пусто — в панели используется обычная подпись статуса,
+   * в карточке облачко не рисуется. */
+  custom_status: string
+  /** ISO-дата регистрации — "В числе участников с" в карточке. */
+  date_joined: string
   dm_privacy: DmPrivacy
 }
 
@@ -43,6 +51,15 @@ export interface ProfileCard {
   banner_gradient: string
   banner_image: string
   bio: string
+  pronouns: string
+  custom_status: string
+  date_joined: string
+}
+
+/** Приватная заметка о другом пользователе — своя у каждого
+ * просматривающего, видна только автору. См. backend chat.models.ProfileNote. */
+export interface UserNote {
+  text: string
 }
 
 /** Один активный сеанс (устройство/браузер) — «Активные сеансы» в
@@ -588,6 +605,8 @@ export const api = {
     current_password?: string
     display_name?: string
     bio?: string
+    pronouns?: string
+    custom_status?: string
     avatar_image?: string
     banner_gradient?: string
     banner_image?: string
@@ -595,6 +614,10 @@ export const api = {
   }): Promise<Me> => req('/api/auth/me', { method: 'PATCH', body: JSON.stringify(data) }),
   profileCard: (userId: number): Promise<ProfileCard> =>
     req(`/api/users/${userId}/profile-card`),
+  getUserNote: (userId: number): Promise<UserNote> =>
+    req(`/api/users/${userId}/note`),
+  setUserNote: (userId: number, text: string): Promise<UserNote> =>
+    req(`/api/users/${userId}/note`, { method: 'PUT', body: JSON.stringify({ text }) }),
   changePassword: (current_password: string, new_password: string) =>
     req('/api/auth/change-password', {
       method: 'POST',

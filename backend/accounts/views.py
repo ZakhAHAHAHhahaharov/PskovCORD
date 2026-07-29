@@ -46,6 +46,7 @@ def _broadcast_profile_update(user):
         "user_id": user.id,
         "username": user.username,
         "display_name": user.display_name,
+        "custom_status": user.custom_status,
         "avatar_color": user.avatar_color,
         "avatar_image": user.avatar_image,
     }

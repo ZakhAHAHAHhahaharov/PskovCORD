@@ -26,6 +26,17 @@ class User(AbstractUser):
     # сериализаторе (см. ProfileUpdateSerializer.validate_bio), не здесь —
     # тот же приём, что у Server.description (chat.models).
     bio = models.TextField(blank=True, default="")
+    # Местоимения — короткая необязательная подпись в карточке профиля,
+    # рядом с username. Свободный текст (не enum/choices) — подсказки
+    # стандартных вариантов (he/him, she/her, they/them...) только на
+    # фронте (datalist), а не жёсткий список здесь.
+    pronouns = models.CharField(max_length=24, blank=True, default="")
+    # Короткий произвольный статус-текст — показывается и в нижней панели
+    # пользователя (рядом со значком микрофона, если сейчас в голосовом
+    # канале), и в "облачке" у аватарки в карточке профиля. Пусто —
+    # в нижней панели используется обычная подпись статуса (В сети/Не
+    # беспокоить/Невидимка), в карточке облачко не рисуется вовсе.
+    custom_status = models.CharField(max_length=64, blank=True, default="")
     # data-URL (data:image/jpeg;base64,...) — хранится прямо в БД, без
     # ImageField/MEDIA_ROOT/Pillow: аватарки маленькие (сжимаются клиентом до
     # 256x256 перед отправкой), а лишний медиа-сервинг (volume + nginx

@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
-import { ChevronRight, Copy, Check, Plus, Loader2, Users } from 'lucide-react'
+import {
+  ChevronRight, Copy, Check, Mic, Plus, Loader2, Users,
+} from 'lucide-react'
 import { useAuth } from '../auth'
 import { useGateway } from '../gateway'
 import { UserStatus } from '../api'
@@ -7,7 +9,9 @@ import { MAX_ACCOUNTS } from '../accounts'
 import Avatar from './Avatar'
 import CallTopic from './CallTopic'
 import AddAccountModal from './AddAccountModal'
+import ProfileCardHeader from './ProfileCardHeader'
 import { VoiceState } from './AppShell'
+import { VoiceStatus } from './VoiceProvider'
 import { VoiceRosterMember } from './VoiceStage'
 
 const OPTIONS: { value: UserStatus; label: string; caption: string }[] = [
@@ -65,12 +69,16 @@ export default function StatusMenu({
   voice,
   voiceRoster,
   voiceTopic,
+  voiceStatus,
 }: {
   speaking?: boolean
   onOpenProfile: () => void
   voice: VoiceState | null
   voiceRoster: VoiceRosterMember[]
   voiceTopic: string | null
+  /** Только для зелёного значка микрофона в свёрнутой панели — voice сам по
+   * себе означает лишь "идёт попытка подключения", а не "уже говорим". */
+  voiceStatus: VoiceStatus
 }) {
   const { user, updateLocalStatus, knownAccounts, switchAccount } = useAuth()
   const gateway = useGateway()
@@ -157,35 +165,31 @@ export default function StatusMenu({
           speaking={speaking}
         />
         <div className="user-panel-names">
-          <span className="user-panel-username">{user.username}</span>
-          <span className="user-panel-status">{STATUS_LABELS[user.status]}</span>
+          <span className="user-panel-username">{user.display_name || user.username}</span>
+          <span className="user-panel-status">
+            {voice != null && voiceStatus === 'connected' && (
+              <Mic size={11} className="user-panel-mic" />
+            )}
+            {user.custom_status || STATUS_LABELS[user.status]}
+          </span>
         </div>
       </button>
 
       {open && (
         <div className="status-menu-popup profile-popup">
-          {/* Блок 1 — мини-профиль */}
-          <div
-            className="profile-popup-banner"
-            style={{
-              background:
-                user.banner_image ? undefined : user.banner_gradient || undefined,
-              backgroundImage: user.banner_image ? `url(${user.banner_image})` : undefined,
-            }}
-          >
-            <Avatar
-              name={user.username}
-              color={user.avatar_color}
-              image={user.avatar_image}
-              size={86}
-              status={user.status}
-              showStatus
-            />
-            <span className="profile-popup-name">{user.display_name || user.username}</span>
-            {!!user.display_name && (
-              <span className="profile-popup-username">@{user.username}</span>
-            )}
-          </div>
+          {/* Блок 1 — мини-профиль (только просмотр — редактирование в
+              ProfileModal, см. кнопку "Редактировать профиль" ниже). */}
+          <ProfileCardHeader
+            username={user.username}
+            displayName={user.display_name}
+            avatarColor={user.avatar_color}
+            avatarImage={user.avatar_image}
+            bannerGradient={user.banner_gradient}
+            bannerImage={user.banner_image}
+            status={user.status}
+            customStatus={user.custom_status}
+            pronouns={user.pronouns}
+          />
 
           {user.bio && <div className="profile-popup-bio">{user.bio}</div>}
 
