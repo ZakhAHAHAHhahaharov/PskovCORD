@@ -2,7 +2,15 @@
 <html lang="ru">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- maximum-scale=1 + user-scalable=no убирают пинч-зум на мобилке (по
+         запросу — обычный зум клавиатурой/меню браузера на десктопе этим не
+         затрагивается, он вообще недоступен странице). Полноценно пинч
+         блокируют только вместе с gesturestart/wheel-перехватом в main.tsx —
+         сам по себе viewport на части современных iOS игнорируется. -->
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"
+    />
     <title>PskovCord</title>
     <!--
       Пути стабильны, а какой именно favicon отдать (стандартный или личный

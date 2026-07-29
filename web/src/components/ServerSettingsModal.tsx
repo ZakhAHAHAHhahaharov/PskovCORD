@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, ChangeEvent } from 'react'
 import {
-  Camera, Check, Loader2, Plus, Shield, ShieldBan, SlidersHorizontal, Trash2,
-  UserRoundCheck, X,
+  Camera, Check, ChevronLeft, ChevronRight, Loader2, Plus, Shield, ShieldBan,
+  SlidersHorizontal, Trash2, UserRoundCheck, X,
 } from 'lucide-react'
 import {
   api, Member, Role, Server, ServerAccessMode, ServerBanEntry,
@@ -111,6 +111,7 @@ export default function ServerSettingsModal({
   onClose,
   onServerUpdated,
   onMembersChanged,
+  isMobile,
 }: {
   server: Server
   members: Member[]
@@ -118,6 +119,13 @@ export default function ServerSettingsModal({
   onServerUpdated: (s: Server) => void
   /** Список участников менялся (роли/кик/бан) — попросить AppShell перезагрузить. */
   onMembersChanged: () => void
+  /** На мобилке — список вкладок и содержимое активной вкладки два разных
+   * полных "экрана" (тап по вкладке открывает её на весь экран, кнопка
+   * назад закрывает ТОЛЬКО её), а не таб-строка сверху и контент под ней
+   * сразу оба видны, как на ПК. Тот же приём, что у SettingsModal.tsx
+   * (mobileCategoryOpen) — тут название второй раз лишь потому, что
+   * вкладки редактора сервера называются "вкладками", а не "категориями". */
+  isMobile?: boolean
 }) {
   const perms = server.my_permissions
   // «Запросы» имеют смысл только там, где заявки вообще появляются: сервер
@@ -127,6 +135,8 @@ export default function ServerSettingsModal({
     (t) => perms[t.permission] && (t.id !== 'requests' || requestsRelevant),
   )
   const [tab, setTab] = useState<TabId>(availableTabs[0]?.id ?? 'profile')
+  const [mobileTabOpen, setMobileTabOpen] = useState(false)
+  const currentTab = availableTabs.find((t) => t.id === tab)
 
   // Esc закрывает редактор — он занимает весь экран, кликать мимо неудобно.
   // Общий стек модалок (см. modalStack.ts): если поверх редактора открыто
@@ -134,26 +144,51 @@ export default function ServerSettingsModal({
   useEscToClose(onClose)
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
+    // settings-overlay — та же полноэкранная мобильная раскладка, что и у
+    // личных настроек (см. .settings-overlay в index.css): без неё
+    // .server-settings-modal на мобилке остался бы узкой центрированной
+    // модалкой (её 860px десктопной ширины клампит только базовый
+    // .modal{max-width:92vw}), а внутренний mobile-category-open toggle
+    // (список вкладок ↔ контент вкладки) рассчитан ровно на полный экран.
+    <div className="modal-overlay settings-overlay" onClick={onClose}>
       <div
         className="modal settings-modal server-settings-modal"
         onClick={(e) => e.stopPropagation()}
       >
         <h2 className="modal-title settings-modal-title">
-          <Avatar name={server.name} color="#5865f2" image={server.icon} size={26} />
-          <span className="settings-modal-title-text">Настройки сервера — {server.name}</span>
+          {isMobile && (
+            <button
+              className="chat-back-btn"
+              title="Назад"
+              onClick={() => (mobileTabOpen ? setMobileTabOpen(false) : onClose())}
+            >
+              <ChevronLeft size={20} />
+            </button>
+          )}
+          {isMobile && mobileTabOpen ? (
+            <span className="settings-modal-title-text">{currentTab?.label}</span>
+          ) : (
+            <>
+              <Avatar name={server.name} color="#5865f2" image={server.icon} size={26} />
+              <span className="settings-modal-title-text">Настройки сервера — {server.name}</span>
+            </>
+          )}
         </h2>
 
-        <div className="settings-body">
+        <div className={`settings-body${isMobile && mobileTabOpen ? ' mobile-category-open' : ''}`}>
           <nav className="settings-sidebar">
             {availableTabs.map((t) => (
               <button
                 key={t.id}
                 type="button"
                 className={`settings-sidebar-item${tab === t.id ? ' active' : ''}`}
-                onClick={() => setTab(t.id)}
+                onClick={() => {
+                  setTab(t.id)
+                  if (isMobile) setMobileTabOpen(true)
+                }}
               >
                 {t.icon} {t.label}
+                {isMobile && <ChevronRight size={15} className="settings-row-chevron" />}
               </button>
             ))}
           </nav>
