@@ -50,6 +50,7 @@ export default function ProfileCardHeader({
     canRemoveBanner: boolean
     onSaveDisplayName: (value: string) => Promise<void>
     onSavePronouns: (value: string) => Promise<void>
+    onSaveCustomStatus: (value: string) => Promise<void>
   }
 }) {
   const avatarNode = (
@@ -97,13 +98,31 @@ export default function ProfileCardHeader({
         </ImageHoverMenu>
       )}
 
-      {!!customStatus && (
-        <div className="profile-status-bubble">
+      {edit ? (
+        // В режиме редактирования облачко рисуем ВСЕГДА (даже пустым) — иначе
+        // никак не догадаться, что статус-текст вообще можно задать: у самого
+        // поля нет отдельной подписи/строки за пределами облачка.
+        <div className="profile-status-bubble profile-status-bubble-editable">
           <span className="profile-status-bubble-icon">
             <MessageCircle size={11} />
           </span>
-          <span className="profile-status-bubble-text">{customStatus}</span>
+          <InlineEditableText
+            className="profile-status-bubble-text"
+            value={customStatus}
+            placeholder="Статус"
+            maxLength={64}
+            onSave={edit.onSaveCustomStatus}
+          />
         </div>
+      ) : (
+        !!customStatus && (
+          <div className="profile-status-bubble">
+            <span className="profile-status-bubble-icon">
+              <MessageCircle size={11} />
+            </span>
+            <span className="profile-status-bubble-text">{customStatus}</span>
+          </div>
+        )
       )}
 
       {edit ? (

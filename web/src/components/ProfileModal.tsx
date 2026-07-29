@@ -101,6 +101,7 @@ export default function ProfileModal({ onClose }: { onClose: () => void }) {
               canRemoveBanner: !!(user.banner_gradient || user.banner_image),
               onSaveDisplayName: (v) => patch({ display_name: v }),
               onSavePronouns: (v) => patch({ pronouns: v }),
+              onSaveCustomStatus: (v) => patch({ custom_status: v }),
             }}
           />
           <input

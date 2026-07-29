@@ -1032,7 +1032,10 @@ input {
 
 .profile-popup-meta-dot {
   flex-shrink: 0;
-  font-size: 10px;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1;
+  margin: 0 2px;
   color: rgba(255, 255, 255, 0.5);
 }
 
@@ -1105,6 +1108,17 @@ input {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* .profile-status-bubble-text заодно и className InlineEditableText в
+   режиме редактирования (ProfileModal) — двойной класс перебивает более
+   просторный base-паддинг .inline-editable-*, в тесном облачке ему не
+   место (та же логика, что у bio/заметки чуть ниже). */
+.inline-editable-display.profile-status-bubble-text,
+.inline-editable-input.profile-status-bubble-text {
+  padding: 0;
+  margin: 0;
+  min-width: 40px;
 }
 
 .profile-popup-bio {
@@ -1216,6 +1230,17 @@ input {
 .profile-popup-banner:hover .profile-banner-hover-menu .image-hover-menu-trigger,
 .profile-banner-hover-menu:has(.image-hover-menu-popup) .image-hover-menu-trigger {
   opacity: 1;
+}
+
+/* Кнопка сидит у ПРАВОГО края баннера (right:6px выше) — базовый поповер
+   ImageHoverMenu растёт от left:0 (годится для аватарки слева), здесь же
+   рос бы ЗА пределы баннера/модалки вправо. Растим от правого края
+   триггера влево вместо этого — .modal неявно получает overflow-x:auto
+   вместе с overflow-y:auto (см. index.css .modal), поэтому вылезающий
+   вправо поповер раньше растягивал в скролл всю модалку целиком. */
+.profile-banner-hover-menu .image-hover-menu-popup {
+  left: auto;
+  right: 0;
 }
 
 /* ---- InlineEditableText (InlineEditableText.tsx) — поля профиля без
