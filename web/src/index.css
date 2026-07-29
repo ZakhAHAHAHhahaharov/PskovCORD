@@ -1,4 +1,4 @@
-:root {
+﻿:root {
   --rail-bg: #1e1f22;
   --sidebar-bg: #2b2d31;
   --chat-bg: #313338;
@@ -1947,6 +1947,14 @@ textarea.inline-editable-input {
   min-width: 0;
   height: 100%;
   background: var(--chat-bg);
+  /* Геометрия ленты миниатюр развёрнутой демонстрации. Живёт на .voice-stage,
+     а не на .voice-stage-expanded, потому что от неё считает своё положение и
+     .voice-stage-participants-toggle — а он ленте не родственник, а сосед. */
+  --filmstrip-bottom: 88px;
+  --filmstrip-height: 106px;
+  /* На столько ужимается демка сверху И снизу, когда лента открыта: полоса
+     ленты плюс просвет, чтобы её подпись не уезжала под миниатюры. */
+  --filmstrip-reserve: 208px;
 }
 
 .voice-stage:fullscreen {
@@ -2026,27 +2034,37 @@ textarea.inline-editable-input {
   background: #c8393c;
 }
 
-/* Переключатель ленты участников демонстрации — отдельной плавающей кнопкой
-   НАД voice-controls-bar (24px отступ снизу + его 42px высоты + зазор), а
-   не внутри неё: прячется/появляется вместе с панелью так же, по showControls. */
+/* Переключатель ленты участников — ярлычок самой ленты. Лента закрыта: стоит
+   НАД voice-controls-bar (24px отступ снизу + его 42px высоты + зазор).
+   Открыта (.active): переезжает на верхнюю кромку ленты и лежит ПОВЕРХ
+   миниатюр — тот же жест, что тянет ленту, остаётся под курсором на том же
+   месте относительно неё. Прячется/появляется вместе с панелью, по
+   showControls. */
 .voice-stage-participants-toggle {
   position: absolute;
   left: 50%;
-  bottom: 78px;
+  /* 24px отступ .voice-controls-bar снизу + её 58px высоты + просвет. */
+  bottom: 90px;
   transform: translateX(-50%);
   z-index: 20;
-  width: 42px;
-  height: 42px;
+  height: 34px;
+  padding: 0 12px;
   display: flex;
   align-items: center;
-  justify-content: center;
-  border-radius: 12px;
+  gap: 4px;
+  border-radius: 17px;
   background: rgba(0, 0, 0, 0.72);
   backdrop-filter: blur(12px);
   color: #fff;
   opacity: 0;
   pointer-events: none;
-  transition: opacity 0.2s ease;
+  transition: opacity 0.2s ease, bottom 0.25s ease, background 0.15s ease;
+}
+
+/* Кромка ленты минус треть высоты кнопки — она заходит на миниатюры сверху,
+   как ярлычок на вкладке. */
+.voice-stage-participants-toggle.active {
+  bottom: calc(var(--filmstrip-bottom) + var(--filmstrip-height) - 22px);
 }
 
 .voice-stage-participants-toggle.visible {
@@ -2055,11 +2073,7 @@ textarea.inline-editable-input {
 }
 
 .voice-stage-participants-toggle:hover {
-  background: rgba(255, 255, 255, 0.14);
-}
-
-.voice-stage-participants-toggle.active {
-  background: var(--blurple);
+  background: rgba(0, 0, 0, 0.88);
 }
 
 /* ---- экран-приглашение канала, к которому мы не подключены (VoiceLanding) ---- */
@@ -2145,22 +2159,85 @@ textarea.inline-editable-input {
   filter: brightness(1.1);
 }
 
-.voice-stage-header {
-  height: 48px;
+/* Шапка и подвал — накладки поверх содержимого, прозрачные и без тени, и
+   появляются/уходят вместе с .voice-controls-bar (класс visible вешает
+   VoiceStage по showControls). Раньше шапка была полосой в колонке: она
+   постоянно занимала 48px высоты и отделяла звонок рамкой от остального
+   интерфейса даже тогда, когда смотреть в неё незачем. */
+.voice-stage-header,
+.voice-stage-footer {
+  position: absolute;
+  left: 0;
+  right: 0;
+  z-index: 21;
+  height: 34px;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 0 16px;
-  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.2), 0 1.5px 0 rgba(0, 0, 0, 0.05);
-  flex-shrink: 0;
+  gap: 6px;
+  padding: 0 10px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s ease;
+}
+
+.voice-stage-header {
+  top: 0;
+}
+
+/* Действия над всем экраном звонка (окно, полный экран) — в правом нижнем
+   углу, поэтому подвал прижимает своё содержимое вправо. */
+.voice-stage-footer {
+  bottom: 0;
+  justify-content: flex-end;
+}
+
+.voice-stage-header.visible,
+.voice-stage-footer.visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.voice-stage-footer .icon-btn {
+  color: #fff;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(8px);
+}
+
+.voice-stage-footer .icon-btn:hover {
+  background: rgba(255, 255, 255, 0.18);
 }
 
 .voice-stage-title {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-weight: 700;
-  color: var(--heading-text);
+  min-width: 0;
+  padding: 3px 8px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(8px);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.voice-stage-title svg {
+  flex-shrink: 0;
+}
+
+/* Распорка на месте экрана звонка, пока тот живёт в pip-окне. */
+.voice-stage-pip-placeholder {
+  display: none;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--text-muted);
+  font-size: 14px;
+  background: var(--chat-bg);
 }
 
 .voice-stage-grid {
@@ -2333,16 +2410,14 @@ textarea.inline-editable-input {
   background: rgba(0, 0, 0, 0.8);
 }
 
+/* Фон НЕ переопределяем: раскрытие демонстрации не должно перекрашивать
+   main в чёрный — от неё меняется только раскладка. Чёрные поля по бокам
+   картинки не нужны: бокс демки сам ровно по её соотношению сторон, см.
+   .voice-stage-expanded-media. */
 .voice-stage-expanded {
   position: relative;
   flex: 1;
   min-height: 0;
-  background: #000;
-  /* Полоса, которую занимает открытая лента миниатюр вместе с просветом до
-     .voice-controls-bar и переключателем ленты — на столько же ужимается
-     демонстрация. Это bottom(128) + height(106) ленты + небольшой зазор,
-     чтобы накладка с подписью и кнопками не уезжала под миниатюры. */
-  --filmstrip-reserve: 248px;
 }
 
 /* Подпись + кнопки развёрнутого тайла — накладкой в левом нижнем углу
@@ -2376,28 +2451,6 @@ textarea.inline-editable-input {
   background: rgba(255, 255, 255, 0.15);
 }
 
-/* Открыть-в-окне/полноэкран — зеркально overlay, в правом нижнем углу. */
-.voice-stage-expanded-corner {
-  position: absolute;
-  right: 12px;
-  bottom: 12px;
-  z-index: 1;
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  padding: 2px;
-  border-radius: 6px;
-  background: rgba(0, 0, 0, 0.6);
-}
-
-.voice-stage-expanded-corner .icon-btn {
-  color: #fff;
-}
-
-.voice-stage-expanded-corner .icon-btn:hover {
-  background: rgba(255, 255, 255, 0.15);
-}
-
 /* Лента миниатюр — плавающая полоса НАД .voice-controls-bar поверх видео, а
    не строка во flex-колонке под ним: строка забирала высоту только снизу и
    утаскивала демонстрацию вверх, а тут центр демки остаётся центром мейна
@@ -2407,9 +2460,7 @@ textarea.inline-editable-input {
   position: absolute;
   left: 0;
   right: 0;
-  /* Над .voice-stage-participants-toggle (bottom 78px + 42px высоты), который
-     сам стоит над .voice-controls-bar. */
-  bottom: 128px;
+  bottom: var(--filmstrip-bottom);
   z-index: 15;
   height: 0;
   overflow: hidden;
@@ -2419,7 +2470,7 @@ textarea.inline-editable-input {
 
 .voice-stage-expanded.with-filmstrip .voice-stage-filmstrip {
   /* --tile-w (160px) по 16:9 даёт 90px + вертикальные отступы inner. */
-  height: 106px;
+  height: var(--filmstrip-height);
   pointer-events: auto;
 }
 
@@ -2430,7 +2481,7 @@ textarea.inline-editable-input {
      первые тайлы, как это делает обычный center. */
   justify-content: safe center;
   gap: 8px;
-  height: 106px;
+  height: var(--filmstrip-height);
   padding: 8px 12px;
   overflow-x: auto;
   overflow-y: hidden;
@@ -2457,24 +2508,45 @@ textarea.inline-editable-input {
   display: none;
 }
 
-/* Демонстрация всегда занимает весь мейн и потому стоит ровно по его центру
-   (object-fit: contain вписывает картинку внутрь бокса). */
+/* Область под демонстрацию всегда занимает весь мейн, поэтому сама демка
+   стоит ровно по его центру. */
 .voice-stage-expanded-video {
   position: absolute;
   inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   overflow: hidden;
   cursor: pointer;
   transition: top 0.25s ease, bottom 0.25s ease;
+  /* Единица cqh для формулы ширины ниже. Размер этого элемента задан
+     абсолютным позиционированием, так что size-контейнер тут безопасен. */
+  container-type: size;
+}
+
+/* Бокс ровно по соотношению сторон потока (--demo-ar — число, приходит из
+   loadedmetadata, до него 16:9) и не крупнее доступного места. Именно к его
+   углам прибита подпись — потому она лежит НА картинке, как у мини-тайлов, а
+   не в пустом чёрном поле сбоку, как было при боксе во весь контейнер.
+   Формулой, а не парой max-width/max-height: max-* транслируется через
+   aspect-ratio обратно только с ОПРЕДЕЛЁННОЙ оси, поэтому любой вариант с
+   width:100%/height:100% ломал пропорции по одной из двух сторон. */
+.voice-stage-expanded-media {
+  position: relative;
+  --demo-ar-safe: var(--demo-ar, 1.7778);
+  width: min(100%, calc(100cqh * var(--demo-ar-safe)));
+  aspect-ratio: var(--demo-ar-safe);
+  overflow: hidden;
 }
 
 /* Лента открыта — демка ужимается, но её центр остаётся центром мейна:
-   верхний и нижний отступы одинаковые. min(…, 34%) — чтобы на низком окне
+   верхний и нижний отступы одинаковые. min(…, 30%) — чтобы на низком окне
    отступы не съели картинку целиком (ценой того, что там миниатюры лягут на
    её нижнюю кромку). Нижний край при этом поднимается, а вместе с ним и
-   накладка с подписью и кнопками (см. -overlay). */
+   накладка с подписью (см. -overlay). */
 .voice-stage-expanded.with-filmstrip .voice-stage-expanded-video {
-  top: min(var(--filmstrip-reserve), 34%);
-  bottom: min(var(--filmstrip-reserve), 34%);
+  top: min(var(--filmstrip-reserve), 30%);
+  bottom: min(var(--filmstrip-reserve), 30%);
 }
 
 /* width/height:100% + object-fit:contain вместо width/height:auto +
@@ -2486,7 +2558,7 @@ textarea.inline-editable-input {
    вписывается только видимое содержимое через object-fit, бокс не меняется
    никогда. Тот же приём, что и у .screen-preview-tile video. overflow:hidden
    на контейнере — подстраховка на случай если что-то всё же вылезет. */
-.voice-stage-expanded-video video {
+.voice-stage-expanded-media video {
   position: absolute;
   inset: 0;
   width: 100%;
@@ -2494,9 +2566,17 @@ textarea.inline-editable-input {
   object-fit: contain;
 }
 
-.voice-stage-expanded-video .screen-preview-placeholder {
+.voice-stage-expanded-media .screen-preview-placeholder {
   position: absolute;
   inset: 0;
+}
+
+/* Развёрнутый УЧАСТНИК — не видео, соотношение сторон ему ни к чему: пусть
+   аватар просто стоит по центру всей области. */
+.voice-stage-expanded-media:has(.participant-expanded) {
+  width: 100%;
+  height: 100%;
+  aspect-ratio: auto;
 }
 
 /* ---- chat ---- */
@@ -5118,134 +5198,82 @@ button.settings-row-clickable:hover .settings-row-label {
 }
 
 /* ---- контекстное меню сервера ---- */
-/* Никаких полос прокрутки внутри меню: пункты «Заглушить сервер»/«Параметры
-   уведомлений» открывают отдельные модалки (ServerMuteModal,
-   ServerNotificationsModal), поэтому содержимое здесь фиксированной высоты и
-   гарантированно помещается. overflow: hidden — страховка (и заодно обрезает
-   ховер-подсветку по скруглению), max-width — от вылета за узкий экран. */
+/* overflow: visible, а НЕ overflow-y: auto — иначе меню обзаводится обеими
+   полосами прокрутки разом: подменю-флауты (заглушение/уведомления) стоят
+   ЗА правым краем меню (left: calc(100% + 8px)), а любое не-visible
+   значение overflow по одной оси делает вторую ось auto, и вылезший флаут
+   тянул горизонтальный скролл, а его высота — вертикальный. Само меню
+   короткое и в экран помещается, а длинное содержимое флаута скроллится
+   внутри него самого (.status-flyout-scroll). */
 .server-context-menu {
   position: fixed;
   z-index: 90;
   width: 280px;
-  max-width: calc(100vw - 16px);
-  max-height: calc(100vh - 16px);
-  overflow: hidden;
+  overflow: visible;
   background: var(--modal-bg);
   border-radius: 10px;
   box-shadow: 0 8px 16px rgba(0, 0, 0, 0.32);
 }
 
-/* Длинное имя сервера/подписи пунктов режем многоточием, а не переносом:
-   иначе строка распирала бы меню и тянула горизонтальную прокрутку. */
-.server-context-menu .profile-popup-label,
-.server-context-menu-text {
-  min-width: 0;
+/* Длинное имя сервера режем многоточием, а не переносом: иначе заголовок
+   распирал бы меню по ширине. */
+.server-context-menu .profile-popup-label {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.server-context-menu .profile-popup-item {
-  min-width: 0;
 }
 
 .server-context-menu .profile-popup-item svg {
   flex-shrink: 0;
 }
 
-/* ---- модалки заглушения / параметров уведомлений сервера ---- */
-.server-option-modal {
-  position: relative;
-  width: 420px;
+/* Подменю по наведению (заглушение/уведомления) — тот же визуальный язык,
+   что и .status-flyout (StatusMenu), но растёт от ВЕРХА строки-триггера
+   (top: 0), а не от низа: этот корневой попап сам top-anchored (растёт вниз
+   от точки правого клика), в отличие от status-menu-popup. */
+.server-menu-flyout {
+  top: 0;
+  bottom: auto;
+  width: 260px;
 }
 
-.server-option-hint {
-  margin-bottom: 12px;
-  font-size: 13px;
-  color: var(--text-muted);
-}
-
-.server-option-list {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding-top: 12px;
-  border-top: 1px solid var(--border-color);
-}
-
-.server-option-list-checks {
-  margin-top: 12px;
-}
-
-.server-option-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 2px;
-}
-
-.server-option-item {
+.server-flyout-item {
   display: flex;
   align-items: center;
-  gap: 8px;
-  width: 100%;
-  padding: 9px 10px;
+  gap: 6px;
+  padding: 8px 10px;
   border-radius: 4px;
   font-size: 14px;
   color: var(--text-normal);
   text-align: left;
 }
 
-.server-option-item:hover {
+.server-flyout-item:hover {
   background: var(--channel-hover);
 }
 
-.server-option-item.active {
+.server-flyout-item.active {
   background: var(--channel-active);
   color: var(--heading-text);
   font-weight: 600;
 }
 
-.server-option-unmute {
-  margin-bottom: 12px;
-  color: var(--green);
-}
-
-.server-option-level {
-  flex-direction: column;
-  align-items: stretch;
-  gap: 2px;
-}
-
-.server-option-level-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  font-weight: 600;
-}
-
-.server-option-level-hint {
-  font-size: 12px;
-  font-weight: 400;
-  color: var(--text-muted);
-}
-
-.server-option-checkbox {
+.server-flyout-checkbox {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 10px;
+  padding: 7px 10px;
   border-radius: 4px;
   font-size: 13px;
   color: var(--text-normal);
   cursor: pointer;
 }
 
-.server-option-checkbox:hover {
+.server-flyout-checkbox:hover {
   background: var(--channel-hover);
 }
 
-.server-option-checkbox input {
+.server-flyout-checkbox input {
   accent-color: var(--blurple);
 }
 
