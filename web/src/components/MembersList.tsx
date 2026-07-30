@@ -1,6 +1,7 @@
 import { MouseEvent as ReactMouseEvent } from 'react'
 import { Volume2 } from 'lucide-react'
 import { Channel, Member, Role } from '../api'
+import { styledNameProps } from '../nameStyle'
 import Avatar from './Avatar'
 import { ProfilePopupUser } from './MiniProfilePopup'
 
@@ -86,7 +87,12 @@ export default function MembersList({
           showStatus
         />
         <div className="member-info">
-          <span className={`member-name ${m.online ? '' : 'dim'}`}>{m.username}</span>
+          <span
+            className={`member-name ${m.online ? '' : 'dim'} ${styledNameProps(m).className}`}
+            style={styledNameProps(m).style}
+          >
+            {m.username}
+          </span>
           {voice && (
             <span className="member-voice">
               <Volume2 size={12} /> {voice}

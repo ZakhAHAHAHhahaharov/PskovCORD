@@ -7,6 +7,7 @@ import { useGateway } from '../gateway'
 import { useHoverFlyout } from '../hooks/useHoverFlyout'
 import { UserStatus } from '../api'
 import { MAX_ACCOUNTS } from '../accounts'
+import { styledNameProps } from '../nameStyle'
 import Avatar from './Avatar'
 import CallTopic from './CallTopic'
 import AddAccountModal from './AddAccountModal'
@@ -146,7 +147,12 @@ export default function StatusMenu({
           speaking={speaking}
         />
         <div className="user-panel-names">
-          <span className="user-panel-username">{user.display_name || user.username}</span>
+          <span
+            className={`user-panel-username ${styledNameProps(user).className}`}
+            style={styledNameProps(user).style}
+          >
+            {user.display_name || user.username}
+          </span>
           <span className="user-panel-status">
             {voice != null && voiceStatus === 'connected' && (
               <Mic size={11} className="user-panel-mic" />

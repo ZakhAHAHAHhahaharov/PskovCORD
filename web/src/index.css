@@ -1044,37 +1044,42 @@ input {
    который делает профиль-карточку похожей на профиль-карточку (Discord/
    LinkedIn/GitHub), а не на цветную плашку с текстом внутри. ---- */
 .profile-card {
-  /* Скругление — здесь, а не через overflow:hidden у .profile-popup: тот
-     обрезал бы боковой флаут выбора статуса (Блок 3 в StatusMenu),
-     который позиционируется ЗА пределами ширины попапа и живёт отдельным
-     сиблингом ниже .profile-card, вне этого контейнера. */
+  /* Раньше overflow:hidden + border-radius стояли прямо тут, на ВСЕЙ
+     карточке (баннер+тело) — заодно обрезали всё, что выходит за границы
+     тела, включая свечение neon-эффекта у отображаемого имени (см.
+     .profile-card-name/.name-style.effect-neon) и его же в DisplayNameStyleModal
+     превью. Само скругление верхних углов нужно ТОЛЬКО ради баннера
+     (см. ниже .profile-card-banner) — тело карточки внизу и так прямоугольное. */
   border-radius: 8px 8px 0 0;
-  overflow: hidden;
 }
 
-/* Точка отсчёта для .profile-styles-tab ниже — позиционируется от НЕЁ, а не
-   от .profile-card (там overflow:hidden ради скруглённых углов баннера
-   обрезал бы всё, что торчит за края). */
-.profile-modal {
+/* Обёртка .modal + закладки "Стили" (см. ProfileModal.tsx) — точка отсчёта
+   для .profile-styles-tab ниже. НЕ на самом .modal: у него overflow-y:auto
+   (см. .modal), который по спеке делает и overflow-x эффективно 'auto'
+   (клипающим), а не 'visible' — абсолютно спозиционированный потомок,
+   торчащий за левый край, был бы им обрезан целиком (это и была причина
+   "торчит не наружу, а как будто overflow:hidden"). */
+.profile-modal-wrap {
   position: relative;
 }
 
-/* Закладка-таб "Стили" (см. ProfileCardHeader) — торчит НАРУЖУ за левым
-   краем карточки, близко к верхнему углу. Числа подобраны под текущий
-   padding .modal (24px) — тег наполовину лежит в этом отступе, наполовину
-   торчит дальше влево. */
+/* Закладка-таб "Стили" — правым краем ВПРИТЫК к левому краю .modal (см.
+   right:100% — стандартный приём "мой правый край = левый край родителя"),
+   левым краем торчит дальше наружу. Фон — тот же, что у самой модалки,
+   специально: с рамкой только по внешним/торцевым сторонам это читается как
+   продолжение модалки, а не отдельная деталь другого цвета. */
 .profile-styles-tab {
   position: absolute;
   top: 14px;
-  left: -14px;
+  right: 100%;
   display: flex;
   align-items: center;
   justify-content: center;
   width: 30px;
-  height: 30px;
-  background: var(--surface-2);
+  height: 32px;
+  background: var(--modal-bg);
   border: 1px solid var(--surface-2-border);
-  border-radius: 8px 0 0 8px;
+  border-radius: 10px 4px 4px 10px;
   color: var(--text-muted);
   box-shadow: -2px 2px 6px rgba(0, 0, 0, 0.3);
 }
@@ -1342,10 +1347,10 @@ input {
 }
 
 .dns-preview-card {
-  border-radius: 8px;
-  overflow: hidden;
-  /* .profile-card внутри сама красится через --modal-bg/--heading-text и
-     т.д., которые в этом поддереве уже переопределены выше. */
+  /* Раньше был свой overflow:hidden — обрезал свечение neon-эффекта у имени
+     в этом самом превью (ровно жалоба "неон на предпросмотре миниатюры
+     обрезается"). Скругление углов уже обеспечивает сама .profile-card-banner
+     внутри (см. index.css), тут отдельно клипать нечего. */
 }
 
 .dns-preview-message-row {
@@ -1362,9 +1367,36 @@ input {
   aspect-ratio: 16 / 9;
 }
 
+/* Мокап строки голосового ростера из левого сайдбара (см. ChannelSidebar
+   VoiceUserRow — там участники голосового канала перечисляются прямо под
+   его названием в списке каналов). */
+.dns-preview-sidebar {
+  border-radius: 6px;
+  background: var(--rail-bg);
+  padding: 6px 4px;
+}
+
+.dns-preview-sidebar-row {
+  /* .voice-user в бою сдвинут под иконку канала (padding-left:28px) — тут
+     показываем только саму строку участника, без родительского канала над
+     ней, так что этот отступ ни к чему. */
+  padding-left: 8px;
+  cursor: default;
+}
+
+.dns-preview-sidebar-row:hover {
+  background: none;
+}
+
 .profile-card-banner {
   position: relative;
   height: 88px;
+  /* Скругление верхних углов + обрезка — ТЕПЕРЬ здесь, а не на всей
+     .profile-card (см. комментарий там): баннер — единственное, что реально
+     нуждается в клипе (картинка/градиент, которым иначе некуда упереться в
+     скруглённый угол), а не тело карточки под ним, где живёт свечение имени. */
+  border-radius: 8px 8px 0 0;
+  overflow: hidden;
   background: var(
     --profile-banner-gradient,
     linear-gradient(135deg, #5865f2 0%, #8b5cf6 55%, #eb459e 100%)
@@ -3183,22 +3215,36 @@ textarea.inline-editable-input {
    красит (см. комментарий в nameStyle.ts, там цвет — inline style.color),
    остальные четыре — самостоятельные эффекты с фолбэком на --blurple, если
    пользователь выбрал эффект, но ещё не выбрал цвет. */
+/* 3 стопа (цвет1→цвет2→цвет1), а не 2 — первый и последний СОВПАДАЮТ, поэтому
+   когда бесконечно повторяющийся background-image (background-size:200%)
+   сшивается сам с собой на границе тайла, шва не видно: там, где кончается
+   один тайл (…→цвет1), сразу начинается копия следующего (цвет1→…) — тот же
+   цвет по обе стороны границы. С двумя стопами (цвет1→цвет2) на границе тайла
+   было ровно наоборот: цвет2 упирался в цвет1 СЛЕДУЮЩЕГО тайла — видимый
+   резкий скачок посередине анимации, а не только на перезапуске. */
 .name-style.effect-gradient {
   background-image: linear-gradient(
     90deg,
     var(--name-color-1, var(--blurple)) 0%,
-    var(--name-color-2, var(--blurple-hover)) 100%
+    var(--name-color-2, var(--blurple-hover)) 50%,
+    var(--name-color-1, var(--blurple)) 100%
   );
   background-size: 200% auto;
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
-  animation: name-style-gradient-shift 4s linear infinite;
+  /* Курсор при редактировании (см. ProfileCardHeader — стиль виден сразу в
+     InlineEditableText) иначе тоже стал бы прозрачным (caret-color по
+     умолчанию наследует currentColor, а тот здесь transparent) и пропал бы
+     из виду прямо во время печати. */
+  caret-color: var(--text-normal);
+  animation: name-style-gradient-shift 3s linear infinite;
 }
 
 @keyframes name-style-gradient-shift {
   to {
-    background-position: 200% center;
+    /* Ровно один период тайла — тот самый бесшовный повтор выше. */
+    background-position: -200% center;
   }
 }
 
@@ -3224,10 +3270,37 @@ textarea.inline-editable-input {
 }
 
 .name-style.effect-cartoon {
+  /* transform (для подпрыгивания ниже) не действует на обычные ИНЛАЙН-боксы
+     (не заменённые элементы) — .message-author приходит сюда как голый
+     <span> без своего display, поэтому именно тут, а не только в анимации.
+     Не ломает окружающий flex/inline-flex контейнер — flex-раскладке всё
+     равно, "блокифицирован" ли сам flex-item. */
+  display: inline-block;
   color: var(--name-color-1, var(--blurple));
-  /* Контрастная обводка (чёрная/белая) — считается на фронте по яркости
-     name-color-1 (см. pickContrastOutline в nameStyle.ts), не хардкод. */
-  -webkit-text-stroke: 1.5px var(--name-outline-color, #000);
+  /* Было 1.5px — при обычных размерах ника (12–19px) настолько толстая
+     обводка залезает на сами буквы и глушит цвет заливки почти до чёрного.
+     Контрастный цвет обводки считается на фронте по яркости name-color-1
+     (см. pickContrastOutline в nameStyle.ts), не хардкод. */
+  -webkit-text-stroke: 0.6px var(--name-outline-color, #000);
+  animation: name-style-cartoon-bounce 1s ease-in-out infinite;
+}
+
+@keyframes name-style-cartoon-bounce {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-3px);
+  }
+}
+
+/* .participant-tile-name нужен СВОЙ inline-flex (иконки мьюта/дефена в ряд
+   с ником) — .name-style.effect-cartoon выше иначе перебил бы его на
+   inline-block. Специфичность здесь выше (3 класса против 2 у правила
+   выше), поэтому побеждает независимо от порядка объявления в файле. */
+.participant-tile-name.name-style.effect-cartoon {
+  display: inline-flex;
 }
 
 .name-style.effect-highlight {

@@ -1,6 +1,7 @@
 import { MouseEvent as ReactMouseEvent } from 'react'
 import { Volume2, MicOff, HeadphoneOff, Monitor, Settings, Pin } from 'lucide-react'
 import { Channel, Member, Server, User } from '../api'
+import { styledNameProps } from '../nameStyle'
 import { VoiceRosterMember } from './VoiceStage'
 import Avatar from './Avatar'
 import CallDuration from './CallDuration'
@@ -69,7 +70,12 @@ function VoiceUserRow({
         size={20}
         speaking={speaking}
       />
-      <span className={speaking ? 'speaking' : ''}>{masked ? maskName(m.username) : m.username}</span>
+      <span
+        className={`${speaking ? 'speaking' : ''} ${styledNameProps(m).className}`}
+        style={styledNameProps(m).style}
+      >
+        {masked ? maskName(m.username) : m.username}
+      </span>
       {m.sharing_screen && (
         <span
           className="demo-badge"

@@ -20,6 +20,7 @@ export default function InlineEditableText({
   multiline = false,
   datalistOptions,
   className,
+  style,
   onSave,
 }: {
   value: string
@@ -31,6 +32,11 @@ export default function InlineEditableText({
    * нативный <datalist>, второго такого паттерна в проекте пока нет. */
   datalistOptions?: string[]
   className?: string
+  /** Стиль ника (см. nameStyle.ts) — единственный текущий потребитель,
+   * ProfileCardHeader.profile-card-name: выбранный эффект должен быть виден
+   * сразу в самом поле ввода, а не только после сохранения. Применяется и в
+   * режиме редактирования (инпут), и в режиме отображения (див ниже). */
+  style?: React.CSSProperties
   onSave: (value: string) => Promise<void>
 }) {
   const [editing, setEditing] = useState(false)
@@ -53,6 +59,7 @@ export default function InlineEditableText({
   if (editing) {
     const commonProps = {
       className: `inline-editable-input ${className ?? ''}`,
+      style,
       autoFocus: true,
       maxLength,
       value: draft,
@@ -92,6 +99,7 @@ export default function InlineEditableText({
   return (
     <div
       className={`inline-editable-display ${className ?? ''} ${!value ? 'empty' : ''}`}
+      style={style}
       onClick={() => {
         setDraft(value)
         setEditing(true)

@@ -1,5 +1,5 @@
 import { useRef, useState, ChangeEvent } from 'react'
-import { Blocks, Calendar, Check, Copy, MessageSquare, Plus } from 'lucide-react'
+import { Blocks, Calendar, Check, Copy, MessageSquare, Paintbrush, Plus } from 'lucide-react'
 import { useAuth } from '../auth'
 import { api, Me } from '../api'
 import { useEscToClose } from '../modalStack'
@@ -107,6 +107,23 @@ export default function ProfileModal({ onClose }: { onClose: () => void }) {
             onClose={() => setShowStylesFlyout(false)}
           />
         )}
+        {/* Обёртка вокруг .modal + закладки "Стили" — тег позиционируется от
+            НЕЁ (см. .profile-modal-wrap в index.css), а не от самого .modal:
+            у того overflow-y:auto (см. index.css .modal), который эффективно
+            клипает и overflow-x тоже (спека: если один из осей не visible, у
+            другой auto вместо visible) — абсолютно спозиционированный
+            потомок, торчащий за левый край .modal, был бы им обрезан. */}
+        <div className="profile-modal-wrap">
+          {!showStylesFlyout && (
+            <button
+              type="button"
+              className="profile-styles-tab"
+              title="Стили"
+              onClick={() => setShowStylesFlyout(true)}
+            >
+              <Paintbrush size={14} />
+            </button>
+          )}
         <div className="modal profile-modal" onClick={(e) => e.stopPropagation()}>
           <ProfileCardHeader
             username={user.username}
@@ -120,6 +137,7 @@ export default function ProfileModal({ onClose }: { onClose: () => void }) {
             customStatus={user.custom_status}
             customStatusEmoji={user.custom_status_emoji}
             pronouns={user.pronouns}
+            nameStyle={user}
             edit={{
               onEditAvatar: () => fileRef.current?.click(),
               onRemoveAvatar: () => patch({ avatar_image: '' }),
@@ -131,7 +149,6 @@ export default function ProfileModal({ onClose }: { onClose: () => void }) {
               onSavePronouns: (v) => patch({ pronouns: v }),
               onEditStatus: () => setShowStatusEditor(true),
               onClearStatus: () => patch({ custom_status: '', custom_status_emoji: '' }),
-              onOpenStyles: () => setShowStylesFlyout(true),
             }}
           />
           <input
@@ -196,6 +213,7 @@ export default function ProfileModal({ onClose }: { onClose: () => void }) {
           <button className="modal-close" onClick={handleClose}>
             Закрыть
           </button>
+        </div>
         </div>
       </div>
 
