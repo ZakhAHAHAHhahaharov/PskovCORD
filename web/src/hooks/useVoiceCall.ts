@@ -28,6 +28,7 @@ interface CallParticipant {
   name_effect: NameEffect
   name_color_1: string
   name_color_2: string
+  name_anim_speed: number
 }
 
 interface IncomingCall {
@@ -93,6 +94,7 @@ export function useVoiceCall(
     muted: p.muted, deafened: p.deafened, sharing_screen: p.sharing_screen,
     name_font: p.name_font, name_effect: p.name_effect,
     name_color_1: p.name_color_1, name_color_2: p.name_color_2,
+    name_anim_speed: p.name_anim_speed,
   }))
   const isInDmCall =
     voice?.room.kind === 'conversation' && activeConversation != null && voice.room.id === activeConversation.id

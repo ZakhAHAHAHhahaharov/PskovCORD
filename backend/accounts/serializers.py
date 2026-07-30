@@ -118,7 +118,7 @@ class UserSerializer(serializers.ModelSerializer):
         fields = [
             "id", "username", "display_name", "avatar_color", "avatar_image",
             "status", "banner_gradient",
-            "name_font", "name_effect", "name_color_1", "name_color_2",
+            "name_font", "name_effect", "name_color_1", "name_color_2", "name_anim_speed",
         ]
 
 
@@ -139,7 +139,7 @@ class MeSerializer(serializers.ModelSerializer):
             "avatar_color", "avatar_image",
             "status", "banner_gradient", "banner_image", "banner_color",
             "dm_privacy",
-            "name_font", "name_effect", "name_color_1", "name_color_2",
+            "name_font", "name_effect", "name_color_1", "name_color_2", "name_anim_speed",
         ]
 
 
@@ -200,7 +200,7 @@ class ProfileUpdateSerializer(serializers.ModelSerializer):
             "custom_status_emoji",
             "avatar_image", "banner_gradient", "banner_image", "banner_color",
             "dm_privacy",
-            "name_font", "name_effect", "name_color_1", "name_color_2",
+            "name_font", "name_effect", "name_color_1", "name_color_2", "name_anim_speed",
             "current_password",
         ]
         extra_kwargs = {
@@ -219,6 +219,7 @@ class ProfileUpdateSerializer(serializers.ModelSerializer):
             "name_effect": {"required": False},
             "name_color_1": {"required": False, "allow_blank": True},
             "name_color_2": {"required": False, "allow_blank": True},
+            "name_anim_speed": {"required": False},
         }
 
     def validate_username(self, value):
@@ -260,6 +261,16 @@ class ProfileUpdateSerializer(serializers.ModelSerializer):
 
     def validate_name_color_2(self, value):
         return validate_hex_color(value)
+
+    # Диапазон синхронизирован со слайдером на фронте (см.
+    # DisplayNameStyleModal.tsx) — 0.5x..2.5x, зажимаем, а не отклоняем: сам
+    # слайдер физически не даёт выйти за диапазон, значение сюда попадает не
+    # с рук набранным JSON'ом, а разве что после его правки в старой вкладке.
+    NAME_ANIM_SPEED_MIN = 0.5
+    NAME_ANIM_SPEED_MAX = 2.5
+
+    def validate_name_anim_speed(self, value):
+        return max(self.NAME_ANIM_SPEED_MIN, min(self.NAME_ANIM_SPEED_MAX, value))
 
     def update(self, instance, validated_data):
         # Новый аватар — сразу же пересчитываем avatar_color как средний

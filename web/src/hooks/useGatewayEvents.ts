@@ -19,6 +19,7 @@ interface CallParticipant {
   name_effect: NameEffect
   name_color_1: string
   name_color_2: string
+  name_anim_speed: number
 }
 
 interface IncomingCall {
@@ -167,6 +168,7 @@ export function useGatewayEvents(params: UseGatewayEventsParams) {
             name_effect: 'standard',
             name_color_1: '',
             name_color_2: '',
+            name_anim_speed: 1,
             online: true,
             status: 'online' as const,
             voice_channel: vc,
@@ -289,6 +291,7 @@ export function useGatewayEvents(params: UseGatewayEventsParams) {
                 name_effect: d.name_effect,
                 name_color_1: d.name_color_1,
                 name_color_2: d.name_color_2,
+                name_anim_speed: d.name_anim_speed,
               }
             : m,
         ),
@@ -429,6 +432,7 @@ export function useGatewayEvents(params: UseGatewayEventsParams) {
             name_effect: 'standard',
             name_color_1: '',
             name_color_2: '',
+            name_anim_speed: 1,
           }
         } else {
           delete next[d.user_id]
@@ -464,6 +468,7 @@ export function useGatewayEvents(params: UseGatewayEventsParams) {
               name_effect: p.name_effect,
               name_color_1: p.name_color_1,
               name_color_2: p.name_color_2,
+              name_anim_speed: p.name_anim_speed,
             }
           }
         }

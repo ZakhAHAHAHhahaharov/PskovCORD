@@ -1061,6 +1061,10 @@ input {
    "торчит не наружу, а как будто overflow:hidden"). */
 .profile-modal-wrap {
   position: relative;
+  /* Зазор между .modal и открытым .styles-flyout — вынесен в переменную,
+     чтобы .profile-styles-tab-open ниже сдвигался в ТОЧНОСТИ на ту же
+     величину и прилипал к флайауту без собственного отступа. */
+  --profile-styles-gap: 10px;
 }
 
 /* Закладка-таб "Стили" — правым краем ВПРИТЫК к левому краю .modal (см.
@@ -1082,17 +1086,32 @@ input {
   border-radius: 10px 4px 4px 10px;
   color: var(--text-muted);
   box-shadow: -2px 2px 6px rgba(0, 0, 0, 0.3);
-  /* Флайаут ниже сидит впритык (right:100%, без зазора) — той же координаты,
-     что и тег, поэтому тег на пару пикселей заходит на его край. Без
-     z-index флайаут (позже в разметке) красился бы поверх и закрывать
-     стало бы нечем — он не тот же .modal, где .modal-overlay сам ловит
-     клик мимо, тут закрывает именно ЭТА кнопка. */
+  /* Пока флайаут закрыт, тег сидит впритык к .modal (правый край = левый
+     край родителя). Как только флайаут открыт — см. .profile-styles-tab-open
+     ниже — тег переезжает вместе с ним к его краю, а не остаётся тут: между
+     .modal и отодвинутым флайаутом появляется зазор (.styles-flyout,
+     --profile-styles-gap), и если бы тег остался на месте, он повис бы
+     ровно в этом зазоре, ни к чему не прилегая. */
+  transition: right 0.12s ease;
   z-index: 2;
 }
 
 .profile-styles-tab:hover {
   color: var(--text-normal);
   background: var(--channel-hover);
+}
+
+/* Открытое состояние — только на десктопе (там же, где вообще есть
+   боковой .styles-flyout, см. блок ниже); на мобильном флайаут подменяет
+   содержимое .modal, а не сидит сбоку, так что этому правилу конкурировать
+   с мобильным right:10px (см. @media ниже) не с чем — на той ширине оно
+   попросту не применяется. right — та же координата, что у .styles-flyout,
+   поэтому тег на пару пикселей заходит на его край тем же приёмом, что и
+   раньше на край .modal. */
+@media (min-width: 769px) {
+  .profile-styles-tab.profile-styles-tab-open {
+    right: calc(100% + var(--profile-styles-gap));
+  }
 }
 
 /* На мобильном поместиться СЛЕВА от модалки негде (см. .styles-flyout —
@@ -1125,9 +1144,10 @@ input {
   position: absolute;
   top: 0;
   bottom: 0;
-  /* Без зазора — впритык к левому краю .modal (та же координата, что и у
-     .profile-styles-tab выше, поэтому и нужен z-index ниже, чем у него). */
-  right: 100%;
+  /* Зазор до .modal — --profile-styles-gap с .profile-modal-wrap. Та же
+     координата, что у .profile-styles-tab-open, поэтому и нужен z-index
+     ниже, чем у него — тег ложится поверх пары пикселей его края. */
+  right: calc(100% + var(--profile-styles-gap));
   width: 440px;
   max-width: 92vw;
   overflow-y: auto;
@@ -3318,22 +3338,29 @@ textarea.inline-editable-input {
 
 .name-style.effect-neon {
   color: var(--name-color-1, var(--blurple));
-  animation: name-style-neon-pulse 2s ease-in-out infinite;
+  /* --name-anim-speed — слайдер в DisplayNameStyleModal (см. nameStyle.ts
+     styledNameProps), 1 = обычная скорость, больше — короче period. Фолбэк
+     на 1 нужен местам, куда style-переменная почему-то не долетела (см.
+     комментарий у dm_voice_state_update в useGatewayEvents.ts). */
+  animation: name-style-neon-pulse calc(2s / var(--name-anim-speed, 1)) ease-in-out infinite;
 }
 
 /* Дышит именно радиус свечения (text-shadow), а не opacity всего текста —
-   сам ник остаётся полностью читаемым, "неонит" только ореол вокруг него. */
+   сам ник остаётся полностью читаемым, "неонит" только ореол вокруг него.
+   Амплитуда (2px/6px -> 12px/28px) — заметно шире, чем раньше (4/10 -> 8/20):
+   на прежней разнице рост-и-затухание глаза почти не ловили, выглядело как
+   ровное свечение, а не пульс. */
 @keyframes name-style-neon-pulse {
   0%,
   100% {
     text-shadow:
-      0 0 4px var(--name-color-1, var(--blurple)),
-      0 0 10px var(--name-color-1, var(--blurple));
+      0 0 2px var(--name-color-1, var(--blurple)),
+      0 0 6px var(--name-color-1, var(--blurple));
   }
   50% {
     text-shadow:
-      0 0 8px var(--name-color-1, var(--blurple)),
-      0 0 20px var(--name-color-1, var(--blurple));
+      0 0 12px var(--name-color-1, var(--blurple)),
+      0 0 28px var(--name-color-1, var(--blurple));
   }
 }
 
@@ -3350,7 +3377,8 @@ textarea.inline-editable-input {
      Контрастный цвет обводки считается на фронте по яркости name-color-1
      (см. pickContrastOutline в nameStyle.ts), не хардкод. */
   -webkit-text-stroke: 0.6px var(--name-outline-color, #000);
-  animation: name-style-cartoon-bounce 1s ease-in-out infinite;
+  /* См. .name-style.effect-neon выше — тот же --name-anim-speed. */
+  animation: name-style-cartoon-bounce calc(1s / var(--name-anim-speed, 1)) ease-in-out infinite;
 }
 
 @keyframes name-style-cartoon-bounce {

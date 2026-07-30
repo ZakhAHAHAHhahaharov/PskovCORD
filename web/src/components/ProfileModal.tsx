@@ -116,7 +116,7 @@ export default function ProfileModal({ onClose }: { onClose: () => void }) {
         <div className="profile-modal-wrap">
           <button
             type="button"
-            className="profile-styles-tab"
+            className={`profile-styles-tab ${showStylesFlyout ? 'profile-styles-tab-open' : ''}`}
             title={showStylesFlyout ? 'Закрыть' : 'Стили'}
             // Тег — СИБЛИНГ .modal (не внутри него), поэтому клик по нему
             // без остановки всплывал бы до onClick={handleClose} на

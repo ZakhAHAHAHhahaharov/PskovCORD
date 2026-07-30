@@ -62,14 +62,14 @@ export default function ProfileStylesFlyout({
       </div>
 
       <div className="styles-flyout-section">
-        <div className="styles-flyout-section-title">Цвет баннера</div>
+        <div className="styles-flyout-section-title">Цвет фона баннера</div>
         <label className="styles-flyout-color-row">
           <input
             type="color"
             value={bannerColor || '#000000'}
             onChange={(e) => onSetBannerColor(e.target.value)}
           />
-          <span className="styles-hint">Виден сквозь прозрачные пиксели гифки-баннера.</span>
+          <span className="styles-hint">Виден сквозь прозрачные пиксели баннера.</span>
         </label>
         {bannerColor && (
           <button

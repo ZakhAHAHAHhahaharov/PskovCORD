@@ -100,6 +100,7 @@ export interface VoiceRosterMember {
   name_effect: NameEffect
   name_color_1: string
   name_color_2: string
+  name_anim_speed: number
 }
 
 /** Живой `<video>`, привязанный к MediaStream по ref — не пересоздаётся при

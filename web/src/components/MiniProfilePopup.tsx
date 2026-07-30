@@ -30,6 +30,7 @@ export interface ProfilePopupUser {
   name_effect: NameEffect
   name_color_1: string
   name_color_2: string
+  name_anim_speed: number
 }
 
 export interface ProfilePopupTarget {

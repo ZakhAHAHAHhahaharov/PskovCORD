@@ -135,6 +135,13 @@ class User(AbstractUser):
     # визуальный дифф для тех, кто это не настраивал).
     name_color_1 = models.CharField(max_length=7, blank=True, default="")
     name_color_2 = models.CharField(max_length=7, blank=True, default="")
+    # Множитель скорости CSS-анимации для эффектов ника, у которых она есть
+    # (neon/cartoon — см. фронт nameStyle.ts/index.css, .name-style.effect-*).
+    # 1.0 — обычная скорость, больше — быстрее, меньше — медленнее; диапазон
+    # (0.5–2.5) зажимается на входе, см. validate_name_anim_speed. Для
+    # standard/gradient/highlight поле просто не используется — CSS-переменная
+    # там ни на что не влияет.
+    name_anim_speed = models.FloatField(default=1.0)
     # Выбирается самим пользователем; фактическая видимость другим (online/dnd/offline)
     # вычисляется отдельно с учётом реального подключения — см. chat.presence_status.
     status = models.CharField(max_length=10, choices=STATUS_CHOICES, default=ONLINE)
