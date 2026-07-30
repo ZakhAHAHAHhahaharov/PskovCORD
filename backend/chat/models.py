@@ -308,6 +308,14 @@ class ServerInvite(models.Model):
     status = models.CharField(
         max_length=10, choices=STATUS_CHOICES, default=PENDING)
     created_at = models.DateTimeField(auto_now_add=True)
+    # Только для LINK — сколько раз по ЭТОЙ ссылке реально вступили (см.
+    # chat.views.ServerInviteRedeem). У DIRECT не растёт — там и так ровно
+    # один адресат, статус accepted/declined говорит то же самое. Нужен,
+    # чтобы у каждого участника была СВОЯ ссылка (см. created_by в lookup'е
+    # ServerInviteLink.get) и было видно, сколько народу привёл именно он —
+    # себе самому в ServerInviteModal и модераторам в ServerSettingsModal
+    # (см. ServerInviteLinksList, требует manage_members).
+    uses = models.PositiveIntegerField(default=0, verbose_name="Использований")
 
     class Meta:
         ordering = ["-created_at", "id"]

@@ -3,6 +3,7 @@ import { Check, Copy, Link as LinkIcon, Send } from 'lucide-react'
 import { api, KnownPerson, Server } from '../api'
 import { useEscToClose } from '../modalStack'
 import Avatar from './Avatar'
+import { pluralPeople } from './ServerSettingsModal'
 
 /**
  * Модалка «Пригласить на сервер» — правый клик по пилюле сервера.
@@ -11,8 +12,11 @@ import Avatar from './Avatar'
  * backend chat.models.ServerInvite):
  *   - личное приглашение конкретному человеку — придёт карточкой сервера
  *     прямо в переписку с ним (см. ServerInviteCard/MessageList);
- *   - постоянная многоразовая ссылка — можно скопировать и отправить куда
- *     угодно, даже мимо этого приложения.
+ *   - постоянная многоразовая ссылка — СВОЯ у каждого участника (см.
+ *     backend ServerInviteLink), можно скопировать и отправить куда угодно,
+ *     даже мимо этого приложения. Сколько людей уже вступило именно по ней —
+ *     видно тут же, а модераторам весь список сразу — в ServerSettingsModal
+ *     (вкладка «Доступ»).
  */
 export default function ServerInviteModal({
   server,
@@ -29,6 +33,7 @@ export default function ServerInviteModal({
   const [error, setError] = useState('')
 
   const [link, setLink] = useState<string | null>(null)
+  const [uses, setUses] = useState<number | null>(null)
   const [linkLoading, setLinkLoading] = useState(true)
   const [copied, setCopied] = useState(false)
 
@@ -36,8 +41,11 @@ export default function ServerInviteModal({
     let cancelled = false
     ;(async () => {
       try {
-        const { code } = await api.serverInviteLink(server.id)
-        if (!cancelled) setLink(`${location.origin}${location.pathname}?invite=${code}`)
+        const { code, uses: usesCount } = await api.serverInviteLink(server.id)
+        if (!cancelled) {
+          setLink(`${location.origin}${location.pathname}?invite=${code}`)
+          setUses(usesCount)
+        }
       } catch {
         /* ссылку не показываем — личное приглашение всё ещё работает */
       } finally {
@@ -128,8 +136,9 @@ export default function ServerInviteModal({
           </button>
         </div>
         <p className="srv-hint">
-          Ссылка многоразовая и работает даже для сервера «только по приглашению» — обладание
-          ей и есть приглашение.
+          Ссылка многоразовая, только твоя и работает даже для сервера «только по приглашению» —
+          обладание ей и есть приглашение.
+          {uses != null && ` Приглашено: ${uses} ${pluralPeople(uses)}.`}
         </p>
 
         <button className="modal-close" onClick={onClose}>

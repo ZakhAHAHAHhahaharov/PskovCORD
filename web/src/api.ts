@@ -262,6 +262,18 @@ export interface ServerInviteEntry {
   status: ServerInviteStatus
 }
 
+/** Одна пригласительная ссылка участника — строка модераторского списка
+ * (см. api.serverInviteLinks, GET /api/servers/<id>/invite-links). */
+export interface ServerInviteLinkEntry {
+  id: number
+  code: string
+  channel: { id: number; name: string } | null
+  created_by: User
+  /** Сколько людей реально вступило по этой ссылке. */
+  uses: number
+  created_at: string
+}
+
 /** Приглашение, встроенное карточкой в сообщение диалога (см.
  * ChatMessageBase.server_invite) — вместо отдельной вкладки «Приглашения»
  * на домашнем экране (см. HomeSidebar/ServerInviteCard). */
@@ -845,14 +857,24 @@ export const api = {
     req(`/api/invites/${inviteId}`, { method: 'POST' }),
   declineServerInvite: (inviteId: number) =>
     req(`/api/invites/${inviteId}`, { method: 'DELETE' }),
-  /** Постоянная многоразовая ссылка сервера — одна на сервер, повторные
-   * вызовы отдают тот же код. channelId — своя стабильная ссылка на
-   * конкретный голосовой канал вместо ссылки на сервер целиком. */
-  serverInviteLink: (serverId: number, channelId?: number): Promise<{ code: string }> =>
+  /** Постоянная многоразовая ссылка — СВОЯ у каждого участника (повторные
+   * вызовы одним и тем же человеком отдают тот же код, а не плодят новые).
+   * uses — сколько людей реально вступило именно по ней. channelId — своя
+   * стабильная ссылка на конкретный голосовой канал вместо ссылки на сервер
+   * целиком. */
+  serverInviteLink: (
+    serverId: number,
+    channelId?: number,
+  ): Promise<{ code: string; uses: number }> =>
     req(
       `/api/servers/${serverId}/invite-link` +
         (channelId != null ? `?channel_id=${channelId}` : ''),
     ),
+  /** Модераторский список ВСЕХ пригласительных ссылок сервера — у каждого
+   * участника своя (см. serverInviteLink выше), тут видно разом, кто сколько
+   * людей привёл. Требует manage_members. */
+  serverInviteLinks: (serverId: number): Promise<ServerInviteLinkEntry[]> =>
+    req(`/api/servers/${serverId}/invite-links`),
   /** Предпросмотр ссылки БЕЗ вступления — только для ссылок на конкретный
    * канал (см. backend InvitePreview); обычные серверные ссылки 404. */
   invitePreview: (code: string): Promise<InvitePreview> =>

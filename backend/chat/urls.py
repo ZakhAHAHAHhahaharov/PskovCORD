@@ -19,6 +19,8 @@ urlpatterns = [
          views.ServerInvites.as_view(), name="server-invites"),
     path("servers/<int:server_id>/invite-link",
          views.ServerInviteLink.as_view(), name="server-invite-link"),
+    path("servers/<int:server_id>/invite-links",
+         views.ServerInviteLinksList.as_view(), name="server-invite-links"),
     path("servers/<int:server_id>/members",
          views.ServerMembers.as_view(), name="server-members"),
     path("servers/<int:server_id>/members/<int:user_id>",

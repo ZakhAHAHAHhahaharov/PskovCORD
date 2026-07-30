@@ -2,12 +2,12 @@ import {
   forwardRef, useEffect, useImperativeHandle, useRef, useState, ChangeEvent,
 } from 'react'
 import {
-  Camera, Check, ChevronLeft, ChevronRight, Crown, Loader2, Plus, Shield,
-  ShieldBan, SlidersHorizontal, Trash2, UserRoundCheck, X,
+  Camera, Check, ChevronLeft, ChevronRight, Copy, Crown, Loader2, Plus,
+  Shield, ShieldBan, SlidersHorizontal, Trash2, UserRoundCheck, X,
 } from 'lucide-react'
 import {
   api, Member, Role, Server, ServerAccessMode, ServerBanEntry,
-  ServerJoinRequestEntry, ServerPermission, ServerRule,
+  ServerInviteLinkEntry, ServerJoinRequestEntry, ServerPermission, ServerRule,
 } from '../api'
 import {
   BANNER_MAX_BYTES, BANNER_MAX_H, BANNER_MAX_W, GRADIENT_PRESETS,
@@ -328,7 +328,6 @@ const ProfileTab = forwardRef<TabHandle, { server: Server; onServerUpdated: (s: 
   const [description, setDescription] = useState(server.description)
   const [tags, setTags] = useState<string[]>(server.tags)
   const [tagDraft, setTagDraft] = useState('')
-  const [isPrivate, setIsPrivate] = useState(server.is_private)
 
   const initial = parseGradient(server.banner_gradient)
   const initialBannerMode: 'gradient' | 'gif' = server.banner_image ? 'gif' : 'gradient'
@@ -352,7 +351,6 @@ const ProfileTab = forwardRef<TabHandle, { server: Server; onServerUpdated: (s: 
     name !== server.name ||
     icon !== server.icon ||
     description !== server.description ||
-    isPrivate !== server.is_private ||
     tags.length !== server.tags.length ||
     tags.some((t, i) => t !== server.tags[i]) ||
     bannerMode !== initialBannerMode ||
@@ -366,7 +364,6 @@ const ProfileTab = forwardRef<TabHandle, { server: Server; onServerUpdated: (s: 
     setIcon(server.icon)
     setDescription(server.description)
     setTags(server.tags)
-    setIsPrivate(server.is_private)
     setBannerMode(initialBannerMode)
     setGradientFrom(initial.from)
     setGradientTo(initial.to)
@@ -425,7 +422,6 @@ const ProfileTab = forwardRef<TabHandle, { server: Server; onServerUpdated: (s: 
         icon,
         description,
         tags,
-        is_private: isPrivate,
         banner_gradient: desiredGradient,
         banner_image: desiredBannerImage,
       })
@@ -656,17 +652,6 @@ const ProfileTab = forwardRef<TabHandle, { server: Server; onServerUpdated: (s: 
         rows={4}
         onChange={(e) => {
           setDescription(e.target.value)
-          touch()
-        }}
-      />
-
-      <div className="field-label">Приватность</div>
-      <Toggle
-        checked={isPrivate}
-        label="Приватный сервер"
-        hint="Описание, особенности и участников видят только те, кто уже на сервере."
-        onChange={(v) => {
-          setIsPrivate(v)
           touch()
         }}
       />
@@ -1100,9 +1085,59 @@ function RequestsTab({
 
 // --- 4. Доступ ------------------------------------------------------------
 
+/** "1 человек" / "2 человека" / "5 человек" — обычное русское склонение
+ * после числительного, не просто плоское "человек(а)". Экспортирован —
+ * тем же числом приглашённых по своей ссылке хвастается ServerInviteModal. */
+export function pluralPeople(n: number): string {
+  const mod10 = n % 10
+  const mod100 = n % 100
+  if (mod100 >= 11 && mod100 <= 14) return 'человек'
+  if (mod10 === 1) return 'человек'
+  if (mod10 >= 2 && mod10 <= 4) return 'человека'
+  return 'человек'
+}
+
+/** Одна строка модераторского списка ссылок (см. AccessTab выше) — своя
+ * копия-кнопка с фидбеком, поэтому отдельный компонент, а не инлайн в map. */
+function InviteLinkRow({ link }: { link: ServerInviteLinkEntry }) {
+  const [copied, setCopied] = useState(false)
+
+  const copyLink = () => {
+    const url = `${location.origin}${location.pathname}?invite=${link.code}`
+    navigator.clipboard.writeText(url).then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    })
+  }
+
+  return (
+    <div className="srv-invite-link-row">
+      <Avatar
+        name={link.created_by.username}
+        color={link.created_by.avatar_color}
+        image={link.created_by.avatar_image}
+        size={28}
+      />
+      <div className="srv-invite-link-info">
+        <span className="member-name">
+          {link.created_by.username}
+          {link.channel && <span className="srv-hint"> · #{link.channel.name}</span>}
+        </span>
+        <span className="srv-hint">
+          Приглашено: {link.uses} {pluralPeople(link.uses)}
+        </span>
+      </div>
+      <button type="button" className="btn-small" onClick={copyLink} title="Скопировать ссылку">
+        {copied ? <Check size={14} /> : <Copy size={14} />}
+      </button>
+    </div>
+  )
+}
+
 const AccessTab = forwardRef<TabHandle, { server: Server; onServerUpdated: (s: Server) => void }>(
   function AccessTab({ server, onServerUpdated }, ref) {
   const [accessMode, setAccessMode] = useState<ServerAccessMode>(server.access_mode)
+  const [isPrivate, setIsPrivate] = useState(server.is_private)
   const [ageRestricted, setAgeRestricted] = useState(server.age_restricted)
   const [rules, setRules] = useState<ServerRule[]>(server.rules)
   const [ruleTitle, setRuleTitle] = useState('')
@@ -1110,6 +1145,27 @@ const AccessTab = forwardRef<TabHandle, { server: Server; onServerUpdated: (s: S
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [saved, setSaved] = useState(false)
+
+  // Список ссылок ВСЕХ участников (у каждого своя, см. api.serverInviteLink) —
+  // видно только тут, вкладка "Доступ" целиком уже гейтится manage_server
+  // (см. TABS выше), а сама ручка требует manage_members (см. backend
+  // ServerInviteLinksList) — то же право, что и остальная работа со списком
+  // участников (баны/кик/роли).
+  const [inviteLinks, setInviteLinks] = useState<ServerInviteLinkEntry[]>([])
+  const [inviteLinksLoading, setInviteLinksLoading] = useState(true)
+  const [inviteLinksError, setInviteLinksError] = useState('')
+
+  useEffect(() => {
+    ;(async () => {
+      try {
+        setInviteLinks(await api.serverInviteLinks(server.id))
+      } catch (err) {
+        setInviteLinksError((err as Error).message)
+      } finally {
+        setInviteLinksLoading(false)
+      }
+    })()
+  }, [server.id])
 
   const addRule = () => {
     if (!ruleTitle.trim() && !ruleText.trim()) return
@@ -1125,6 +1181,7 @@ const AccessTab = forwardRef<TabHandle, { server: Server; onServerUpdated: (s: S
     try {
       const updated = await api.updateServer(server.id, {
         access_mode: accessMode,
+        is_private: isPrivate,
         age_restricted: ageRestricted,
         rules,
       })
@@ -1139,11 +1196,13 @@ const AccessTab = forwardRef<TabHandle, { server: Server; onServerUpdated: (s: S
 
   const isDirty =
     accessMode !== server.access_mode ||
+    isPrivate !== server.is_private ||
     ageRestricted !== server.age_restricted ||
     rules.length !== server.rules.length ||
     rules.some((r, i) => r.title !== server.rules[i]?.title || r.text !== server.rules[i]?.text)
   const discard = () => {
     setAccessMode(server.access_mode)
+    setIsPrivate(server.is_private)
     setAgeRestricted(server.age_restricted)
     setRules(server.rules)
   }
@@ -1170,6 +1229,17 @@ const AccessTab = forwardRef<TabHandle, { server: Server; onServerUpdated: (s: S
           </span>
         </label>
       ))}
+
+      <div className="field-label">Приватность</div>
+      <Toggle
+        checked={isPrivate}
+        label="Приватный сервер"
+        hint="Описание, особенности и участников видят только те, кто уже на сервере — и не отображается в поиске серверов вообще (кроме тех, кто уже состоит)."
+        onChange={(v) => {
+          setIsPrivate(v)
+          setSaved(false)
+        }}
+      />
 
       <div className="field-label">Возрастное ограничение</div>
       <Toggle
@@ -1226,6 +1296,24 @@ const AccessTab = forwardRef<TabHandle, { server: Server; onServerUpdated: (s: S
           <Plus size={14} /> Добавить правило
         </button>
       </div>
+
+      <div className="field-label">Пригласительные ссылки участников</div>
+      <p className="srv-hint">
+        У каждого участника — своя постоянная ссылка (см. «Пригласить» у пилюли сервера).
+        Здесь видно, кто сколько людей привёл.
+      </p>
+      {inviteLinksError && <div className="login-error">{inviteLinksError}</div>}
+      {inviteLinksLoading ? (
+        <div className="modal-empty">Загрузка…</div>
+      ) : inviteLinks.length === 0 ? (
+        <div className="modal-empty">Пока никто не запрашивал свою ссылку.</div>
+      ) : (
+        <div className="srv-invite-links-list">
+          {inviteLinks.map((link) => (
+            <InviteLinkRow key={link.id} link={link} />
+          ))}
+        </div>
+      )}
 
       {error && <div className="login-error">{error}</div>}
       {saved && !error && <div className="profile-success">Сохранено.</div>}
