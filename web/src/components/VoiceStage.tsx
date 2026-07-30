@@ -170,7 +170,11 @@ function ParticipantTile({
   })
   return (
     <div
-      className="participant-tile"
+      // Индикатор "говорит" — зелёная рамка ВСЕЙ карточки (а не кольцо
+      // вокруг аватарки, как у Avatar в остальных местах приложения, см.
+      // .avatar.speaking) — поэтому speaking сюда, а не только в <Avatar>
+      // ниже (та ниже его больше не получает).
+      className={`participant-tile ${speaking ? 'speaking' : ''}`}
       // avatar_color — теперь средний цвет самой аватарки (см. backend
       // accounts.avatar_color.compute_avatar_color), а не просто фон буквы-
       // заглушки, поэтому используем его и как акцент фона тайла — см.
@@ -200,16 +204,16 @@ function ParticipantTile({
           color={member.avatar_color}
           image={member.avatar_image}
           size={72}
-          speaking={speaking}
         />
       </button>
+      {/* Клик по нику — БЕЗ своего onClick/stopPropagation: пусть всплывает
+          до .participant-tile самой карточки (onExpand выше), то же
+          действие, что и клик по любому другому месту карточки. Раньше тут
+          был отдельный onOpenProfile — открывал мини-профиль вместо
+          разворачивания, не так, как остальная карточка. */}
       <span
-        className={`participant-tile-name profile-trigger-name ${styledNameProps(member).className}`}
+        className={`participant-tile-name ${styledNameProps(member).className}`}
         style={styledNameProps(member).style}
-        onClick={(e) => {
-          e.stopPropagation()
-          onOpenProfile(member, e)
-        }}
       >
         {member.username}
         {muted && (
@@ -613,6 +617,11 @@ export default function VoiceStage({
         : screenShares.get(expanded.userId) ?? null
 
   const expandedMember = expanded ? displayRoster.find((m) => m.id === expanded.userId) ?? null : null
+  // Стиль ника (см. nameStyle.ts) — для подписи развёрнутого тайла (см.
+  // .screen-tile-label ниже), не только для мелких тайлов сетки. null —
+  // участник уже вышел из комнаты (displayRoster его не находит), тогда
+  // подпись просто обычным текстом, как и раньше.
+  const expandedNameProps = expandedMember ? styledNameProps(expandedMember) : null
 
   /** Все тайлы комнаты: участники, своя демка, чужие демки. Один и тот же
    * набор рисуется и в обычной сетке, и в ленте миниатюр под развёрнутой
@@ -778,12 +787,21 @@ export default function VoiceStage({
                   {expanded.mode === 'screen' ? (
                     <>
                       <Monitor size={13} />{' '}
-                      {expanded.userId === selfUserId
-                        ? 'Ваша демонстрация'
-                        : `Демонстрация — ${nameOf(expanded.userId)}`}
+                      {expanded.userId === selfUserId ? (
+                        'Ваша демонстрация'
+                      ) : (
+                        <>
+                          Демонстрация —{' '}
+                          <span className={expandedNameProps?.className} style={expandedNameProps?.style}>
+                            {nameOf(expanded.userId)}
+                          </span>
+                        </>
+                      )}
                     </>
                   ) : (
-                    nameOf(expanded.userId)
+                    <span className={expandedNameProps?.className} style={expandedNameProps?.style}>
+                      {nameOf(expanded.userId)}
+                    </span>
                   )}
                 </span>
                 {expanded.mode === 'screen' && expanded.userId !== selfUserId && (
