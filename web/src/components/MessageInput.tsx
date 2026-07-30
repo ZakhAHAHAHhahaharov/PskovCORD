@@ -603,11 +603,18 @@ export default function MessageInput({
           type="button"
           className="composer-btn"
           title="Эмодзи"
-          onClick={(e) =>
-            setEmojiAnchor((prev) =>
-              prev ? null : { rect: e.currentTarget.getBoundingClientRect() },
-            )
-          }
+          onClick={(e) => {
+            // Координаты снимаем СРАЗУ, синхронно с кликом, а не внутри
+            // функции-апдейтера setState. currentTarget у DOM-события валиден
+            // только пока событие реально диспетчеризуется — если React
+            // вызовет апдейтер позже (при повторной обработке хука на
+            // следующем рендере, что бывает при батчинге), e.currentTarget к
+            // тому моменту уже null, и .getBoundingClientRect() падал с
+            // TypeError (см. живой репорт в проде — трейсбэк уходил именно
+            // отсюда, через emojiAnchor useState на строке ниже).
+            const rect = e.currentTarget.getBoundingClientRect()
+            setEmojiAnchor((prev) => (prev ? null : { rect }))
+          }}
         >
           <Smile size={18} />
         </button>

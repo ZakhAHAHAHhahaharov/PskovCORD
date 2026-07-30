@@ -12,6 +12,16 @@ server {
     include /etc/letsencrypt/options-ssl-nginx.conf;
     ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
 
+    # Nginx по умолчанию режет тело запроса на 1 МБ — гораздо меньше, чем то,
+    # что backend вообще-то готов принять: JSON-аватар/баннер-гифка (data-URL
+    # base64, до DATA_UPLOAD_MAX_MEMORY_SIZE=10 МБ, см. config/settings.py) и
+    # вложения сообщений (multipart, до MAX_ATTACHMENT_BYTES=25 МБ, см.
+    # chat/models.py). Без этой строки такие запросы падали на самом nginx
+    # с его дефолтной страницей "413 Request Entity Too Large", даже не
+    # добравшись до Django — а сообщение об ошибке от бэкенда (понятное,
+    # про конкретный лимит конкретного поля) пользователь так и не видел.
+    client_max_body_size 30m;
+
     # Собранная статика (в т.ч. admin/css,js) — отдаём напрямую, минуя Django:
     # в проде (DEBUG=0) runserver сам её не раздаёт. Путь — bind-mount
     # ./staticfiles из docker-compose.prod.yml (backend collectstatic
