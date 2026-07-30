@@ -146,7 +146,6 @@ function ParticipantTile({
   speaking,
   muted,
   deafened,
-  onOpenProfile,
   onExpand,
   onContextMenu,
 }: {
@@ -154,10 +153,9 @@ function ParticipantTile({
   speaking: boolean
   muted: boolean
   deafened: boolean
-  onOpenProfile: (user: ProfilePopupUser, e: ReactMouseEvent) => void
-  /** Клик по карточке (не по аватару/нику — у тех своё действие, открыть
-   * мини-профиль) разворачивает участника на весь блок, как демонстрацию
-   * экрана — см. VoiceStage.expanded. */
+  /** Клик по карточке целиком — включая аватар и ник, у тех больше нет
+   * своего отдельного действия (было — открыть мини-профиль) — разворачивает
+   * участника на весь блок, как демонстрацию экрана — см. VoiceStage.expanded. */
   onExpand: () => void
   /** Правый клик — контекстное меню участника (см. AppShell), нет у себя самого. */
   onContextMenu?: (e: ReactMouseEvent) => void
@@ -191,21 +189,18 @@ function ParticipantTile({
       }
       {...(onContextMenu ? longPress : {})}
     >
-      <button
-        type="button"
-        className="avatar-trigger"
-        onClick={(e) => {
-          e.stopPropagation()
-          onOpenProfile(member, e)
-        }}
-      >
+      {/* Клик по аватарке — тоже БЕЗ своего onClick (раньше открывал мини-
+          профиль): бывший <button> заменён на div, чтобы клик по нему
+          всплывал до .participant-tile так же, как и по нику ниже — то же
+          действие, что и у остальной карточки (onExpand), а не отдельное. */}
+      <div className="avatar-trigger">
         <Avatar
           name={member.username}
           color={member.avatar_color}
           image={member.avatar_image}
           size={72}
         />
-      </button>
+      </div>
       {/* Клик по нику — БЕЗ своего onClick/stopPropagation: пусть всплывает
           до .participant-tile самой карточки (onExpand выше), то же
           действие, что и клик по любому другому месту карточки. Раньше тут
@@ -635,7 +630,6 @@ export default function VoiceStage({
         speaking={speakingUserIds.has(m.id)}
         muted={m.id === selfUserId ? selfMuted : m.muted}
         deafened={m.id === selfUserId ? deafened : m.deafened}
-        onOpenProfile={onOpenProfile}
         onExpand={() => setExpanded({ userId: m.id, mode: 'participant' })}
         onContextMenu={
           m.id !== selfUserId && onParticipantContextMenu
