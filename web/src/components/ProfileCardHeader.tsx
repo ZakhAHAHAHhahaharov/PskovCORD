@@ -98,18 +98,25 @@ export default function ProfileCardHeader({
 
   return (
     <div className="profile-card">
-      <div
-        className="profile-card-banner"
-        style={{
-          background: bannerImage ? undefined : bannerGradient || undefined,
-          backgroundImage: bannerImage ? `url(${bannerImage})` : undefined,
-          // backgroundColor — ОТДЕЛЬНО от background/backgroundImage выше (не
-          // через шорткат background, тот сбросил бы его): подложка виднеется
-          // сквозь прозрачные пиксели гифки-баннера. Для градиента смысла
-          // нет (тот и так непрозрачный), поэтому только когда bannerImage задан.
-          backgroundColor: bannerImage ? bannerColor || undefined : undefined,
-        }}
-      >
+      {/* Меню "Изменить"/"Удалить" — СИБЛИНГ самого баннера, а не внутри
+          него: у .profile-card-banner overflow:hidden (ради скруглённых
+          углов картинки/градиента), который иначе обрезал бы выпадающий
+          поповер меню, растущий НИЖЕ шапки баннера (см. .image-hover-menu-popup).
+          .profile-card-banner-wrap ниже — общий позиционируемый контейнер
+          без overflow, поэтому поповеру есть где раскрыться. */}
+      <div className="profile-card-banner-wrap">
+        <div
+          className="profile-card-banner"
+          style={{
+            background: bannerImage ? undefined : bannerGradient || undefined,
+            backgroundImage: bannerImage ? `url(${bannerImage})` : undefined,
+            // backgroundColor — ОТДЕЛЬНО от background/backgroundImage выше (не
+            // через шорткат background, тот сбросил бы его): подложка виднеется
+            // сквозь прозрачные пиксели гифки-баннера. Для градиента смысла
+            // нет (тот и так непрозрачный), поэтому только когда bannerImage задан.
+            backgroundColor: bannerImage ? bannerColor || undefined : undefined,
+          }}
+        />
         {edit && (
           <ImageHoverMenu
             className="profile-banner-hover-menu"

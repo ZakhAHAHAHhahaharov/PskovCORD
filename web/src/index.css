@@ -1429,13 +1429,21 @@ input {
   background: none;
 }
 
-.profile-card-banner {
+/* Позиционируемый контейнер БЕЗ overflow — сам баннер (со скруглением и
+   overflow:hidden, см. ниже) и его меню "Изменить"/"Удалить" сидят в нём
+   как сиблинги: у меню есть выпадающий поповер (.image-hover-menu-popup),
+   растущий НИЖЕ баннера, и если overflow:hidden висит прямо на баннере
+   (а меню — его ребёнок), этот поповер обрезается на высоте баннера. */
+.profile-card-banner-wrap {
   position: relative;
+}
+
+.profile-card-banner {
   height: 88px;
-  /* Скругление верхних углов + обрезка — ТЕПЕРЬ здесь, а не на всей
-     .profile-card (см. комментарий там): баннер — единственное, что реально
-     нуждается в клипе (картинка/градиент, которым иначе некуда упереться в
-     скруглённый угол), а не тело карточки под ним, где живёт свечение имени. */
+  /* Скругление верхних углов + обрезка — только у самой картинки/градиента
+     (см. комментарий выше про .profile-card-banner-wrap) — тело карточки
+     под баннером (там живёт свечение имени) и меню баннера этой обрезкой
+     не задеты. */
   border-radius: 8px 8px 0 0;
   overflow: hidden;
   background: var(
@@ -1798,7 +1806,11 @@ input {
   transition: opacity 0.15s ease;
 }
 
-.profile-card-banner:hover .profile-banner-hover-menu .image-hover-menu-trigger,
+/* .profile-card-banner-wrap:hover, а не .profile-card-banner:hover — меню
+   теперь сиблинг баннера, а не его потомок (см. комментарий у
+   .profile-card-banner-wrap), но визуально это тот же самый прямоугольник:
+   wrap ровно по размеру баннера, вплотную к нему. */
+.profile-card-banner-wrap:hover .profile-banner-hover-menu .image-hover-menu-trigger,
 .profile-banner-hover-menu:has(.image-hover-menu-popup) .image-hover-menu-trigger {
   opacity: 1;
 }
@@ -2795,6 +2807,17 @@ textarea.inline-editable-input {
   border-radius: 8px;
   cursor: pointer;
   overflow: hidden;
+  box-shadow: 0 0 0 0 var(--green);
+  transition:
+    background-color 100ms ease-out,
+    box-shadow 100ms ease-out;
+}
+
+/* Индикатор "говорит" — рамка ВСЕЙ карточки, inset (а не наружу, как у
+   .avatar.speaking в остальных местах приложения) — иначе при плотной сетке
+   тайлов свечение налезало бы на соседние. */
+.participant-tile.speaking {
+  box-shadow: 0 0 0 3px var(--green) inset;
 }
 
 .participant-tile:hover {
@@ -2821,14 +2844,10 @@ textarea.inline-editable-input {
   transition: opacity 0.2s ease;
 }
 
-/* Та же логика, что и у лейбла демки ниже (.voice-stage-expanded-overlay):
-   курсор надолго замер — не важно, над самим тайлом, над демкой или просто
-   над пустым местом main — .controls-hidden гасит подпись вместе с
-   остальным тулбаром (тот же таймер, см. VoiceStage.scheduleHideControls). */
-.voice-stage.controls-hidden .participant-tile-name {
-  opacity: 0;
-  pointer-events: none;
-}
+/* Раньше .controls-hidden (курсор надолго замер, см.
+   VoiceStage.scheduleHideControls) гасила и подпись с ником вместе с
+   остальным тулбаром — ник должен быть виден всегда, независимо от
+   активности курсора, поэтому этого правила больше нет. */
 
 .participant-tile-badge {
   position: absolute;
