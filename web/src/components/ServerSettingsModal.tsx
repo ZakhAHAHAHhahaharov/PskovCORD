@@ -10,9 +10,9 @@ import {
   ServerInviteLinkEntry, ServerJoinRequestEntry, ServerPermission, ServerRule,
 } from '../api'
 import {
-  BANNER_MAX_BYTES, BANNER_MAX_H, BANNER_MAX_W, GRADIENT_PRESETS,
-  SERVER_ICON_SIZE, buildGradient, fileToBannerDataUrl, fileToSquareDataUrl,
-  parseGradient,
+  BANNER_MAX_H, BANNER_MAX_W, GRADIENT_PRESETS, SERVER_ICON_SIZE,
+  SOURCE_IMAGE_MAX_BYTES, buildGradient, fileToBannerDataUrl,
+  fileToSquareDataUrl, parseGradient,
 } from '../images'
 import { useEscToClose } from '../modalStack'
 import { useUnsavedChangesGuard } from '../hooks/useUnsavedChangesGuard'
@@ -514,7 +514,7 @@ const ProfileTab = forwardRef<TabHandle, { server: Server; onServerUpdated: (s: 
             touch()
           }}
         >
-          Гифка
+          Фото / гифка
         </button>
       </div>
 
@@ -581,7 +581,7 @@ const ProfileTab = forwardRef<TabHandle, { server: Server; onServerUpdated: (s: 
             className="btn-secondary"
             onClick={() => bannerFileRef.current?.click()}
           >
-            {bannerImage ? 'Заменить гифку' : 'Загрузить гифку'}
+            {bannerImage ? 'Заменить фото или гифку' : 'Загрузить фото или гифку'}
           </button>
           <input
             ref={bannerFileRef}
@@ -603,7 +603,9 @@ const ProfileTab = forwardRef<TabHandle, { server: Server; onServerUpdated: (s: 
             </button>
           )}
           <span className="banner-hint">
-            До {BANNER_MAX_W}×{BANNER_MAX_H}, макс. {Math.round(BANNER_MAX_BYTES / 1_000_000)} МБ.
+            Фото и большая гифка обрежутся и сожмутся до {BANNER_MAX_W}×{BANNER_MAX_H}; гифка
+            подходящего размера останется анимированной. Макс. исходный файл —{' '}
+            {Math.round(SOURCE_IMAGE_MAX_BYTES / 1_000_000)} МБ.
           </span>
         </div>
       )}

@@ -18,10 +18,9 @@ export const GRADIENT_PRESETS: [string, string][] = [
 export const DEFAULT_GRADIENT_ANGLE = 135
 export const DEFAULT_GRADIENT: [string, string] = ['#5865f2', '#eb459e']
 
-/** Максимальное разрешение и вес гифки-баннера. Гифку нельзя пережать на
- * клиенте без потери анимации (canvas хватает только первый кадр), поэтому
- * вместо сжатия — просто валидация. Должны совпадать с backend
- * (accounts/serializers.py: MAX_BANNER_BYTES/ALLOWED_BANNER_MIME). */
+/** Целевые разрешение и вес фона профиля/сервера (гифка или фото). Должны
+ * совпадать с backend (accounts/serializers.py: MAX_BANNER_BYTES/
+ * ALLOWED_BANNER_MIME). */
 export const BANNER_MAX_W = 640
 export const BANNER_MAX_H = 320
 export const BANNER_MAX_BYTES = 4_000_000
@@ -69,13 +68,20 @@ function readImageSize(dataUrl: string): Promise<{ width: number; height: number
   })
 }
 
-/** Читает файл баннера как есть (без пережатия — см. BANNER_MAX_W) и
- * проверяет вес и разрешение. */
+/** Готовит файл фона профиля/сервера (гифка или фото): гифку, которая и так
+ * укладывается в лимиты, отдаёт как есть — canvas умеет отрисовать только
+ * первый кадр, а перегонять через него означало бы гарантированно потерять
+ * анимацию. Всё остальное (слишком большая гифка, любое фото) кроп-по-центру
+ * ("cover", без искажения пропорций) до BANNER_MAX_W×BANNER_MAX_H и сжимает
+ * в JPEG — так же, как fileToSquareDataUrl для аватара/значка, только
+ * прямоугольный целевой размер вместо квадратного. */
 export function fileToBannerDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
-    if (file.size > BANNER_MAX_BYTES) {
+    if (file.size > SOURCE_IMAGE_MAX_BYTES) {
       reject(
-        new Error(`Файл слишком большой (макс. ${Math.round(BANNER_MAX_BYTES / 1_000_000)} МБ).`),
+        new Error(
+          `Файл слишком большой (макс. ${Math.round(SOURCE_IMAGE_MAX_BYTES / 1_000_000)} МБ).`,
+        ),
       )
       return
     }
@@ -85,20 +91,44 @@ export function fileToBannerDataUrl(file: File): Promise<string> {
       const dataUrl = reader.result as string
       try {
         const { width, height } = await readImageSize(dataUrl)
-        if (width > BANNER_MAX_W || height > BANNER_MAX_H) {
-          reject(
-            new Error(
-              `Слишком большое разрешение — макс. ${BANNER_MAX_W}×${BANNER_MAX_H}, а тут ${width}×${height}.`,
-            ),
-          )
-          return
-        }
-        resolve(dataUrl)
+        const fitsAsIs =
+          file.type === 'image/gif' &&
+          width <= BANNER_MAX_W &&
+          height <= BANNER_MAX_H &&
+          file.size <= BANNER_MAX_BYTES
+        resolve(fitsAsIs ? dataUrl : await cropAndCompressBanner(dataUrl, width, height))
       } catch (err) {
         reject(err as Error)
       }
     }
     reader.readAsDataURL(file)
+  })
+}
+
+function cropAndCompressBanner(dataUrl: string, width: number, height: number): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const img = new Image()
+    img.onerror = () => reject(new Error('Файл не похож на картинку.'))
+    img.onload = () => {
+      const canvas = document.createElement('canvas')
+      canvas.width = BANNER_MAX_W
+      canvas.height = BANNER_MAX_H
+      const ctx = canvas.getContext('2d')
+      if (!ctx) {
+        reject(new Error('Canvas недоступен.'))
+        return
+      }
+      // "cover": масштабируем по большей из сторон и обрезаем остаток по
+      // центру, чтобы результат заполнил BANNER_MAX_W×BANNER_MAX_H целиком.
+      const scale = Math.max(BANNER_MAX_W / width, BANNER_MAX_H / height)
+      const sw = BANNER_MAX_W / scale
+      const sh = BANNER_MAX_H / scale
+      const sx = (width - sw) / 2
+      const sy = (height - sh) / 2
+      ctx.drawImage(img, sx, sy, sw, sh, 0, 0, BANNER_MAX_W, BANNER_MAX_H)
+      resolve(canvas.toDataURL('image/jpeg', 0.85))
+    }
+    img.src = dataUrl
   })
 }
 
