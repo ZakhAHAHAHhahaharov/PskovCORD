@@ -27,12 +27,15 @@ function PlaceholderRow() {
 
 /**
  * Флайаут "Стили" — открывается закладкой-кисточкой у аватарки в
- * ProfileModal (см. ProfileCardHeader.profile-styles-tab). Рендерится
- * ВНУТРИ того же .modal-overlay, что и сам ProfileModal (см. ProfileModal.tsx),
- * обычным flex-элементом слева от .modal — часть одного редактора профиля, а
- * не отдельная плавающая панель: тот же z-index, клик по фону закрывает всё
- * разом. Свой stopPropagation ниже — только чтобы клик ВНУТРИ флайаута не
- * долетал до onClick этого общего .modal-overlay.
+ * ProfileModal (та же кнопка превращается в крестик, пока флайаут открыт —
+ * см. ProfileModal.tsx). На десктопе — отдельная панель СЛЕВА от .modal
+ * (position:absolute от .profile-modal-wrap, см. index.css), не двигающая
+ * саму модалку; на мобильном — подменяет собой содержимое ТОЙ ЖЕ .modal
+ * целиком (там панели рядом физически не умещаются). Своей кнопки закрытия
+ * внутри нет — закрывает тот же крестик-закладка снаружи (или Esc/клик по
+ * тёмному фону, гасящий редактор профиля целиком). Свой stopPropagation
+ * ниже — чтобы клик ВНУТРИ флайаута не долетал до onClick={handleClose} на
+ * .modal-overlay.
  */
 export default function ProfileStylesFlyout({
   bannerColor,
@@ -86,10 +89,6 @@ export default function ProfileStylesFlyout({
 
       <button type="button" className="styles-flyout-name-style-btn" onClick={onOpenNameStyle}>
         Стиль отображаемого имени
-      </button>
-
-      <button className="modal-close" onClick={onClose}>
-        Закрыть
       </button>
     </div>
   )
