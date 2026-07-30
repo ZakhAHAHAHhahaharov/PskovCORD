@@ -2100,7 +2100,15 @@ export default function AppShell() {
         JS ДОЛЖЕН явно знать (кнопка назад, история браузера). */}
     <div
       className={`app screen-${mobileScreen} ${
-        currentChannel?.kind === 'voice' ? 'app-no-members-col' : ''
+        // Голосовой канал — колонки нет никогда; текстовый со СНЯТЫМ
+        // тумблером (см. showMembersList/chat-header-members-toggle) — тоже:
+        // раньше сюда попадал только voice, а выключенный вручную список
+        // участников в тексте оставлял пустую 240px-колонку серым блоком
+        // (см. aside ниже), реально не освобождая ширину под чат.
+        currentChannel?.kind === 'voice' ||
+        (currentChannel?.kind === 'text' && !showMembersList)
+          ? 'app-no-members-col'
+          : ''
       }`}
     >
       {/* Единая "nav-панель" — рельса+сайдбар каналов вместе, всегда
@@ -2366,10 +2374,11 @@ export default function AppShell() {
       {/* Список участников — только для текстового канала (DM/группа, пустой
           экран без выбранного канала — прячут его, но колонку под пустой
           aside всё равно держат для консистентности раскладки). Голосовой
-          канал — исключение: там колонки нет вообще (см. .app-no-members-col
-          выше), сетке/демонстрации нужна вся ширина main. showMembersList —
-          ещё один тумблер поверх этого, из иконки в chat-header, действует
-          только пока мы и так в тексте. */}
+          канал и текстовый с выключенным вручную тумблером (showMembersList,
+          иконка в chat-header) — колонки нет вообще (см. .app-no-members-col
+          выше): иначе выключение тумблера просто гасило бы содержимое,
+          оставляя пустую 240px-полосу серым блоком вместо реального
+          освобождения ширины под чат. */}
       {serverId != null && currentChannel?.kind === 'text' && showMembersList ? (
         <MembersList
           members={members}
@@ -2378,7 +2387,8 @@ export default function AppShell() {
           ownerId={currentServer?.owner ?? -1}
           onOpenProfile={openProfilePopup}
         />
-      ) : currentChannel?.kind === 'voice' ? null : (
+      ) : currentChannel?.kind === 'voice' ||
+        (currentChannel?.kind === 'text' && !showMembersList) ? null : (
         <aside className="members-list" />
       )}
 
