@@ -2807,6 +2807,17 @@ textarea.inline-editable-input {
   border-radius: 8px;
   cursor: pointer;
   overflow: hidden;
+  box-shadow: 0 0 0 0 var(--green);
+  transition:
+    background-color 100ms ease-out,
+    box-shadow 100ms ease-out;
+}
+
+/* Индикатор "говорит" — рамка ВСЕЙ карточки, inset (а не наружу, как у
+   .avatar.speaking в остальных местах приложения) — иначе при плотной сетке
+   тайлов свечение налезало бы на соседние. */
+.participant-tile.speaking {
+  box-shadow: 0 0 0 3px var(--green) inset;
 }
 
 .participant-tile:hover {
@@ -2833,14 +2844,10 @@ textarea.inline-editable-input {
   transition: opacity 0.2s ease;
 }
 
-/* Та же логика, что и у лейбла демки ниже (.voice-stage-expanded-overlay):
-   курсор надолго замер — не важно, над самим тайлом, над демкой или просто
-   над пустым местом main — .controls-hidden гасит подпись вместе с
-   остальным тулбаром (тот же таймер, см. VoiceStage.scheduleHideControls). */
-.voice-stage.controls-hidden .participant-tile-name {
-  opacity: 0;
-  pointer-events: none;
-}
+/* Раньше .controls-hidden (курсор надолго замер, см.
+   VoiceStage.scheduleHideControls) гасила и подпись с ником вместе с
+   остальным тулбаром — ник должен быть виден всегда, независимо от
+   активности курсора, поэтому этого правила больше нет. */
 
 .participant-tile-badge {
   position: absolute;
