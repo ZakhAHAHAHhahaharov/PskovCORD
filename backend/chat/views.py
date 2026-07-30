@@ -5,7 +5,7 @@ from channels.layers import get_channel_layer
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.db import IntegrityError, transaction
-from django.db.models import Count, Max, Q
+from django.db.models import Count, F, Max, Q
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import status
@@ -29,9 +29,9 @@ from .permissions import are_friends, can_dm
 from .serializers import (
     AttachmentSerializer, ChannelSerializer, ConversationMessageSerializer,
     ConversationSerializer, MembershipSettingsSerializer, MessageSerializer,
-    RoleSerializer, ServerBanSerializer, ServerInviteSerializer,
-    ServerJoinRequestSerializer, ServerSerializer, ServerUpdateSerializer,
-    membership_settings_payload,
+    RoleSerializer, ServerBanSerializer, ServerInviteLinkSerializer,
+    ServerInviteSerializer, ServerJoinRequestSerializer, ServerSerializer,
+    ServerUpdateSerializer, membership_settings_payload,
 )
 
 User = get_user_model()
@@ -951,11 +951,16 @@ class ServerInviteDecision(APIView):
 
 class ServerInviteLink(APIView):
     """GET /api/servers/<id>/invite-link?channel_id=<id>? — постоянная
-    многоразовая ссылка. Без channel_id — ссылка сервера целиком, одна на
-    сервер (get_or_create). С channel_id (правый клик по голосовому каналу →
-    "Копировать ссылку"/"Пригласить в голосовой чат") — своя отдельная
-    ссылка на КАЖДЫЙ канал, тоже get_or_create (повторные запросы для того
-    же канала отдают тот же код, а не плодят новые)."""
+    многоразовая ссылка, СВОЯ у каждого участника (created_by — часть
+    lookup'а get_or_create, не только defaults): раньше первый же вызвавший
+    эту ручку на сервере создавал ЕДИНУЮ ссылку на всех, и все остальные
+    участники получали её же код. Без channel_id — ссылка сервера целиком,
+    с channel_id (правый клик по голосовому каналу → "Копировать ссылку"/
+    "Пригласить в голосовой чат") — своя отдельная ссылка на КАЖДЫЙ канал.
+    Повторные запросы одного и того же участника отдают тот же код, а не
+    плодят новые. uses — сколько раз по НЕЙ реально вступили (см.
+    ServerInviteRedeem), видно и самому автору (ServerInviteModal), и
+    модераторам списком (см. ServerInviteLinksList)."""
 
     def get(self, request, server_id):
         server = get_object_or_404(Server, id=server_id)
@@ -968,9 +973,27 @@ class ServerInviteLink(APIView):
                 Channel, id=channel_id, server=server, kind=Channel.VOICE)
         invite, _created = ServerInvite.objects.get_or_create(
             server=server, kind=ServerInvite.LINK, channel=channel,
-            defaults={"created_by": request.user, "code": _invite_code()},
+            created_by=request.user,
+            defaults={"code": _invite_code()},
         )
-        return Response({"code": invite.code})
+        return Response({"code": invite.code, "uses": invite.uses})
+
+
+class ServerInviteLinksList(APIView):
+    """GET /api/servers/<id>/invite-links — модераторский список ВСЕХ
+    пригласительных ссылок участников сервера (кто сколько людей привёл),
+    требует manage_members — то же право, что и остальная работа со
+    списком/составом участников (баны, кик, роли)."""
+
+    def get(self, request, server_id):
+        server = get_object_or_404(Server, id=server_id)
+        denied = _require_permission(request, server, "manage_members")
+        if denied:
+            return denied
+        invites = ServerInvite.objects.filter(
+            server=server, kind=ServerInvite.LINK,
+        ).select_related("created_by", "channel").order_by("-uses", "-created_at")
+        return Response(ServerInviteLinkSerializer(invites, many=True).data)
 
 
 class InvitePreview(APIView):
@@ -1021,6 +1044,10 @@ class ServerInviteRedeem(APIView):
                 return Response({"detail": "Вы забанены на этом сервере."}, status=403)
             Membership.objects.get_or_create(user=request.user, server=server)
             _grant_server_membership(server, request.user.id)
+            # F(), а не invite.uses += 1 — иначе одновременные вступления по
+            # одной и той же ссылке (два человека почти разом) теряли бы
+            # инкременты друг друга (read-modify-write не атомарен без него).
+            ServerInvite.objects.filter(id=invite.id).update(uses=F("uses") + 1)
         data = ServerSerializer(server, context=server_context(request, server)).data
         data["invited_channel_id"] = invite.channel_id
         return Response(data)

@@ -2858,6 +2858,59 @@ class ServerInviteTests(APITestCase):
         resp = self.client.post("/api/invites/redeem", {"code": code}, format="json")
         self.assertEqual(resp.status_code, 403)
 
+    def test_each_member_gets_own_link(self):
+        self.client.force_authenticate(self.owner)
+        owner_code = self.client.get(f"/api/servers/{self.server.id}/invite-link").data["code"]
+
+        self.client.force_authenticate(self.member)
+        member_code = self.client.get(f"/api/servers/{self.server.id}/invite-link").data["code"]
+
+        self.assertNotEqual(owner_code, member_code)
+        self.assertEqual(
+            ServerInvite.objects.filter(server=self.server, kind=ServerInvite.LINK).count(), 2)
+
+    def test_redeem_link_increments_uses_only_on_join(self):
+        self.client.force_authenticate(self.member)
+        resp = self.client.get(f"/api/servers/{self.server.id}/invite-link")
+        code = resp.data["code"]
+        # Просто получить свою ссылку (даже повторно) — не "использование".
+        self.assertEqual(resp.data["uses"], 0)
+        self.client.get(f"/api/servers/{self.server.id}/invite-link")
+        self.assertEqual(
+            ServerInvite.objects.get(server=self.server, created_by=self.member).uses, 0)
+
+        self.client.force_authenticate(self.friend)
+        self.client.post("/api/invites/redeem", {"code": code}, format="json")
+        self.assertEqual(
+            ServerInvite.objects.get(server=self.server, created_by=self.member).uses, 1)
+
+        another = User.objects.create_user(username="inv_another2", password="pw12345")
+        self.client.force_authenticate(another)
+        self.client.post("/api/invites/redeem", {"code": code}, format="json")
+        self.assertEqual(
+            ServerInvite.objects.get(server=self.server, created_by=self.member).uses, 2)
+
+    def test_invite_links_list_requires_manage_members(self):
+        self.client.force_authenticate(self.member)
+        resp = self.client.get(f"/api/servers/{self.server.id}/invite-links")
+        self.assertEqual(resp.status_code, 403)
+
+    def test_invite_links_list_shows_every_members_link(self):
+        self.client.force_authenticate(self.owner)
+        self.client.get(f"/api/servers/{self.server.id}/invite-link")
+        self.client.force_authenticate(self.member)
+        code = self.client.get(f"/api/servers/{self.server.id}/invite-link").data["code"]
+        self.client.force_authenticate(self.friend)
+        self.client.post("/api/invites/redeem", {"code": code}, format="json")
+
+        self.client.force_authenticate(self.owner)
+        resp = self.client.get(f"/api/servers/{self.server.id}/invite-links")
+        self.assertEqual(resp.status_code, 200)
+        by_creator = {row["created_by"]["id"]: row for row in resp.data}
+        self.assertEqual(len(by_creator), 2)
+        self.assertEqual(by_creator[self.member.id]["uses"], 1)
+        self.assertEqual(by_creator[self.owner.id]["uses"], 0)
+
 
 class ChannelStatusAndPinTests(APITestCase):
     """PATCH /api/channels/<id> (статус канала) и pinned_channel_ids личных
