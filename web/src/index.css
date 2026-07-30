@@ -958,12 +958,21 @@ input {
 
 /* ---- user panel ---- */
 .user-panel {
-  height: 52px;
+  /* .user-panel — самый нижний элемент .sidebar-bottom (см. её комментарий
+     выше), а тот прибит absolute к низу экрана. В standalone-режиме PWA на
+     iOS (иконка на домашнем экране, см. index.html viewport-fit=cover) чром
+     Safari пропадает и панель утыкается прямо в скруглённые края экрана/зону
+     жеста Home Indicator — env() тут добавляет высоту и нижний отступ ПОД
+     содержимым, а не сжимает сам 52px-контент (align-items: center ниже
+     центрирует его именно в исходных 52px, инсет остаётся чистым отступом
+     снизу). В обычном Safari/десктопе
+     env(safe-area-inset-bottom) = 0, изменений нет. */
+  height: calc(52px + env(safe-area-inset-bottom));
   background: var(--surface-2);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 8px;
+  padding: 0 8px env(safe-area-inset-bottom);
   flex-shrink: 0;
 }
 
@@ -3559,7 +3568,10 @@ textarea.inline-editable-input {
 
 .message-input-wrap {
   position: relative;
-  padding: 0 16px 24px;
+  /* env(safe-area-inset-bottom) — та же причина, что у .user-panel выше:
+     в standalone PWA на iOS композер тоже последний элемент у нижнего края
+     экрана и утыкается в скруглённые углы/Home Indicator без чрома Safari. */
+  padding: 0 16px calc(24px + env(safe-area-inset-bottom));
 }
 
 /* Пилюля поля ввода теперь общая для кнопок и текста: скрепка слева, эмодзи
