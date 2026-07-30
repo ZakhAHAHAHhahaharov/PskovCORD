@@ -48,7 +48,7 @@ export default function AppShellChat({
   showMembersList, setShowMembersList, openProfilePopup, handleToggleDmReaction,
   mentionPrefill,
 }: AppShellChatProps) {
-  const { currentServer, channels, currentChannel, serverId, channelId, members, rolesForServer } = server
+  const { currentServer, channels, currentChannel, serverId, members, rolesForServer } = server
 
   return (
     <>

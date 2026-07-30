@@ -1,13 +1,4 @@
-import {
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useState,
-  MouseEvent as ReactMouseEvent,
-} from 'react'
-import { ChevronLeft, Phone, PhoneOff, Users } from 'lucide-react'
+import { useCallback, useEffect, useRef, useState, MouseEvent as ReactMouseEvent } from 'react'
 import { useIsMobile } from '../hooks/useIsMobile'
 import { useChannelMessages } from '../hooks/useChannelMessages'
 import { useConversationsData } from '../hooks/useConversationsData'
@@ -18,33 +9,15 @@ import { useNameFonts } from '../hooks/useNameFonts'
 import { useParticipantContextMenu } from '../hooks/useParticipantContextMenu'
 import { useServerData } from '../hooks/useServerData'
 import { useVoiceCall } from '../hooks/useVoiceCall'
-import {
-  api, Channel, ChatMessageBase, Conversation, ConversationMessage, FriendsState, InvitePreview,
-  KnownPerson, Member, Message, NameEffect, NotificationLevel, Role, Server, ServerMemberSettings,
-} from '../api'
+import { ChatMessageBase } from '../api'
 import { useAuth } from '../auth'
-import { conversationDisplayName } from '../conversation'
 import { useGateway } from '../gateway'
-import { isMentioned } from '../mentions'
-import {
-  outbox, pendingAsMessage, usePendingMessages, OutboxTarget,
-} from '../outbox'
-import {
-  playJoinSound,
-  playLeaveSound,
-  playScreenShareRequestSound,
-  playScreenShareStartSound,
-  playScreenShareStopSound,
-  playWakeUpSound,
-} from '../sounds'
+import { outbox, usePendingMessages, OutboxTarget } from '../outbox'
 import AppShellChat from './AppShellChat'
 import AppShellNav from './AppShellNav'
 import AppShellOverlays from './AppShellOverlays'
-import VoiceProvider, { VoiceStatus } from './VoiceProvider'
-import { MessageInputPrefill } from './MessageInput'
+import VoiceProvider from './VoiceProvider'
 import { ProfilePopupTarget, ProfilePopupUser } from './MiniProfilePopup'
-
-const APP_NAME: string = import.meta.env.VITE_APP_NAME || 'PskovCord'
 
 /** Комната активного звонка — голосовой канал сервера ИЛИ диалог/группа.
  * voice.ts/VoiceProvider работают только с `.id` (ключ WebRTC-mesh эффектов)
@@ -61,25 +34,6 @@ export interface VoiceState {
   /** WS-адрес сигналинга SFU и токен доступа (из voice-credentials). */
   sfuUrl: string
   sfuToken: string
-}
-
-interface CallParticipant {
-  id: number
-  username: string
-  avatar_color: string
-  avatar_image: string
-  muted: boolean
-  deafened: boolean
-  sharing_screen: boolean
-  name_font: number | null
-  name_effect: NameEffect
-  name_color_1: string
-  name_color_2: string
-}
-
-interface IncomingCall {
-  conversationId: number
-  caller: CallParticipant
 }
 
 export default function AppShell() {
@@ -104,28 +58,13 @@ export default function AppShell() {
     serverId, setServerId,
     channelId, setChannelId,
     members, setMembers,
-    serverRoles, setServerRoles,
-    serverMembersCache, setServerMembersCache,
+    setServerRoles, setServerMembersCache,
     fetchedServerDataIds, serversRef,
-    unreadChannelIds, setUnreadChannelIds,
-    showDiscover, setShowDiscover,
-    showServerSettings, setShowServerSettings,
-    serverContextMenuServerId, setServerContextMenuServerId,
-    showServerInviteId, setShowServerInviteId,
-    showServerPrivacyId, setShowServerPrivacyId,
-    channelContextMenuId, setChannelContextMenuId,
-    showChannelInviteId, setShowChannelInviteId,
+    setUnreadChannelIds,
+    showServerInviteId,
     currentServer, channels, currentChannel,
-    mutedServerIds, unreadServerIds,
-    channelServerId, channelServerIdRef,
-    membersForServer, rolesForServer,
-    isServerMutedNow, shouldNotifyForChannel, shouldNotifyRef,
-    selectServer, reloadMembers, reloadRoles,
-    handleCreateServer, handleJoined, handleServerUpdated,
-    handleSelectChannel, handleMarkServerRead, patchServerSettings,
-    handleMuteServer, handleUnmuteServer, handleSetNotificationLevel,
-    handleToggleIgnoreAtHere, handleToggleSuppressRoleMentions, handleLeaveServer,
-    handleCreateChannel, handleTogglePinChannel, handleCopyChannelLink, handleSetChannelStatus,
+    channelServerIdRef, shouldNotifyRef,
+    selectServer,
   } = serverData
   // Переключатель списка участников сервера (иконка в chat-header текстового
   // канала) — сам список в принципе показывается только для текстового
@@ -171,18 +110,9 @@ export default function AppShell() {
   const {
     conversations, setConversations, conversationsRef,
     activeConversationId, setActiveConversationId,
-    dmMessages, setDmMessages, dmMessagesRef,
-    dmReplyTarget, setDmReplyTarget,
-    dmEditTarget, setDmEditTargetTracked,
-    unreadConversationIds, setUnreadConversationIds,
-    friends, setFriends,
-    showNewConversation, setShowNewConversation,
-    knownPeople,
-    handleSelectConversation, handleCreateConversation,
-    handleSendDm, handleDeleteDmMessage,
-    handleDmReplyRequest, handleDmEditRequest, handleSaveDmEdit,
-    handleSendFriendRequest, handleAcceptFriendRequest, handleDeclineFriendRequest,
-    handleMiniProfileAddFriend, handleMiniProfileSendMessage,
+    setDmMessages, dmMessagesRef,
+    setUnreadConversationIds,
+    setFriends,
   } = conversationsData
   const activeConversation = conversations.find((c) => c.id === activeConversationId) || null
 
@@ -192,47 +122,22 @@ export default function AppShell() {
   )
   const {
     voice, setVoice, voiceRef,
-    voiceStatus, setVoiceStatus,
-    dmCallParticipants, setDmCallParticipants,
-    incomingCall, setIncomingCall,
-    dmPendingWatchUserId, setDmPendingWatchUserId,
-    dmVoiceStageHeight,
-    pendingWatch, setPendingWatch,
-    activeMuteVoteChannelId, setActiveMuteVoteChannelId,
-    muteVote, setMuteVote,
-    dmRoster, isInDmCall, voiceRoster, voiceTopic,
-    handleJoinVoice, handleLeaveVoice, handleDmVoiceJoin,
-    handleAcceptIncomingCall, handleDeclineIncomingCall,
-    handleWatchScreen, handleWatchBadge, handleDmRequestWatch,
-    handleDmVoiceStageResizeStart, handleVoiceStatus,
-    handleDisconnectUser, handleStartMuteVote, handleCastMuteVote,
-    handleRequestScreenShare, handleWakeUser,
+    setDmCallParticipants,
+    setIncomingCall,
+    setActiveMuteVoteChannelId,
+    setMuteVote,
+    handleJoinVoice, handleVoiceStatus,
   } = voiceCall
 
   const participantContextMenu = useParticipantContextMenu(
     channels, currentChannel, setChannelId, setServerId, setActiveConversationId,
   )
-  const {
-    contextMenuTarget, setContextMenuTarget,
-    mentionPrefill,
-    openParticipantContextMenu, handleMention,
-  } = participantContextMenu
+  const { mentionPrefill } = participantContextMenu
 
   const channelMessages = useChannelMessages(currentChannel, channelId, gateway, pendingEditsRef)
-  const {
-    messages, setMessages, messagesRef,
-    replyTarget, setReplyTarget,
-    editTarget, setEditTargetTracked,
-    handleSend, handleToggleReaction, handleDeleteMessage,
-    handleReplyRequest, handleEditRequest, handleSaveEdit,
-  } = channelMessages
+  const { setMessages, messagesRef } = channelMessages
 
   const inviteLinks = useInviteLinks(servers, setServers, selectServer, handleJoinVoice)
-  const {
-    voiceInvite, setVoiceInvite,
-    handleAcceptServerInvite, handleDeclineServerInvite,
-    handleOpenInvitedServer, handleConfirmVoiceInvite,
-  } = inviteLinks
 
   // --- очередь исходящих (статусы доставки, ретраи, черновики) -----------
   // Транспорт ставится отдельно от самой очереди: outbox живёт вне React (его
