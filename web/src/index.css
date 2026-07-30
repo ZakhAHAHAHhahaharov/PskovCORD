@@ -1089,23 +1089,64 @@ input {
   background: var(--channel-hover);
 }
 
-/* Флайаут "Стили" (ProfileStylesFlyout.tsx) — теперь ЧАСТЬ .modal-overlay
-   профиля (см. ProfileModal.tsx), обычный flex-элемент СЛЕВА от .modal, а
-   НЕ position:absolute: раньше он рендерился сиблингом снаружи
-   .modal-overlay без единого позиционированного предка (улетал в угол всей
-   страницы) и его перекрывал сам .modal-overlay (z-index:100, inset:0) —
-   клик по нему на самом деле закрывал весь профиль. gap между элементами —
-   на самом .modal-overlay (см. там), общий для всех модалок с несколькими
-   flex-детьми. */
+/* На мобильном поместиться СЛЕВА от модалки негде (см. .styles-flyout —
+   там на мобильном флайаут вообще не рендерится этим путём, подменяет
+   содержимое .modal напрямую, см. ProfileModal.tsx) — сам тег утапливаем
+   внутрь модалки, в верхний правый угол, вместо того чтобы торчать за
+   пределы 92vw-ширины (там его либо обрезало бы вьюпортом, либо он вылезал
+   бы за край экрана). */
+@media (max-width: 768px) {
+  .profile-styles-tab {
+    top: 10px;
+    right: 10px;
+    left: auto;
+    border-radius: 8px;
+    box-shadow: none;
+  }
+}
+
+/* Флайаут "Стили" (ProfileStylesFlyout.tsx) — на десктопе позиционируется
+   от .profile-modal-wrap (см. выше), СЛЕВА от .modal и той же высоты, что и
+   она (top/bottom:0 — тянется на всю высоту родителя, чья высота равна
+   высоте .modal, единственного НЕ-абсолютного его ребёнка). Не двигает саму
+   модалку — в отличие от прежнего варианта "оба flex-item в
+   .modal-overlay", тут флайаут вне потока полностью, .modal-overlay
+   центрирует только .profile-modal-wrap (который по размеру равен просто
+   .modal). На мобильном этот блок вообще не используется — там флайаут
+   рендерится ВНУТРИ .modal, подменяя обычное содержимое (см. ProfileModal.tsx),
+   поэтому получает не эти правила, а обычный блочный поток. */
 .styles-flyout {
-  flex-shrink: 0;
-  width: 260px;
-  max-height: 90vh;
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 100%;
+  margin-right: 10px;
+  width: 440px;
+  max-width: 92vw;
   overflow-y: auto;
   background: var(--modal-bg);
   border-radius: 8px;
   padding: 16px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+}
+
+/* На мобильном ProfileModal.tsx рендерит этот же компонент ВНУТРИ .modal
+   (подменяя её обычное содержимое), а не рядом с ней — все правила выше про
+   "отдельная панель слева" тут неуместны: без сброса position:absolute
+   пытался бы вылезти от .profile-modal-wrap точно так же, как на десктопе,
+   и улетал бы за левый край экрана вместо того, чтобы просто стать
+   содержимым модалки. */
+@media (max-width: 768px) {
+  .styles-flyout {
+    position: static;
+    width: auto;
+    max-width: none;
+    margin-right: 0;
+    padding: 0;
+    background: none;
+    border-radius: 0;
+    box-shadow: none;
+  }
 }
 
 .styles-flyout-title {
@@ -3699,10 +3740,6 @@ textarea.inline-editable-input {
   align-items: center;
   justify-content: center;
   z-index: 100;
-  /* Большинство модалок кладут сюда ровно один flex-item — gap на них не
-     влияет. У ProfileModal их два (ProfileStylesFlyout + .modal, см.
-     ProfileModal.tsx) — зазор между ними именно отсюда. */
-  gap: 10px;
 }
 
 /* Обёртка модала + плашки "Изменения не сохранены" под ним (см.
