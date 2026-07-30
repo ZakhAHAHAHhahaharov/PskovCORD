@@ -1245,6 +1245,31 @@ class UserProfileCard(APIView):
         })
 
 
+class UserAvatarAnimation(APIView):
+    """GET /api/users/<id>/avatar-anim — гифка анимированного аватара.
+
+    Отдельной ручкой и по требованию, по той же причине, что и баннер (см.
+    UserProfileCard): статичный аватар едет в каждом сообщении и каждой
+    строке ростера, а гифка тяжелее его на порядки. Клиент знает, есть ли
+    что грузить, по флагу avatar_animated в обычном профиле, и приходит сюда
+    ровно тогда, когда анимацию надо показать — говорит в голосовом,
+    навели на отправителя сообщения, открыли карточку профиля.
+
+    downloadable — предпочтение владельца «можно ли скачивать мой аватар»
+    (см. accounts.models.User.avatar_downloadable); по нему фронт решает,
+    показывать ли кнопку скачивания. Барьера видимости здесь нет намеренно:
+    ровно та же картинка (её кадр) и так приезжает всем, кто видит
+    сообщение или ростер.
+    """
+
+    def get(self, request, user_id):
+        target = get_object_or_404(User, id=user_id)
+        return Response({
+            "avatar_anim": target.avatar_anim,
+            "downloadable": target.avatar_downloadable,
+        })
+
+
 class UserNote(APIView):
     """GET/PUT приватной заметки о другом пользователе (см.
     chat.models.ProfileNote) — как заметки в профиле Discord: видна и

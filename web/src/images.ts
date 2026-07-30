@@ -132,6 +132,34 @@ function cropAndCompressBanner(dataUrl: string, width: number, height: number): 
   })
 }
 
+/** Потолок на гифку-аватар. Должен совпадать с backend
+ * (accounts/serializers.py MAX_AVATAR_ANIM_BYTES): в отличие от статики её
+ * нечем сжать — перекодировать анимацию в браузере не получится, — поэтому
+ * единственный рычаг это вес исходного файла. */
+export const AVATAR_ANIM_MAX_BYTES = 4_000_000
+
+/** Читает гифку как есть, без единой попытки её сжать: canvas умеет
+ * нарисовать только текущий кадр, и любой прогон через него означал бы
+ * потерю анимации. Отсюда и жёсткая проверка веса — уменьшить файл, если он
+ * не влез, нам нечем, остаётся честно сказать об этом. */
+export function fileToGifDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    if (file.size > AVATAR_ANIM_MAX_BYTES) {
+      reject(
+        new Error(
+          `Гифка слишком большая (макс. ${Math.round(AVATAR_ANIM_MAX_BYTES / 1_000_000)} МБ). ` +
+            'Уменьшите её размер или число кадров.',
+        ),
+      )
+      return
+    }
+    const reader = new FileReader()
+    reader.onerror = () => reject(new Error('Не удалось прочитать файл.'))
+    reader.onload = () => resolve(reader.result as string)
+    reader.readAsDataURL(file)
+  })
+}
+
 /** Читает файл, кроп по центру до квадрата и сжимает в JPEG data-URL —
  * и для аватара пользователя, и для значка сервера (разный только размер). */
 export function fileToSquareDataUrl(file: File, size: number): Promise<string> {

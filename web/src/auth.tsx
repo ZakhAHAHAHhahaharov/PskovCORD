@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useState, ReactNode } from 'react'
 import {
   api,
+  ApiError,
   setTokens,
   getToken,
   getRefreshToken,
@@ -76,9 +77,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           const fresh = await api.me()
           setUser(fresh)
           saveCachedMe(fresh)
-        } catch {
-          setTokens(null, null)
-          clearCachedMe()
+        } catch (err) {
+          // Токены выбрасываем ТОЛЬКО если сервер сам отверг их (401/403).
+          // Раньше сюда попадала любая ошибка — в том числе «сервер не
+          // ответил»: открыть приложение в момент перезапуска бэкенда,
+          // деплоя или короткого обрыва связи означало молча лишиться
+          // сессии и получить экран входа. Это и была самая частая причина
+          // «иногда выбивает с акка» (см. ApiError в api.ts).
+          const status = err instanceof ApiError ? err.status : 0
+          if (status === 401 || status === 403) {
+            setTokens(null, null)
+            clearCachedMe()
+            setUser(null)
+          }
+          // Иначе — остаёмся с кэшированным профилем (или на экране входа,
+          // если кэша нет), но токены сохраняем: следующий запрос/реконнект
+          // подхватит живую сессию сам.
         }
       }
       setLoading(false)
@@ -137,27 +151,64 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (knownAccounts.length >= MAX_ACCOUNTS - 1) {
       throw new Error(`Можно авторизовать не более ${MAX_ACCOUNTS} аккаунтов одновременно.`)
     }
+    // Тот же самый аккаунт добавить нельзя. Без этой проверки логин под уже
+    // активным аккаунтом клал его КОПИЮ в knownAccounts (текущий уезжает
+    // туда, новый — с тем же id — становится активным), и в переключателе
+    // он показывался дважды. Ник уникален регистронезависимо (см. backend
+    // RegisterSerializer.validate_username), так что сравнения ников хватает,
+    // чтобы вообще не ходить в сеть; настоящая же защита — по id ниже, ник
+    // могли и сменить с тех пор, как запись попала в knownAccounts.
+    const wanted = username.trim().toLowerCase()
+    if (user.username.toLowerCase() === wanted) {
+      throw new Error('Вы уже вошли в этот аккаунт.')
+    }
+    if (knownAccounts.some((a) => a.username.toLowerCase() === wanted)) {
+      throw new Error('Этот аккаунт уже добавлен — переключитесь на него.')
+    }
     // Сначала логин новым аккаунтом — неверный пароль не должен трогать
     // текущую сессию.
     const { access, refresh } = await api.login(username, password)
+    const outgoing = user
+    const outgoingAccess = getToken()
     const outgoingRefresh = getRefreshToken()
+    setTokens(access, refresh)
+    let fresh: Me
+    try {
+      fresh = await api.me()
+    } catch (err) {
+      // Новые токены оказались нерабочими — возвращаем прежнюю сессию как
+      // была, иначе неудачное добавление выкинуло бы и из текущего аккаунта.
+      setTokens(outgoingAccess, outgoingRefresh)
+      throw err
+    }
+    if (fresh.id === outgoing.id) {
+      // Тот же аккаунт под другим ником (переименовали) — второй слот ему не
+      // заводим, просто остаёмся в нём же со свежими токенами.
+      setKnownAccounts((prev) => removeKnownAccount(fresh.id, prev))
+      setUser(fresh)
+      saveCachedMe(fresh)
+      throw new Error('Вы уже вошли в этот аккаунт.')
+    }
     if (outgoingRefresh) {
       setKnownAccounts((prev) =>
         upsertKnownAccount(
           {
-            id: user.id,
-            username: user.username,
-            avatar_color: user.avatar_color,
-            avatar_image: user.avatar_image,
-            status: user.status,
+            id: outgoing.id,
+            username: outgoing.username,
+            avatar_color: outgoing.avatar_color,
+            avatar_image: outgoing.avatar_image,
+            status: outgoing.status,
             refresh: outgoingRefresh,
           },
-          prev,
+          // Целевой аккаунт становится активным — его прежняя «свёрнутая»
+          // запись (если он уже был в списке под старым ником) обязана уйти,
+          // иначе он окажется и активным, и в списке одновременно.
+          removeKnownAccount(fresh.id, prev),
         ),
       )
+    } else {
+      setKnownAccounts((prev) => removeKnownAccount(fresh.id, prev))
     }
-    setTokens(access, refresh)
-    const fresh = await api.me()
     setUser(fresh)
     saveCachedMe(fresh)
   }
@@ -177,7 +228,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const outgoingRefresh = getRefreshToken()
     setKnownAccounts((prev) => {
       const withOutgoing =
-        user && outgoingRefresh
+        // user.id === result.user.id значит, что «другой» аккаунт на самом
+        // деле тот же самый (испорченное хранилище прошлых версий, см.
+        // accounts.dedupeById) — записывать себя же в список нельзя, иначе
+        // дубль воспроизводится снова.
+        user && outgoingRefresh && user.id !== result.user.id
           ? upsertKnownAccount(
               {
                 id: user.id,
@@ -190,7 +245,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               prev,
             )
           : prev
-      return removeKnownAccount(accountId, withOutgoing)
+      // И по слоту, на который нажали, и по id того, кем в итоге стали:
+      // обычно это одно и то же, но если запись в списке устарела, второй
+      // вызов не даст активному аккаунту остаться ещё и в переключателе.
+      return removeKnownAccount(
+        result.user.id,
+        removeKnownAccount(accountId, withOutgoing),
+      )
     })
     // setTokens ДО setUser, одним тактом без await между ними — при remount
     // GatewayProvider (см. key={user.id} в App.tsx) должен увидеть уже новый

@@ -8,6 +8,7 @@ import type { useParticipantContextMenu } from '../hooks/useParticipantContextMe
 import type { useServerData } from '../hooks/useServerData'
 import type { useVoiceCall } from '../hooks/useVoiceCall'
 import { conversationDisplayName } from '../conversation'
+import { ComposerDraft } from '../drafts'
 import { outbox, pendingAsMessage, PendingMessage } from '../outbox'
 import MessageList from './MessageList'
 import MessageInput, { MessageInputPrefill } from './MessageInput'
@@ -29,8 +30,8 @@ interface AppShellChatProps {
   canDeleteMessages: boolean
   pendingChannelMessages: PendingMessage[]
   pendingDmMessages: PendingMessage[]
-  loadDraft: (key: string) => string | undefined
-  saveDraft: (key: string, text: string) => void
+  loadDraft: (key: string) => ComposerDraft | undefined
+  saveDraft: (key: string, draft: ComposerDraft) => void
   showMembersList: boolean
   setShowMembersList: (fn: (v: boolean) => boolean) => void
   openProfilePopup: (user: ProfilePopupUser, e: ReactMouseEvent) => void

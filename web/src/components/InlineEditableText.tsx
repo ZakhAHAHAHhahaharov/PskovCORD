@@ -1,4 +1,4 @@
-import { useId, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 
 /**
  * Текстовое поле, которое в состоянии покоя выглядит как обычный текст (без
@@ -56,6 +56,37 @@ export default function InlineEditableText({
     }
   }
 
+  // Сохранение при РАЗМОНТИРОВАНИИ, а не только по blur.
+  //
+  // blur — единственный путь сохранения, но он не наступает, когда поле
+  // исчезает вместе с контейнером: клик мимо мини-профиля (MiniProfilePopup
+  // закрывается по mousedown вне себя) убивал инпут до того, как браузер
+  // успевал снять с него фокус, и набранная заметка о другом пользователе
+  // просто пропадала — «заметки не добавляются». React blur при unmount не
+  // шлёт, так что коммитим здесь сами.
+  //
+  // Всё через ref'ы: cleanup видит только те значения, что были на момент
+  // ПОСЛЕДНЕГО рендера, а Escape и закрытие попапа приходят одним и тем же
+  // событием — состояние «отменено» просто не успело бы стать стейтом.
+  const latest = useRef({ editing, draft, value, onSave })
+  latest.current = { editing, draft, value, onSave }
+  const cancelled = useRef(false)
+  useEffect(
+    () => () => {
+      if (cancelled.current) return
+      const { editing: wasEditing, draft: lastDraft, value: lastValue, onSave: save } = latest.current
+      if (!wasEditing) return
+      const trimmed = lastDraft.trim()
+      if (trimmed === lastValue) return
+      void save(trimmed).catch(() => {
+        // Показать ошибку уже негде — компонента нет. Молчим намеренно:
+        // значение либо сохранилось, либо нет, и вернуться к нему можно
+        // тем же полем.
+      })
+    },
+    [],
+  )
+
   if (editing) {
     const commonProps = {
       className: `inline-editable-input ${className ?? ''}`,
@@ -72,6 +103,10 @@ export default function InlineEditableText({
           commit()
         }
         if (e.key === 'Escape') {
+          // Esc в мини-профиле заодно закрывает сам попап (useEscToClose) —
+          // то есть размонтирует это поле тем же событием. Флаг ставится
+          // синхронно, чтобы cleanup выше не принял откат за «недосохранили».
+          cancelled.current = true
           setDraft(value)
           setEditing(false)
         }
@@ -101,6 +136,7 @@ export default function InlineEditableText({
       className={`inline-editable-display ${className ?? ''} ${!value ? 'empty' : ''}`}
       style={style}
       onClick={() => {
+        cancelled.current = false
         setDraft(value)
         setEditing(true)
       }}

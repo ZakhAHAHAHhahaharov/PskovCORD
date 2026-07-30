@@ -1,4 +1,5 @@
 import type { types } from 'mediasoup'
+import { verifyToken } from './auth'
 import { createWebRtcTransport } from './worker'
 import { Room, Peer } from './room'
 
@@ -153,13 +154,40 @@ export async function handleRequest(
       // узнает о новых демках) и consume (не сможет запросить существующую).
       const targetUserId = Number(data.targetUserId)
       const blocked = !!data.blocked
+      // О смене доступа заблокированного нужно ЯВНО известить: клиент знает
+      // о чужих демонстрациях только из getProducers (снимок на входе в
+      // комнату) и newProducer/producerClosed. Раньше снятие запрета не
+      // порождало ни того, ни другого — у зрителя так и не появлялось, что
+      // смотреть, и помогал только выход и повторный вход в канал.
+      const screenProducers = room.screenProducersOf(peer)
       if (blocked) {
         peer.blockedScreenViewers.add(targetUserId)
         room.closeScreenConsumersFor(peer, targetUserId)
+        // producerClosed (а не только закрытие консюмеров) — чтобы у зрителя
+        // ушла и сама пометка «есть что посмотреть», а не только картинка.
+        for (const p of screenProducers) room.notifyUser(targetUserId, 'producerClosed', p)
       } else {
         peer.blockedScreenViewers.delete(targetUserId)
+        for (const p of screenProducers) room.notifyUser(targetUserId, 'newProducer', p)
       }
       return {}
+    }
+
+    case 'updateToken': {
+      // Свежий токен для УЖЕ подключённого пира: права роли едут в токене
+      // (см. chat/sfu.py), а он предъявляется один раз — при открытии
+      // соединения. Поэтому право «Показывать видео», снятое и возвращённое
+      // обратно, до этого действия оживало только после выхода и повторного
+      // входа в голосовой канал. Токен по-прежнему выдаёт Django и только
+      // тому, у кого право есть: подменить себе разрешение этим действием
+      // нельзя.
+      const claims = verifyToken(String(data?.token ?? ''))
+      if (Number(claims.uid) !== peer.userId || String(claims.room) !== room.id) {
+        throw new Error('token does not match this peer')
+      }
+      peer.canSpeak = claims.speak !== false
+      peer.canVideo = claims.video !== false
+      return { speak: peer.canSpeak, video: peer.canVideo }
     }
 
     case 'closeConsumer': {

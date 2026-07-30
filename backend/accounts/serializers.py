@@ -32,6 +32,14 @@ def check_password_strength(password, user=None):
 MAX_AVATAR_BYTES = 1_500_000
 ALLOWED_AVATAR_MIME = {"image/jpeg", "image/png", "image/webp", "image/gif"}
 
+# Анимированный аватар (accounts.models.User.avatar_anim) хранится КАК ЕСТЬ:
+# перекодировать гифку в браузере нечем (canvas отдаёт один кадр), поэтому
+# сжать её, как статику, нельзя — остаётся ограничить вес. Лимит тот же, что
+# у баннера: гифка на аватар той же природы и, в отличие от avatar_image, в
+# каждом сообщении не едет — только по запросу карточки/наведения.
+MAX_AVATAR_ANIM_BYTES = 4_000_000
+ALLOWED_AVATAR_ANIM_MIME = {"image/gif"}
+
 # Баннер-гифка крупнее аватара (см. ProfileModal.BANNER_MAX_W/H на фронте —
 # 640x320), поэтому лимит выше, но всё ещё ограничен: гифки тяжелее JPEG,
 # а хранение — тот же data-URL-в-БД приём, что и для avatar_image.
@@ -113,13 +121,24 @@ class UserSerializer(serializers.ModelSerializer):
     поэтому они здесь, а не только в MeSerializer (это лёгкие поля — id
     шрифта + пара строк, не гифка)."""
 
+    # avatar_animated — только ФЛАГ, сама гифка (avatar_anim) сюда не едет по
+    # той же причине, что и banner_image: этот сериализатор подставляется в
+    # каждое сообщение и каждую строку ростера. Клиенту флага достаточно,
+    # чтобы знать, есть ли что проигрывать, и догрузить гифку ровно тогда,
+    # когда она понадобилась (chat.views.UserAvatarAnimation).
+    avatar_animated = serializers.SerializerMethodField()
+
     class Meta:
         model = User
         fields = [
             "id", "username", "display_name", "avatar_color", "avatar_image",
+            "avatar_animated", "avatar_downloadable",
             "status", "banner_gradient",
             "name_font", "name_effect", "name_color_1", "name_color_2", "name_anim_speed",
         ]
+
+    def get_avatar_animated(self, obj) -> bool:
+        return bool(obj.avatar_anim)
 
 
 class MeSerializer(serializers.ModelSerializer):
@@ -129,7 +148,15 @@ class MeSerializer(serializers.ModelSerializer):
     просто текст (макс. пара сотен байт), не гифка на мегабайты, раздувать
     им КАЖДОЕ сообщение/строку ростера (см. UserSerializer выше) незачем,
     но и лениво догружать не за чем — в чужой карточке профиля отдаётся
-    вместе с баннером через chat.views.UserProfileCard."""
+    вместе с баннером через chat.views.UserProfileCard.
+
+    avatar_anim (гифка целиком) и здесь не отдаётся: свой аватар нужен
+    редактору ровно в момент, когда его открыли менять, и берётся тем же
+    запросом, что и чужой (chat.views.UserAvatarAnimation). Иначе КАЖДЫЙ
+    /api/auth/me — а он идёт при каждом старте приложения — вёз бы с собой
+    несколько мегабайт base64."""
+
+    avatar_animated = serializers.SerializerMethodField()
 
     class Meta:
         model = User
@@ -137,10 +164,14 @@ class MeSerializer(serializers.ModelSerializer):
             "id", "username", "display_name", "bio", "pronouns",
             "custom_status", "custom_status_emoji", "date_joined",
             "avatar_color", "avatar_image",
+            "avatar_animated", "avatar_frame", "avatar_downloadable",
             "status", "banner_gradient", "banner_image", "banner_color",
             "dm_privacy",
             "name_font", "name_effect", "name_color_1", "name_color_2", "name_anim_speed",
         ]
+
+    def get_avatar_animated(self, obj) -> bool:
+        return bool(obj.avatar_anim)
 
 
 class RegisterSerializer(serializers.ModelSerializer):
@@ -198,7 +229,8 @@ class ProfileUpdateSerializer(serializers.ModelSerializer):
         fields = [
             "username", "display_name", "bio", "pronouns", "custom_status",
             "custom_status_emoji",
-            "avatar_image", "banner_gradient", "banner_image", "banner_color",
+            "avatar_image", "avatar_anim", "avatar_frame", "avatar_downloadable",
+            "banner_gradient", "banner_image", "banner_color",
             "dm_privacy",
             "name_font", "name_effect", "name_color_1", "name_color_2", "name_anim_speed",
             "current_password",
@@ -211,6 +243,9 @@ class ProfileUpdateSerializer(serializers.ModelSerializer):
             "custom_status": {"required": False, "allow_blank": True},
             "custom_status_emoji": {"required": False, "allow_blank": True},
             "avatar_image": {"required": False, "allow_blank": True},
+            "avatar_anim": {"required": False, "allow_blank": True},
+            "avatar_frame": {"required": False},
+            "avatar_downloadable": {"required": False},
             "banner_gradient": {"required": False, "allow_blank": True},
             "banner_image": {"required": False, "allow_blank": True},
             "banner_color": {"required": False, "allow_blank": True},
@@ -241,6 +276,14 @@ class ProfileUpdateSerializer(serializers.ModelSerializer):
     def validate_avatar_image(self, value):
         return validate_data_url(
             value, ALLOWED_AVATAR_MIME, MAX_AVATAR_BYTES, "аватар")
+
+    def validate_avatar_anim(self, value):
+        # Только гифка: смысл поля — покадровая анимация, из которой выбран
+        # статичный кадр (см. модель). Статике здесь делать нечего, для неё
+        # есть avatar_image.
+        return validate_data_url(
+            value, ALLOWED_AVATAR_ANIM_MIME, MAX_AVATAR_ANIM_BYTES,
+            "анимированный аватар")
 
     # bio — TextField без max_length на самой модели (тот же приём, что и у
     # Server.description в chat.models — свободный текст без БД-лимита),
@@ -285,6 +328,13 @@ class ProfileUpdateSerializer(serializers.ModelSerializer):
             color = compute_avatar_color(validated_data["avatar_image"])
             if color:
                 validated_data["avatar_color"] = color
+        # Аватар удалили — уносим и гифку: avatar_anim без avatar_image это
+        # анимация неизвестно чего, и флаг avatar_animated продолжал бы
+        # заставлять клиентов ходить за ней. Смена аватара на обычную
+        # картинку — то же самое: анимация относилась к прежней.
+        if "avatar_image" in validated_data and "avatar_anim" not in validated_data:
+            validated_data["avatar_anim"] = ""
+            validated_data["avatar_frame"] = 0
         return super().update(instance, validated_data)
 
     def validate_banner_gradient(self, value):

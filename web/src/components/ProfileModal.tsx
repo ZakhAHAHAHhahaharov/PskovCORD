@@ -4,7 +4,9 @@ import { useAuth } from '../auth'
 import { api, Me } from '../api'
 import { useEscToClose } from '../modalStack'
 import { useIsMobile } from '../hooks/useIsMobile'
-import { AVATAR_SIZE, fileToSquareDataUrl } from '../images'
+import { AVATAR_SIZE, fileToGifDataUrl, fileToSquareDataUrl } from '../images'
+import { invalidateAvatarAnimation } from '../avatarAnim'
+import GifAvatarModal from './GifAvatarModal'
 import ProfileCardHeader from './ProfileCardHeader'
 import BannerEditorModal from './BannerEditorModal'
 import StatusEditModal from './StatusEditModal'
@@ -41,6 +43,9 @@ export default function ProfileModal({ onClose }: { onClose: () => void }) {
   const [showStylesFlyout, setShowStylesFlyout] = useState(false)
   const [showNameStyleModal, setShowNameStyleModal] = useState(false)
   const [avatarError, setAvatarError] = useState('')
+  // Выбранная, но ещё не сохранённая гифка — пока она здесь, открыт
+  // редактор кадра (GifAvatarModal).
+  const [pendingGif, setPendingGif] = useState('')
   const [copied, setCopied] = useState(false)
   const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -67,11 +72,34 @@ export default function ProfileModal({ onClose }: { onClose: () => void }) {
     if (!file) return
     setAvatarError('')
     try {
+      // Гифка идёт своим путём: её нельзя просто сжать в квадратный JPEG —
+      // canvas отдаёт один кадр, и анимация потерялась бы молча. Вместо
+      // этого открываем редактор, где выбирается кадр-заставка, а сама
+      // гифка сохраняется как есть (см. GifAvatarModal).
+      if (file.type === 'image/gif') {
+        setPendingGif(await fileToGifDataUrl(file))
+        return
+      }
       const dataUrl = await fileToSquareDataUrl(file, AVATAR_SIZE)
       await patch({ avatar_image: dataUrl })
     } catch (err) {
       setAvatarError((err as Error).message)
     }
+  }
+
+  /** Гифка отредактирована: статичный кадр, сама анимация и настройки едут
+   * одним PATCH — иначе между двумя запросами аватар успел бы побывать в
+   * несогласованном виде (кадр от новой гифки поверх старой анимации). */
+  const saveGifAvatar = async (data: {
+    avatar_image: string
+    avatar_anim: string
+    avatar_frame: number
+    avatar_downloadable: boolean
+  }) => {
+    await patch(data)
+    // У всех, кто уже успел посмотреть прежнюю анимацию, она лежит в кэше —
+    // включая нас самих (карточка профиля проигрывает её тут же).
+    invalidateAvatarAnimation(user.id)
   }
 
   const copyId = () => {
@@ -141,6 +169,8 @@ export default function ProfileModal({ onClose }: { onClose: () => void }) {
                   displayName={user.display_name}
                   avatarColor={user.avatar_color}
                   avatarImage={user.avatar_image}
+                  userId={user.id}
+                  avatarAnimated={user.avatar_animated}
                   bannerGradient={user.banner_gradient}
                   bannerImage={user.banner_image}
                   bannerColor={user.banner_color}
@@ -256,6 +286,16 @@ export default function ProfileModal({ onClose }: { onClose: () => void }) {
             patch({ custom_status_emoji: emoji, custom_status: text })
           }
           onClose={() => setShowStatusEditor(false)}
+        />
+      )}
+
+      {pendingGif && (
+        <GifAvatarModal
+          gifDataUrl={pendingGif}
+          initialFrame={user.avatar_animated ? user.avatar_frame : undefined}
+          initialDownloadable={user.avatar_downloadable}
+          onSave={saveGifAvatar}
+          onClose={() => setPendingGif('')}
         />
       )}
 

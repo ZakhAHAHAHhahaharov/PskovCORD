@@ -1,6 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Pencil, Plus, Smile, X } from 'lucide-react'
-import { Attachment, ChatMessageBase, MentionCandidate, uploadAttachment } from '../api'
+import {
+  Attachment,
+  ChatMessageBase,
+  MentionCandidate,
+  mediaUrl,
+  uploadAttachment,
+} from '../api'
+import { ComposerDraft } from '../drafts'
 import Avatar from './Avatar'
 import EmojiPicker, { EmojiPickerAnchor } from './EmojiPicker'
 
@@ -25,14 +32,36 @@ interface StagedFile {
   localId: string
   name: string
   size: number
-  /** objectURL для превью — только у картинок, иначе null. */
+  /** Превью — только у картинок, иначе null. objectURL для выбранного прямо
+   * сейчас файла либо обычный адрес на сервере у восстановленного из
+   * черновика (см. draftToStaged). */
   previewUrl: string | null
+  /** Превью — наш objectURL, который надо освободить (в отличие от адреса
+   * уже загруженного файла: его отзывать нечего и незачем). */
+  previewOwned: boolean
   /** 0..1, пока идёт загрузка. */
   progress: number
   /** Заполняется, когда файл долетел до сервера. */
   uploaded: Attachment | null
   error: string | null
   controller: AbortController
+}
+
+/** Восстановление вложений из черновика: файлы уже лежат на сервере (грузятся
+ * сразу при выборе, см. addFiles), поэтому в черновике хранятся только их
+ * метаданные — обратно они разворачиваются в готовые к отправке карточки. */
+function draftToStaged(attachments: Attachment[]): StagedFile[] {
+  return attachments.map((a) => ({
+    localId: `staged-${(stagedCounter += 1)}`,
+    name: a.original_name,
+    size: a.size,
+    previewUrl: a.content_type.startsWith('image/') ? mediaUrl(a.url) : null,
+    previewOwned: false,
+    progress: 1,
+    uploaded: a,
+    error: null,
+    controller: new AbortController(),
+  }))
 }
 
 /** Сколько файлов можно прикрепить к одному сообщению — должно совпадать с
@@ -81,37 +110,56 @@ export default function MessageInput({
   /** Идентичность получателя ("channel-5", "dm-12") — вместе с ключом на самом
    * компоненте (см. AppShell) заставляет React пересоздавать инпут при смене
    * канала/диалога, а loadDraft/saveDraft читают и пишут черновик именно этого
-   * канала в общую карту черновиков. Не хранится тут же локальным стейтом:
-   * черновик должен пережить unmount этого инстанса (переход в другой канал,
-   * в голосовой канал и обратно), а не просто исчезнуть вместе с компонентом,
-   * поэтому источник правды — снаружи, в AppShell (см. draftsRef там). */
+   * канала. Не хранится тут же локальным стейтом: черновик должен пережить
+   * unmount этого инстанса (переход в другой канал, в голосовой канал и
+   * обратно) и перезагрузку страницы, поэтому источник правды — снаружи,
+   * в localStorage (см. drafts.ts). */
   draftKey?: string
-  loadDraft?: (key: string) => string | undefined
-  saveDraft?: (key: string, text: string) => void
+  loadDraft?: (key: string) => ComposerDraft | undefined
+  saveDraft?: (key: string, draft: ComposerDraft) => void
   /** Кандидаты на @упоминание при вводе "@ник" — ростер сервера или участники
    * диалога/группы, кому принадлежит это конкретное поле ввода. */
   mentionCandidates?: MentionCandidate[]
 }) {
-  const [value, setValue] = useState(() => (draftKey && loadDraft ? loadDraft(draftKey) ?? '' : ''))
-  const [staged, setStaged] = useState<StagedFile[]>([])
+  const restored = draftKey && loadDraft ? loadDraft(draftKey) : undefined
+  const [value, setValue] = useState(() => restored?.text ?? '')
+  const [staged, setStaged] = useState<StagedFile[]>(() =>
+    draftToStaged(restored?.attachments ?? []),
+  )
   const [emojiAnchor, setEmojiAnchor] = useState<EmojiPickerAnchor | null>(null)
   const [dragging, setDragging] = useState(false)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  // Черновик, спрятанный на время редактирования чужого сообщения — см.
+  // эффект «вход/выход из режима редактирования» ниже.
+  const preEditValueRef = useRef<string | null>(null)
 
-  // Обёртка вместо голого setValue — черновик обязан улететь наружу при
-  // КАЖДОМ изменении текста, иначе AppShell отдаст следующему инстансу
-  // (после отлучки в голосовой канал) устаревшее значение. Исключение — режим
-  // редактирования: то, что печатается в textarea, тогда это правка чужого
-  // сообщения, а не черновик нового, и не должна затирать реальный черновик
-  // (см. preEditValueRef ниже — вот что вернётся в поле после отмены/сохранения).
-  const updateValue = useCallback(
-    (next: string) => {
-      setValue(next)
-      if (draftKey && saveDraft && !editTarget) saveDraft(draftKey, next)
-    },
-    [draftKey, saveDraft, editTarget],
-  )
+  // Черновик сохраняется целиком (текст + уже загруженные вложения) при любом
+  // изменении хоть того, хоть другого — эффектом, а не из каждого места, где
+  // что-то меняется: путей туда много (ввод, вставка эмодзи, подстановка
+  // упоминания, добавление/удаление/дозагрузка файла), и любой забытый
+  // означал бы потерянный черновик.
+  //
+  // Режим редактирования — исключение: в textarea тогда правка ЧУЖОГО
+  // сообщения, а не черновик нового, и затирать им реальный черновик нельзя
+  // (см. preEditValueRef ниже — вот что вернётся в поле после отмены).
+  useEffect(() => {
+    if (!draftKey || !saveDraft || editTarget) return
+    // Выход из режима редактирования: editTarget уже null, но в поле ещё
+    // текст правленого сообщения — черновик вернёт эффект ниже, следующим
+    // рендером. Записать сейчас значило бы подменить черновик чужим текстом.
+    if (preEditValueRef.current !== null) return
+    saveDraft(draftKey, {
+      text: value,
+      // Только долетевшие: недогруженный файл нечем восстановить на той
+      // стороне — его придётся прикрепить заново.
+      attachments: staged
+        .map((f) => f.uploaded)
+        .filter((a): a is Attachment => a !== null),
+    })
+  }, [value, staged, draftKey, saveDraft, editTarget])
+
+  const updateValue = useCallback((next: string) => setValue(next), [])
 
   // --- автокомплит @упоминаний -------------------------------------------
   // mentionStart — индекс символа "@" в value, от которого набирается запрос;
@@ -189,7 +237,6 @@ export default function MessageInput({
   // приводят к editTarget: null) возвращаем спрятанный текст обратно: без
   // этого несохранённый черновик пропадал бы бесследно при каждом клике на
   // "редактировать".
-  const preEditValueRef = useRef<string | null>(null)
   useEffect(() => {
     if (editTarget) {
       preEditValueRef.current = value
@@ -216,8 +263,11 @@ export default function MessageInput({
   useEffect(
     () => () => {
       for (const file of stagedRef.current) {
-        if (file.previewUrl) URL.revokeObjectURL(file.previewUrl)
-        file.controller.abort()
+        if (file.previewOwned && file.previewUrl) URL.revokeObjectURL(file.previewUrl)
+        // Прерываем только незавершённые загрузки: у файла, который уже
+        // долетел и лежит в черновике, abort() ничего не отменяет, но и
+        // звать его незачем.
+        if (!file.uploaded) file.controller.abort()
       }
     },
     [],
@@ -245,6 +295,7 @@ export default function MessageInput({
             previewUrl: file.type.startsWith('image/')
               ? URL.createObjectURL(file)
               : null,
+            previewOwned: true,
             progress: 0,
             uploaded: null,
             error: null,
@@ -277,8 +328,8 @@ export default function MessageInput({
       const target = prev.find((f) => f.localId === localId)
       if (target) {
         // Прерываем загрузку, если она ещё идёт, и отпускаем превью.
-        target.controller.abort()
-        if (target.previewUrl) URL.revokeObjectURL(target.previewUrl)
+        if (!target.uploaded) target.controller.abort()
+        if (target.previewOwned && target.previewUrl) URL.revokeObjectURL(target.previewUrl)
       }
       return prev.filter((f) => f.localId !== localId)
     })
@@ -287,7 +338,7 @@ export default function MessageInput({
   const clearStaged = useCallback(() => {
     setStaged((prev) => {
       for (const file of prev) {
-        if (file.previewUrl) URL.revokeObjectURL(file.previewUrl)
+        if (file.previewOwned && file.previewUrl) URL.revokeObjectURL(file.previewUrl)
       }
       return []
     })
@@ -316,9 +367,10 @@ export default function MessageInput({
     // Пока хоть один файл в пути — ждём: иначе сообщение уйдёт без него.
     if (uploading) return
     onSend({ content, attachments: readyAttachments })
-    // updateValue, а не голый setValue — иначе черновик отправленного текста
-    // остался бы висеть в хранилище AppShell и вернулся бы призраком после
-    // захода в голосовой канал и обратно (см. draftKey/loadDraft/saveDraft).
+    // Опустевшие поле и список вложений эффект выше сохранит как пустой
+    // черновик, а пустой черновик стирает запись целиком (см. drafts.ts) —
+    // иначе отправленный текст вернулся бы призраком при следующем заходе
+    // в этот канал.
     updateValue('')
     clearStaged()
   }

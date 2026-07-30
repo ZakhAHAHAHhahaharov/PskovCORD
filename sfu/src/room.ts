@@ -17,9 +17,14 @@ export class Peer {
   /** Права из access-токена (см. chat/sfu.py): «Говорить» и «Показывать
    * видео». SFU не ходит в Django и о ролях сам не знает, поэтому produce
    * здесь — единственное место, где эти права вообще проверяются на
-   * медиа-леге (см. signaling.ts). */
-  readonly canSpeak: boolean
-  readonly canVideo: boolean
+   * медиа-леге (см. signaling.ts).
+   *
+   * Не readonly: клиент может предъявить свежий токен, не переподключаясь
+   * (action 'updateToken'). Иначе возвращённое право «Показывать видео»
+   * начинало действовать только после выхода и повторного входа в канал —
+   * токен-то предъявляется один раз, при открытии соединения. */
+  canSpeak: boolean
+  canVideo: boolean
   sendTransport?: types.WebRtcTransport
   recvTransport?: types.WebRtcTransport
   readonly producers = new Map<string, types.Producer>()
@@ -165,6 +170,22 @@ export class Room {
       if (peer.id === except.id) continue
       if (except.blockedScreenViewers.has(peer.userId)) continue
       peer.notify(notification, data)
+    }
+  }
+
+  /** Все screen-продюсеры пира — в том виде, в каком они летят клиенту в
+   * newProducer/producerClosed (см. signaling.ts). */
+  screenProducersOf(peer: Peer): { producerId: string; userId: number; source: string }[] {
+    return Array.from(peer.producers.values())
+      .filter((p) => ((p.appData as { source?: string }).source ?? 'mic') === 'screen')
+      .map((p) => ({ producerId: p.id, userId: peer.userId, source: 'screen' }))
+  }
+
+  /** Разослать уведомление всем соединениям конкретного userId (у одного
+   * человека может быть открыто несколько вкладок — Peer'ов). */
+  notifyUser(userId: number, notification: string, data: unknown): void {
+    for (const peer of this.peers.values()) {
+      if (peer.userId === userId) peer.notify(notification, data)
     }
   }
 

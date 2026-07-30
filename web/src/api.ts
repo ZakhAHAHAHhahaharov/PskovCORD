@@ -19,8 +19,17 @@ export interface User {
    * дублирующей второй строки). См. accounts.models.User.display_name. */
   display_name: string
   avatar_color: string
-  /** Картинка аватара (data-URL), пусто — цветной кружок с буквой. */
+  /** Картинка аватара (data-URL), пусто — цветной кружок с буквой. У
+   * анимированного аватара (см. avatar_animated) здесь лежит ВЫБРАННЫЙ КАДР
+   * гифки — то, что видно, пока анимация не играет. */
   avatar_image: string
+  /** У аватара есть гифка. Самой гифки тут нет — она тяжёлая, а этот объект
+   * едет в каждом сообщении и каждой строке ростера; догружается по
+   * требованию, см. avatarAnim.ts. */
+  avatar_animated: boolean
+  /** Владелец разрешил другим скачивать свой аватар (кнопка в карточке
+   * профиля). Не защита — картинка и так в браузере, — а вежливость. */
+  avatar_downloadable: boolean
   /** CSS linear-gradient() для фона карточки профиля; пусто — дефолтный градиент. */
   banner_gradient: string
   status: UserStatus
@@ -53,6 +62,9 @@ export interface NameFont {
 
 /** Свой профиль (/api/auth/me) — всё, включая личные настройки и баннер. */
 export interface Me extends User {
+  /** Номер кадра гифки, выбранного статичной картинкой — редактор аватара
+   * открывается на нём же (см. GifAvatarModal). */
+  avatar_frame: number
   /** Гифка фона карточки профиля (data-URL); если задана — приоритетнее градиента. */
   banner_image: string
   /** Фон ПОД баннером — виден только когда banner_image задан и он с
@@ -477,6 +489,52 @@ export function getRefreshToken(): string | null {
   return refreshToken
 }
 
+/** Ошибка запроса с HTTP-статусом.
+ *
+ * Раньше req() кидал голый Error с текстом от сервера, и вызывающий не мог
+ * отличить «сервер сказал 401» от «сети нет вовсе». Из-за этого, например,
+ * старт приложения при недоступном бэкенде (перезапуск/деплой/спящий
+ * ноутбук) выглядел как протухшая сессия и МОЛЧА выкидывал из аккаунта —
+ * один из источников «иногда выбивает, причина не ясна». Статус 0 = запрос
+ * вообще не долетел. */
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message)
+    this.name = 'ApiError'
+  }
+}
+
+function storedItem(key: string): string | null {
+  try {
+    return localStorage.getItem(key)
+  } catch {
+    return null
+  }
+}
+
+// Синхронизация вкладок. Токены лежат в localStorage (общем на все вкладки),
+// но в памяти каждая вкладка держит СВОЮ копию. С ротацией refresh-токенов
+// (SIMPLE_JWT.ROTATE_REFRESH_TOKENS + блэклист старого) это давало гонку:
+// вкладка A обновляется, вкладка B продолжает считать своим уже отозванный
+// refresh — и на первом же истёкшем access-токене получает отказ и выкидывает
+// пользователя, хотя живая сессия есть, просто в соседней вкладке. Событие
+// storage приходит только в ДРУГИЕ вкладки — ровно то, что нужно.
+if (typeof window !== 'undefined') {
+  window.addEventListener('storage', (e) => {
+    if (e.key === 'access') {
+      accessToken = e.newValue
+      // Вышли из аккаунта в другой вкладке — выходим и здесь, иначе эта
+      // вкладка осталась бы с нарисованным, но нерабочим аккаунтом.
+      if (e.newValue === null) onSessionExpired?.()
+    } else if (e.key === 'refresh') {
+      refreshToken = e.newValue
+    }
+  })
+}
+
 /** Колбэк «сессия окончательно умерла» — ставит auth.tsx, чтобы разлогинить
  * UI. Без него истёкший токен приводил к тому, что все экраны молча
  * схлопывались в пустое состояние: серверов нет, сообщений нет, друзей нет,
@@ -491,10 +549,59 @@ export function setSessionExpiredHandler(fn: (() => void) | null) {
 // запросов запустил бы десяток refresh'ей, а с ротацией токенов на сервере
 // (SIMPLE_JWT.ROTATE_REFRESH_TOKENS) выжил бы ровно один — остальные
 // получили бы отказ и выкинули пользователя на логин без причины.
-let refreshInFlight: Promise<string | null> | null = null
+let refreshInFlight: Promise<RefreshResult> | null = null
 
-function refreshAccessToken(): Promise<string | null> {
-  if (!refreshToken) return Promise.resolve(null)
+/** Чем кончилась попытка обновить сессию.
+ *
+ * Три исхода, а не «токен или null»: «не смогли» — это ЛИБО отказ сервера по
+ * токену (сессия действительно кончилась, надо на экран входа), ЛИБО
+ * недоступный сервер/сеть (бэкенд перезапускают, вайфай моргнул). Раньше оба
+ * приводили к одному и тому же setTokens(null, null) — и второй случай
+ * выкидывал из аккаунта на ровном месте. */
+type RefreshResult =
+  | { status: 'refreshed'; access: string }
+  | { status: 'unauthorized' }
+  | { status: 'unavailable' }
+
+async function requestRefresh(refresh: string): Promise<RefreshResult> {
+  let res: Response
+  try {
+    res = await fetch(`${API}/api/auth/token/refresh`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ refresh }),
+    })
+  } catch {
+    // Сеть не дала даже дойти до сервера — сессия тут ни при чём.
+    return { status: 'unavailable' }
+  }
+  // 5xx/429 — проблема сервера, а не токена: сохраняем сессию и дадим
+  // повторить позже.
+  if (res.status >= 500 || res.status === 429) return { status: 'unavailable' }
+  if (!res.ok) return { status: 'unauthorized' }
+  let data: { access?: string; refresh?: string }
+  try {
+    data = await res.json()
+  } catch {
+    return { status: 'unavailable' }
+  }
+  if (!data.access) return { status: 'unavailable' }
+  // ROTATE_REFRESH_TOKENS=True — сервер отдаёт заодно новый refresh, а
+  // старый отправляет в блэклист. Не сохранить его = разлогиниться на
+  // следующем же обновлении.
+  setTokens(data.access, data.refresh ?? refresh)
+  return { status: 'refreshed', access: data.access }
+}
+
+function refreshAccessToken(): Promise<RefreshResult> {
+  // Хранилище общее на все вкладки, а память — своя (см. слушатель storage
+  // выше). Вкладка могла проспать событие (браузер троттлит фоновые), поэтому
+  // перед обновлением явно сверяемся с тем, что реально лежит в localStorage:
+  // обновляться заведомо устаревшим токеном = гарантированный отказ.
+  const stored = storedItem('refresh')
+  if (stored && stored !== refreshToken) refreshToken = stored
+  if (!refreshToken) return Promise.resolve<RefreshResult>({ status: 'unauthorized' })
   if (!refreshInFlight) {
     // Захватываем токен, с которым стартовали: если за время фетча кто-то
     // переключил аккаунт (см. auth.tsx switchAccount) или вышел, module-level
@@ -502,30 +609,75 @@ function refreshAccessToken(): Promise<string | null> {
     // результат ЭТОГО, более старого, обновления нельзя, иначе токены только
     // что переключённого аккаунта тихо затрутся токенами предыдущего.
     const startedWith = refreshToken
-    refreshInFlight = (async () => {
+    refreshInFlight = (async (): Promise<RefreshResult> => {
       try {
-        const res = await fetch(`${API}/api/auth/token/refresh`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          credentials: 'include',
-          body: JSON.stringify({ refresh: startedWith }),
-        })
-        if (!res.ok) return null
-        const data = await res.json()
-        if (refreshToken !== startedWith) return null
-        // ROTATE_REFRESH_TOKENS=True — сервер отдаёт заодно новый refresh, а
-        // старый отправляет в блэклист. Не сохранить его = разлогиниться на
-        // следующем же обновлении.
-        setTokens(data.access, data.refresh ?? startedWith)
-        return data.access as string
-      } catch {
-        return null
+        const result = await requestRefresh(startedWith)
+        if (refreshToken !== startedWith && result.status !== 'refreshed') {
+          // Пока обновлялись, аккаунт переключили/вошли заново — отказ
+          // касается уже неактуального токена. Живой access при этом есть,
+          // и вызывающему надо просто повторить запрос с ним, а не
+          // разлогиниваться.
+          return accessToken
+            ? { status: 'refreshed', access: accessToken }
+            : { status: 'unauthorized' }
+        }
+        if (result.status === 'unauthorized') {
+          // Ровно один повтор — на случай, когда наш refresh отозвала не
+          // «настоящая» смерть сессии, а ротация в соседней вкладке: она уже
+          // положила в хранилище рабочий токен, пока мы ходили со старым.
+          const latest = storedItem('refresh')
+          if (latest && latest !== startedWith) {
+            refreshToken = latest
+            return await requestRefresh(latest)
+          }
+        }
+        return result
       } finally {
         refreshInFlight = null
       }
     })()
   }
   return refreshInFlight
+}
+
+/** Срок жизни access-токена (unix-секунды) из его же payload, без похода на
+ * сервер. Подпись не проверяем — токен наш собственный, из localStorage, и
+ * нужен только момент истечения. */
+function accessTokenExpiry(token: string): number | null {
+  try {
+    const payload = JSON.parse(atob(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')))
+    return typeof payload.exp === 'number' ? payload.exp : null
+  } catch {
+    return null
+  }
+}
+
+/** Заведомо живой access-токен — обновляет заранее, если старый вот-вот
+ * истечёт (или уже истёк).
+ *
+ * Нужен там, где токен предъявляется НЕ обычным запросом и повторить с 401
+ * нельзя: WebSocket-подключение к gateway (см. gateway.tsx) и SFU. Без этого
+ * вкладка, проспавшая дольше времени жизни access-токена (15 минут, см.
+ * settings.SIMPLE_JWT), бесконечно переподключалась заведомо протухшим
+ * токеном — realtime молча не возвращался, пока что-нибудь не сходит по HTTP.
+ * Возвращает null, только если сессии действительно нет. */
+export async function ensureAccessToken(): Promise<string | null> {
+  const stored = storedItem('access')
+  if (stored && stored !== accessToken) accessToken = stored
+  if (!accessToken) return null
+  const exp = accessTokenExpiry(accessToken)
+  // 30 секунд запаса: за это время успеет пройти сам апгрейд соединения.
+  if (exp !== null && exp * 1000 - Date.now() > 30_000) return accessToken
+  const refreshed = await refreshAccessToken()
+  if (refreshed.status === 'refreshed') return refreshed.access
+  if (refreshed.status === 'unauthorized') {
+    setTokens(null, null)
+    onSessionExpired?.()
+    return null
+  }
+  // Сервер недоступен — отдаём что есть, пусть попытка провалится сама и
+  // сработает обычный реконнект: сессию из-за этого рвать нельзя.
+  return accessToken
 }
 
 async function req(path: string, options: RequestInit = {}, allowRetry = true): Promise<any> {
@@ -538,17 +690,29 @@ async function req(path: string, options: RequestInit = {}, allowRetry = true): 
   // include: логин/регистрация заодно ставят Django-сессию (см. LoginView) —
   // в деве Vite (:5173) и API (:8000) разные origin'ы, без явного include
   // браузер cookie не сохранит/не пришлёт.
-  const res = await fetch(`${API}${path}`, { ...options, headers, credentials: 'include' })
+  let res: Response
+  try {
+    res = await fetch(`${API}${path}`, { ...options, headers, credentials: 'include' })
+  } catch {
+    // Сеть/сервер недоступны. Статус 0 отличает это от любого ответа сервера —
+    // вызывающий (см. auth.tsx) не должен принять это за конец сессии.
+    throw new ApiError('Сервер недоступен — проверьте соединение.', 0)
+  }
 
   // 401 больше не сваливается в общую кучу ошибок: сначала пробуем обновить
-  // токен и повторить запрос ровно один раз, и только если это не вышло —
-  // честно сообщаем, что сессия кончилась.
+  // токен и повторить запрос ровно один раз, и только если сервер отказал
+  // именно по токену — честно сообщаем, что сессия кончилась.
   if (res.status === 401 && allowRetry && accessToken) {
-    const fresh = await refreshAccessToken()
-    if (fresh) return req(path, options, false)
+    const refreshed = await refreshAccessToken()
+    if (refreshed.status === 'refreshed') return req(path, options, false)
+    if (refreshed.status === 'unavailable') {
+      // Обновиться не удалось из-за сети/сервера — токены не трогаем,
+      // сессия жива, запрос просто не состоялся.
+      throw new ApiError('Сервер недоступен — попробуйте ещё раз.', 0)
+    }
     setTokens(null, null)
     onSessionExpired?.()
-    throw new Error('Сессия истекла — войдите заново.')
+    throw new ApiError('Сессия истекла — войдите заново.', 401)
   }
 
   if (!res.ok) {
@@ -566,7 +730,7 @@ async function req(path: string, options: RequestInit = {}, allowRetry = true): 
     } catch {
       /* ignore */
     }
-    throw new Error(detail)
+    throw new ApiError(detail, res.status)
   }
   if (res.status === 204) return null
   return res.json()
@@ -629,14 +793,18 @@ export function uploadAttachment(
         // Тот же путь, что у обычных запросов (см. req): протухший токен
         // обновляем и повторяем ровно один раз.
         if (xhr.status === 401 && allowRetry && token) {
-          refreshAccessToken().then((fresh) => {
-            if (fresh) {
-              send(fresh, false).then(resolve, reject)
+          refreshAccessToken().then((refreshed) => {
+            if (refreshed.status === 'refreshed') {
+              send(refreshed.access, false).then(resolve, reject)
+              return
+            }
+            if (refreshed.status === 'unavailable') {
+              reject(new ApiError('Сервер недоступен — попробуйте ещё раз.', 0))
               return
             }
             setTokens(null, null)
             onSessionExpired?.()
-            reject(new Error('Сессия истекла — войдите заново.'))
+            reject(new ApiError('Сессия истекла — войдите заново.', 401))
           })
           return
         }
@@ -694,6 +862,14 @@ export const api = {
     custom_status?: string
     custom_status_emoji?: string
     avatar_image?: string
+    /** Гифка аватара целиком (data-URL). Пустая строка убирает анимацию,
+     * оставляя статичный avatar_image. Передавать avatar_image БЕЗ
+     * avatar_anim значит «новый обычный аватар» — сервер тогда сам сбрасывает
+     * анимацию от прежнего (см. ProfileUpdateSerializer.update). */
+    avatar_anim?: string
+    /** Номер кадра гифки, выбранного статичной картинкой. */
+    avatar_frame?: number
+    avatar_downloadable?: boolean
     banner_gradient?: string
     banner_image?: string
     banner_color?: string
@@ -706,6 +882,13 @@ export const api = {
   }): Promise<Me> => req('/api/auth/me', { method: 'PATCH', body: JSON.stringify(data) }),
   profileCard: (userId: number): Promise<ProfileCard> =>
     req(`/api/users/${userId}/profile-card`),
+  /** Гифка анимированного аватара — отдельно и по требованию (в обычном
+   * профиле только флаг avatar_animated). Ходить сюда напрямую обычно не
+   * нужно: есть кэширующая обёртка, см. avatarAnim.ts. */
+  avatarAnimation: (
+    userId: number,
+  ): Promise<{ avatar_anim: string; downloadable: boolean }> =>
+    req(`/api/users/${userId}/avatar-anim`),
   nameFonts: (): Promise<NameFont[]> => req('/api/auth/name-fonts'),
   getUserNote: (userId: number): Promise<UserNote> =>
     req(`/api/users/${userId}/note`),

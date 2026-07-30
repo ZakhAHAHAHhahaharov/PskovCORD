@@ -21,6 +21,11 @@ TINY_PNG = (
     "2mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="
 )
 
+# Такой же «достаточно валидный» data-URL, но с mime гифки — для
+# avatar_anim (см. ProfileUpdateSerializer.validate_avatar_anim). Содержимое
+# не разбирается ни сервером, ни тестом: кадры выбирает браузер.
+TINY_GIF = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"
+
 
 class ProfileUpdateTests(APITestCase):
     def setUp(self):
@@ -89,6 +94,56 @@ class ProfileUpdateTests(APITestCase):
         resp = self.client.patch(
             "/api/auth/me", {"avatar_image": "data:image/png;base64,not-base64!!"})
         self.assertEqual(resp.status_code, 400)
+
+    # --- анимированный (гифка) аватар -----------------------------------
+    def test_patch_avatar_anim_roundtrip(self):
+        resp = self.client.patch("/api/auth/me", {
+            "avatar_image": TINY_PNG,
+            "avatar_anim": TINY_GIF,
+            "avatar_frame": 7,
+            "avatar_downloadable": False,
+        })
+        self.assertEqual(resp.status_code, 200)
+        # Сама гифка в профиле не отдаётся — только флаг, что она есть
+        # (иначе ехала бы в каждом сообщении, см. UserSerializer).
+        self.assertNotIn("avatar_anim", resp.data)
+        self.assertTrue(resp.data["avatar_animated"])
+        self.assertEqual(resp.data["avatar_frame"], 7)
+        self.assertFalse(resp.data["avatar_downloadable"])
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.avatar_anim, TINY_GIF)
+
+    def test_patch_avatar_anim_rejects_non_gif(self):
+        resp = self.client.patch("/api/auth/me", {"avatar_anim": TINY_PNG})
+        self.assertEqual(resp.status_code, 400)
+
+    def test_patch_avatar_anim_rejects_oversized(self):
+        import base64
+        huge = base64.b64encode(b"x" * 5_000_000).decode()
+        resp = self.client.patch(
+            "/api/auth/me", {"avatar_anim": f"data:image/gif;base64,{huge}"})
+        self.assertEqual(resp.status_code, 400)
+
+    def test_new_plain_avatar_drops_previous_animation(self):
+        self.user.avatar_image = TINY_PNG
+        self.user.avatar_anim = TINY_GIF
+        self.user.avatar_frame = 3
+        self.user.save()
+        resp = self.client.patch("/api/auth/me", {"avatar_image": TINY_PNG})
+        self.assertEqual(resp.status_code, 200)
+        self.assertFalse(resp.data["avatar_animated"])
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.avatar_anim, "")
+        self.assertEqual(self.user.avatar_frame, 0)
+
+    def test_removing_avatar_drops_animation(self):
+        self.user.avatar_image = TINY_PNG
+        self.user.avatar_anim = TINY_GIF
+        self.user.save()
+        resp = self.client.patch("/api/auth/me", {"avatar_image": ""})
+        self.assertEqual(resp.status_code, 200)
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.avatar_anim, "")
 
     def test_patch_avatar_image_rejects_oversized(self):
         # ~2MB декодированных данных — больше MAX_AVATAR_BYTES (1.5MB).

@@ -6,10 +6,11 @@ import {
   KeyboardEvent as ReactKeyboardEvent,
 } from 'react'
 import {
-  Calendar, Check, Copy, UserPlus, UserCheck, Loader2, MessageSquare,
+  Calendar, Check, Copy, Download, UserPlus, UserCheck, Loader2, MessageSquare,
   NotebookPen, Smile,
 } from 'lucide-react'
 import { api, NameEffect } from '../api'
+import { loadAvatarAnimation } from '../avatarAnim'
 import { useEscToClose } from '../modalStack'
 import ProfileCardHeader from './ProfileCardHeader'
 import InlineEditableText from './InlineEditableText'
@@ -21,6 +22,10 @@ export interface ProfilePopupUser {
   display_name?: string
   avatar_color: string
   avatar_image: string
+  /** У аватара есть гифка (см. avatarAnim.ts) — в карточке она играет всегда. */
+  avatar_animated?: boolean
+  /** Владелец разрешил скачивать аватар — иначе кнопки скачивания нет. */
+  avatar_downloadable?: boolean
   banner_gradient?: string
   banner_image?: string
   status?: 'online' | 'dnd' | 'offline' | 'invisible'
@@ -124,15 +129,23 @@ export default function MiniProfilePopup({
   // Приватная заметка (видна только автору, своя у каждого просматривающего)
   // — не имеет смысла на своём же профиле, лениво грузим только для чужого.
   const [note, setNote] = useState('')
+  // Пока заметка не приехала, поля нет вовсе. Иначе успевшая начаться правка
+  // пустого поля затиралась бы ответом сервера (или, наоборот, сохраняла бы
+  // пустоту поверх реальной заметки — InlineEditableText берёт value в момент
+  // клика).
+  const [noteLoaded, setNoteLoaded] = useState(false)
   useEffect(() => {
     if (isSelf) return
     let cancelled = false
     void (async () => {
       try {
         const data = await api.getUserNote(user.id)
-        if (!cancelled) setNote(data.text)
+        if (!cancelled) {
+          setNote(data.text)
+          setNoteLoaded(true)
+        }
       } catch {
-        // Нет доступа — оставляем пустой, поле просто не даст сохранить.
+        // Нет доступа/сеть — поле не показываем: сохранить всё равно не выйдет.
       }
     })()
     return () => {
@@ -182,6 +195,26 @@ export default function MiniProfilePopup({
     }
   }
 
+  // Скачивание аватара. Гифку (если аватар анимированный) берём отдельным
+  // запросом — в самом профиле её нет, только выбранный кадр (см.
+  // avatarAnim.ts); для обычного аватара скачивается то, что и так на руках.
+  const [downloading, setDownloading] = useState(false)
+  const downloadAvatar = async () => {
+    if (downloading) return
+    setDownloading(true)
+    try {
+      const anim = user.avatar_animated ? await loadAvatarAnimation(user.id) : ''
+      const source = anim || user.avatar_image
+      if (!source) return
+      const link = document.createElement('a')
+      link.href = source
+      link.download = `${user.username}-avatar.${anim ? 'gif' : 'jpg'}`
+      link.click()
+    } finally {
+      setDownloading(false)
+    }
+  }
+
   const copyId = () => {
     navigator.clipboard.writeText(String(user.id)).then(() => {
       setCopied(true)
@@ -207,6 +240,8 @@ export default function MiniProfilePopup({
         displayName={user.display_name || ''}
         avatarColor={user.avatar_color}
         avatarImage={user.avatar_image}
+        userId={user.id}
+        avatarAnimated={!!user.avatar_animated}
         bannerGradient={bannerGradient}
         bannerImage={bannerImage}
         bannerColor={bannerColor}
@@ -282,6 +317,22 @@ export default function MiniProfilePopup({
               {copied ? <Check size={15} /> : <Copy size={15} />}
               {copied ? 'Скопировано' : 'Копировать ID'}
             </button>
+            {/* Скачивание аватара — только если владелец его разрешил (см.
+                accounts.models.User.avatar_downloadable). Это вежливость, а
+                не запрет: картинка и так в браузере у каждого, кто видит
+                профиль. У анимированного аватара скачивается гифка целиком,
+                у обычного — сама картинка. */}
+            {user.avatar_image && user.avatar_downloadable !== false && (
+              <button
+                type="button"
+                className="profile-popup-item"
+                onClick={downloadAvatar}
+                disabled={downloading}
+              >
+                {downloading ? <Loader2 size={15} className="spin" /> : <Download size={15} />}
+                Скачать аватар
+              </button>
+            )}
           </div>
         )}
       </div>
@@ -305,7 +356,7 @@ export default function MiniProfilePopup({
         </>
       )}
 
-      {!isSelf && (
+      {!isSelf && noteLoaded && (
         <>
           <div className="profile-popup-divider" />
           <div className="profile-modal-section">

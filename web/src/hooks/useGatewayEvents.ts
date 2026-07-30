@@ -3,6 +3,7 @@ import {
   api, Conversation, ConversationMessage, FriendsState, Member, Message, Me, NameEffect, Role, Server,
 } from '../api'
 import type { VoiceState } from '../components/AppShell'
+import { invalidateAvatarAnimation } from '../avatarAnim'
 import { useGateway } from '../gateway'
 import { outbox } from '../outbox'
 import { playScreenShareRequestSound, playWakeUpSound } from '../sounds'
@@ -12,6 +13,10 @@ interface CallParticipant {
   username: string
   avatar_color: string
   avatar_image: string
+  /** У аватара есть гифка — играет, пока участник говорит (см. avatarAnim.ts).
+   * Приезжает только там, где ростер строится из полного профиля
+   * (dm_voice_peers → conversation.participants). */
+  avatar_animated?: boolean
   muted: boolean
   deafened: boolean
   sharing_screen: boolean
@@ -159,6 +164,11 @@ export function useGatewayEvents(params: UseGatewayEventsParams) {
             display_name: d.display_name ?? '',
             avatar_color: d.avatar_color,
             avatar_image: d.avatar_image ?? '',
+            // Гифка-аватар (см. avatarAnim.ts) — как и стиль ника ниже,
+            // приедет со следующим полным api.members(); до тех пор аватар
+            // просто не анимируется.
+            avatar_animated: false,
+            avatar_downloadable: true,
             banner_gradient: '',
             banner_image: '',
             // Стиль ника (см. nameStyle.ts) сюда не приезжает — так же, как и
@@ -278,6 +288,10 @@ export function useGatewayEvents(params: UseGatewayEventsParams) {
     // PATCH /api/auth/me (см. handleProfileUpdated), но остальным участникам
     // и старым сообщениям в списке нужно обновиться этим же событием.
     const offProfileUpdate = gateway.on('profile_update', (d) => {
+      // Аватар мог смениться — гифка, уже лежащая в кэше, теперь от прежнего
+      // (см. avatarAnim.ts): без сброса она проигрывалась бы поверх нового
+      // статичного кадра до перезагрузки вкладки.
+      invalidateAvatarAnimation(d.user_id)
       setMembers((prev) =>
         prev.map((m) =>
           m.id === d.user_id
@@ -287,6 +301,8 @@ export function useGatewayEvents(params: UseGatewayEventsParams) {
                 display_name: d.display_name,
                 avatar_color: d.avatar_color,
                 avatar_image: d.avatar_image,
+                avatar_animated: !!d.avatar_animated,
+                avatar_downloadable: d.avatar_downloadable !== false,
                 name_font: d.name_font,
                 name_effect: d.name_effect,
                 name_color_1: d.name_color_1,
@@ -462,6 +478,7 @@ export function useGatewayEvents(params: UseGatewayEventsParams) {
             next[id] = {
               id: p.id, username: p.username,
               avatar_color: p.avatar_color, avatar_image: p.avatar_image,
+              avatar_animated: p.avatar_animated,
               muted: !!flags.muted, deafened: !!flags.deafened,
               sharing_screen: !!flags.sharing_screen,
               name_font: p.name_font,

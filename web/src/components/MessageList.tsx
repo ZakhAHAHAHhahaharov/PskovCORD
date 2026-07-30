@@ -198,6 +198,12 @@ export default function MessageList({
   // сообщению открывает панель только для него; повторный двойной тап —
   // либо по нему же, либо по другому — закрывает/переключает.
   const [mobileActiveKey, setMobileActiveKey] = useState<string | number | null>(null)
+  // Строка сообщения, на аватарке или нике которой сейчас курсор — только у
+  // неё проигрывается гифка-аватар (см. Avatar.playAnimation). Ключ строки, а
+  // не id автора: анимировать разом все сообщения одного человека в ленте —
+  // ровно то мельтешение, ради отсутствия которого гифка по умолчанию стоит
+  // статичным кадром.
+  const [hoveredAuthorRow, setHoveredAuthorRow] = useState<string | number | null>(null)
 
   // Автопрокрутка вниз — только если мы и так стояли внизу. Раньше список
   // прыгал к последнему сообщению безусловно, и читать историю во время
@@ -311,12 +317,20 @@ export default function MessageList({
               type="button"
               className="avatar-trigger"
               onClick={(e) => onOpenProfile(m.author, e)}
+              onMouseEnter={() => setHoveredAuthorRow(rowKey)}
+              onMouseLeave={() => setHoveredAuthorRow((prev) => (prev === rowKey ? null : prev))}
             >
               <Avatar
                 name={m.author.username}
                 color={m.author.avatar_color}
                 image={m.author.avatar_image}
                 size={40}
+                userId={m.author.id}
+                animated={m.author.avatar_animated}
+                // В текстовых каналах гифка играет только под курсором — и
+                // только у ЭТОГО сообщения, а не у всех сообщений автора
+                // сразу (см. hoveredAuthorRow).
+                playAnimation={hoveredAuthorRow === rowKey}
               />
             </button>
             <div className="message-body">
@@ -331,6 +345,10 @@ export default function MessageList({
                   className={`message-author profile-trigger-name ${styledNameProps(m.author).className}`}
                   style={styledNameProps(m.author).style}
                   onClick={(e) => onOpenProfile(m.author, e)}
+                  // Ник — вторая точка наведения для гифки-аватара, наравне
+                  // с самой аватаркой.
+                  onMouseEnter={() => setHoveredAuthorRow(rowKey)}
+                  onMouseLeave={() => setHoveredAuthorRow((prev) => (prev === rowKey ? null : prev))}
                 >
                   {m.author.username}
                 </span>

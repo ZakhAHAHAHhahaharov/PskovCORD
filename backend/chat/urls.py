@@ -69,6 +69,8 @@ urlpatterns = [
     path("people/known", views.KnownPeople.as_view(), name="known-people"),
     path("users/<int:user_id>/profile-card",
          views.UserProfileCard.as_view(), name="user-profile-card"),
+    path("users/<int:user_id>/avatar-anim",
+         views.UserAvatarAnimation.as_view(), name="user-avatar-anim"),
     path("users/<int:user_id>/note", views.UserNote.as_view(), name="user-note"),
 
     path("conversations", views.ConversationListCreate.as_view(), name="conversation-list"),
