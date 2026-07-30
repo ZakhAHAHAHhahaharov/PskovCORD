@@ -1280,6 +1280,13 @@ class GatewayConsumer(AsyncWebsocketConsumer):
                 conversation_id=conversation_id, author=self.user,
                 content=content, reply_to=reply_to)
             self._bind_attachments(attachment_ids, conversation_message=msg)
+        # Тот, кто «закрыл» эту переписку (см. ConversationParticipant.closed),
+        # должен увидеть её снова — иначе сообщение пришло бы в диалог,
+        # которого у него нет в списке, и он бы просто его не заметил.
+        # Себя не трогаем: закрыл и сам же написал — список не дёргаем.
+        ConversationParticipant.objects.filter(
+            conversation_id=conversation_id, closed=True
+        ).exclude(user=self.user).update(closed=False)
         return ConversationMessageSerializer(msg).data
 
     @database_sync_to_async
