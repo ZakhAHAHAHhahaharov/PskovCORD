@@ -24,12 +24,35 @@ export interface User {
   /** CSS linear-gradient() для фона карточки профиля; пусто — дефолтный градиент. */
   banner_gradient: string
   status: UserStatus
+  /** id шрифта ника (см. NameFont ниже) — null, пусто = системный шрифт. */
+  name_font: number | null
+  name_effect: NameEffect
+  /** Хекс-цвета стиля ника — сколько реально используется, зависит от
+   * name_effect (см. NAME_EFFECTS в nameStyle.ts). Пусто — обычный цвет
+   * текста темы, без переопределения. */
+  name_color_1: string
+  name_color_2: string
+}
+
+/** См. accounts.models.User.NAME_EFFECT_CHOICES. */
+export type NameEffect = 'standard' | 'gradient' | 'neon' | 'cartoon' | 'highlight'
+
+/** Один шрифт из каталога — GET /api/auth/name-fonts (см.
+ * accounts.models.NameFont). Загружается только через админку. */
+export interface NameFont {
+  id: number
+  label: string
+  /** URL файла шрифта — подставляется в @font-face (см. useNameFonts). */
+  file: string
 }
 
 /** Свой профиль (/api/auth/me) — всё, включая личные настройки и баннер. */
 export interface Me extends User {
   /** Гифка фона карточки профиля (data-URL); если задана — приоритетнее градиента. */
   banner_image: string
+  /** Фон ПОД баннером — виден только когда banner_image задан и он с
+   * прозрачностью. Пусто — то, что нарисовано под баннером по умолчанию (см. CSS). */
+  banner_color: string
   /** "О себе" в карточке профиля — как и bio у ProfileCard ниже, для СВОЕГО
    * профиля приходит сразу (не тяжёлая, в отличие от banner_image это
    * просто текст), догружать отдельно незачем. */
@@ -53,6 +76,7 @@ export interface ProfileCard {
   id: number
   banner_gradient: string
   banner_image: string
+  banner_color: string
   bio: string
   pronouns: string
   custom_status: string
@@ -344,6 +368,12 @@ export interface MentionCandidate {
   username: string
   avatar_color: string
   avatar_image: string
+  /** Стиль ника (см. nameStyle.ts) — клик по @упоминанию открывает
+   * MiniProfilePopup, тому нужен полный ProfilePopupUser. */
+  name_font: number | null
+  name_effect: NameEffect
+  name_color_1: string
+  name_color_2: string
 }
 
 export interface DiscoverServer {
@@ -648,10 +678,16 @@ export const api = {
     avatar_image?: string
     banner_gradient?: string
     banner_image?: string
+    banner_color?: string
     dm_privacy?: DmPrivacy
+    name_font?: number | null
+    name_effect?: NameEffect
+    name_color_1?: string
+    name_color_2?: string
   }): Promise<Me> => req('/api/auth/me', { method: 'PATCH', body: JSON.stringify(data) }),
   profileCard: (userId: number): Promise<ProfileCard> =>
     req(`/api/users/${userId}/profile-card`),
+  nameFonts: (): Promise<NameFont[]> => req('/api/auth/name-fonts'),
   getUserNote: (userId: number): Promise<UserNote> =>
     req(`/api/users/${userId}/note`),
   setUserNote: (userId: number, text: string): Promise<UserNote> =>

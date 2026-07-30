@@ -1,5 +1,6 @@
-import { Pencil, Sparkles, Trash2 } from 'lucide-react'
+import { Paintbrush, Pencil, Sparkles, Trash2 } from 'lucide-react'
 import { useHoverFlyout } from '../hooks/useHoverFlyout'
+import { NameStyleSource, styledNameProps } from '../nameStyle'
 import Avatar from './Avatar'
 import ImageHoverMenu from './ImageHoverMenu'
 import InlineEditableText from './InlineEditableText'
@@ -38,10 +39,12 @@ export default function ProfileCardHeader({
   avatarImage,
   bannerGradient,
   bannerImage,
+  bannerColor,
   status,
   customStatus,
   customStatusEmoji,
   pronouns,
+  nameStyle,
   edit,
 }: {
   username: string
@@ -50,12 +53,22 @@ export default function ProfileCardHeader({
   avatarImage: string
   bannerGradient?: string
   bannerImage?: string
+  /** Фон ПОД баннером — виден только когда bannerImage задан и он с
+   * прозрачностью (см. accounts.models.User.banner_color). Для градиента
+   * не имеет смысла (тот и так непрозрачный). */
+  bannerColor?: string
   status?: 'online' | 'dnd' | 'offline' | 'invisible'
   /** Пусто (вместе с customStatusEmoji) — облачко не рисуется вовсе (только для чтения). */
   customStatus: string
   customStatusEmoji: string
   /** Пусто — вторая строка обходится без " · местоимения". */
   pronouns: string
+  /** Стиль ника (шрифт/эффект/цвета, см. nameStyle.ts) — применяется только
+   * к ТОЛЬКО ЧТЕНИЕ варианту имени (см. ниже): в режиме edit имя — обычный
+   * InlineEditableText, эффект туда намеренно не тянем (это поле для
+   * редактирования ТЕКСТА, а не превью эффекта — тот уже есть в
+   * DisplayNameStyleModal). */
+  nameStyle?: NameStyleSource
   edit?: {
     onEditAvatar: () => void
     onRemoveAvatar: () => void
@@ -68,6 +81,10 @@ export default function ProfileCardHeader({
     /** Открывает StatusEditModal (эмодзи + текст, со своей кнопкой «Сохранить»). */
     onEditStatus: () => void
     onClearStatus: () => Promise<void>
+    /** Открывает ProfileStylesFlyout (закладка-кисточка, торчащая у верхнего
+     * края карточки) — пусто/не передано, кнопка не рисуется вовсе (сейчас
+     * это только ProfileModal). */
+    onOpenStyles?: () => void
   }
 }) {
   const avatarNode = (
@@ -85,12 +102,18 @@ export default function ProfileCardHeader({
   const statusActions = useHoverFlyout()
 
   return (
+    <>
     <div className="profile-card">
       <div
         className="profile-card-banner"
         style={{
           background: bannerImage ? undefined : bannerGradient || undefined,
           backgroundImage: bannerImage ? `url(${bannerImage})` : undefined,
+          // backgroundColor — ОТДЕЛЬНО от background/backgroundImage выше (не
+          // через шорткат background, тот сбросил бы его): подложка виднеется
+          // сквозь прозрачные пиксели гифки-баннера. Для градиента смысла
+          // нет (тот и так непрозрачный), поэтому только когда bannerImage задан.
+          backgroundColor: bannerImage ? bannerColor || undefined : undefined,
         }}
       >
         {edit && (
@@ -185,7 +208,12 @@ export default function ProfileCardHeader({
             onSave={edit.onSaveDisplayName}
           />
         ) : (
-          <span className="profile-card-name">{displayName || username}</span>
+          <span
+            className={`profile-card-name ${nameStyle ? styledNameProps(nameStyle).className : ''}`}
+            style={nameStyle ? styledNameProps(nameStyle).style : undefined}
+          >
+            {displayName || username}
+          </span>
         )}
 
         <div className="profile-card-meta-line">
@@ -221,5 +249,23 @@ export default function ProfileCardHeader({
         </div>
       </div>
     </div>
+
+    {/* Закладка-таб "Стили" — торчит из-за правого края карточки, у
+        аватарки (см. .profile-styles-tab в index.css). СИБЛИНГ .profile-card,
+        а не внутри неё: у .profile-card overflow:hidden ради скруглённых
+        углов баннера, поэтому позиционируется от ближайшего родителя со
+        своим position (см. .profile-modal position:relative) — сейчас это
+        только ProfileModal (edit.onOpenStyles задаётся только там). */}
+    {edit?.onOpenStyles && (
+      <button
+        type="button"
+        className="profile-styles-tab"
+        title="Стили"
+        onClick={edit.onOpenStyles}
+      >
+        <Paintbrush size={14} />
+      </button>
+    )}
+    </>
   )
 }

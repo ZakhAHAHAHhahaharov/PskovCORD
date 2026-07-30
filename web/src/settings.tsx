@@ -21,7 +21,25 @@ export interface Settings {
    * следующий вход продолжил с того же состояния. */
   preferMicMuted: boolean
   preferDeafened: boolean
+  /** Масштаб всего интерфейса, % (100 — как есть). Тянет за собой иконки,
+   * отступы и текст разом через CSS zoom на <html> (см. applyUiScale) —
+   * в отличие от baseFontSize ниже, который трогает только текст. Отметки,
+   * к которым магнитится ползунок, — UI_SCALE_STEPS. */
+  uiScale: number
+  /** Базовый размер шрифта, px — множитель ко ВСЕМ font-size в index.css
+   * (см. calc(...px * var(--font-scale)) там же и applyFontScale ниже), но
+   * не трогает иконки/отступы, в отличие от uiScale. FONT_SIZE_BASELINE —
+   * то значение, при котором множитель равен 1 (текст выглядит как сейчас). */
+  baseFontSize: number
 }
+
+/** См. baseFontSize выше: во сколько раз масштабируются font-size в
+ * index.css при выбранном значении (baseFontSize / FONT_SIZE_BASELINE). */
+export const FONT_SIZE_BASELINE = 16
+/** Отметки магнита для ползунка "Масштаб интерфейса" в SettingsModal. */
+export const UI_SCALE_STEPS = [80, 90, 100, 110, 125, 150]
+/** Отметки магнита для ползунка "Размер шрифта" в SettingsModal. */
+export const FONT_SIZE_STEPS = [12, 13, 14, 15, 16, 17, 18, 19, 20]
 
 export const DEFAULT_SETTINGS: Settings = {
   outputVolume: 1,
@@ -30,6 +48,8 @@ export const DEFAULT_SETTINGS: Settings = {
   theme: 'dark',
   preferMicMuted: false,
   preferDeafened: false,
+  uiScale: 100,
+  baseFontSize: FONT_SIZE_BASELINE,
 }
 
 const STORAGE_KEY = 'pskovcord:settings'
@@ -60,6 +80,19 @@ function applyTheme(theme: ThemeChoice, prefersLight: boolean) {
   else document.documentElement.setAttribute('data-theme', resolved)
 }
 
+/** zoom, а не transform: scale — реально пересчитывает layout (в т.ч. vh/vw
+ * и брейкпоинты типа useIsMobile), а не рисует растянутую картинку поверх
+ * старого layout'а, и не требует оборачивать всё приложение в отдельный div
+ * с ручной компенсацией размеров под transform-origin. */
+function applyUiScale(percent: number) {
+  if (percent === 100) document.documentElement.style.removeProperty('zoom')
+  else document.documentElement.style.setProperty('zoom', `${percent}%`)
+}
+
+function applyFontScale(px: number) {
+  document.documentElement.style.setProperty('--font-scale', String(px / FONT_SIZE_BASELINE))
+}
+
 interface SettingsCtx extends Settings {
   setOutputVolume: (v: number) => void
   setMicGain: (v: number) => void
@@ -67,6 +100,8 @@ interface SettingsCtx extends Settings {
   setTheme: (t: ThemeChoice) => void
   setPreferMicMuted: (v: boolean) => void
   setPreferDeafened: (v: boolean) => void
+  setUiScale: (v: number) => void
+  setBaseFontSize: (v: number) => void
 }
 
 const Ctx = createContext<SettingsCtx>({
@@ -77,6 +112,8 @@ const Ctx = createContext<SettingsCtx>({
   setTheme: () => {},
   setPreferMicMuted: () => {},
   setPreferDeafened: () => {},
+  setUiScale: () => {},
+  setBaseFontSize: () => {},
 })
 
 export const useSettings = () => useContext(Ctx)
@@ -100,6 +137,9 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     return () => mq.removeEventListener('change', onChange)
   }, [settings.theme])
 
+  useEffect(() => applyUiScale(settings.uiScale), [settings.uiScale])
+  useEffect(() => applyFontScale(settings.baseFontSize), [settings.baseFontSize])
+
   const value: SettingsCtx = {
     ...settings,
     setOutputVolume: (v) => setSettings((s) => ({ ...s, outputVolume: v })),
@@ -108,6 +148,8 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     setTheme: (t) => setSettings((s) => ({ ...s, theme: t })),
     setPreferMicMuted: (v) => setSettings((s) => ({ ...s, preferMicMuted: v })),
     setPreferDeafened: (v) => setSettings((s) => ({ ...s, preferDeafened: v })),
+    setUiScale: (v) => setSettings((s) => ({ ...s, uiScale: v })),
+    setBaseFontSize: (v) => setSettings((s) => ({ ...s, baseFontSize: v })),
   }
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>

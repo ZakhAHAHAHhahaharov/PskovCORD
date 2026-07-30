@@ -7,6 +7,8 @@ import { AVATAR_SIZE, fileToSquareDataUrl } from '../images'
 import ProfileCardHeader from './ProfileCardHeader'
 import BannerEditorModal from './BannerEditorModal'
 import StatusEditModal from './StatusEditModal'
+import ProfileStylesFlyout from './ProfileStylesFlyout'
+import DisplayNameStyleModal from './DisplayNameStyleModal'
 import InlineEditableText from './InlineEditableText'
 
 const BIO_MAX_LENGTH = 300
@@ -34,6 +36,8 @@ export default function ProfileModal({ onClose }: { onClose: () => void }) {
   const fileRef = useRef<HTMLInputElement>(null)
   const [showBannerEditor, setShowBannerEditor] = useState(false)
   const [showStatusEditor, setShowStatusEditor] = useState(false)
+  const [showStylesFlyout, setShowStylesFlyout] = useState(false)
+  const [showNameStyleModal, setShowNameStyleModal] = useState(false)
   const [avatarError, setAvatarError] = useState('')
   const [copied, setCopied] = useState(false)
   const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -91,6 +95,7 @@ export default function ProfileModal({ onClose }: { onClose: () => void }) {
             avatarImage={user.avatar_image}
             bannerGradient={user.banner_gradient}
             bannerImage={user.banner_image}
+            bannerColor={user.banner_color}
             status={user.status}
             customStatus={user.custom_status}
             customStatusEmoji={user.custom_status_emoji}
@@ -106,6 +111,7 @@ export default function ProfileModal({ onClose }: { onClose: () => void }) {
               onSavePronouns: (v) => patch({ pronouns: v }),
               onEditStatus: () => setShowStatusEditor(true),
               onClearStatus: () => patch({ custom_status: '', custom_status_emoji: '' }),
+              onOpenStyles: () => setShowStylesFlyout(true),
             }}
           />
           <input
@@ -199,6 +205,30 @@ export default function ProfileModal({ onClose }: { onClose: () => void }) {
             patch({ custom_status_emoji: emoji, custom_status: text })
           }
           onClose={() => setShowStatusEditor(false)}
+        />
+      )}
+
+      {/* Флайаут "Стили" — растёт от правого края .profile-modal (см. его
+          position:relative в index.css), не отдельный .modal-overlay: клик
+          мимо него закрывает его самого через document-mousedown внутри
+          компонента, а не через этот сиблинг-паттерн. */}
+      {showStylesFlyout && (
+        <ProfileStylesFlyout
+          bannerColor={user.banner_color}
+          onSetBannerColor={(v) => patch({ banner_color: v })}
+          onOpenNameStyle={() => {
+            setShowStylesFlyout(false)
+            setShowNameStyleModal(true)
+          }}
+          onClose={() => setShowStylesFlyout(false)}
+        />
+      )}
+
+      {showNameStyleModal && (
+        <DisplayNameStyleModal
+          user={user}
+          onSave={(patchData) => patch(patchData)}
+          onClose={() => setShowNameStyleModal(false)}
         />
       )}
     </>

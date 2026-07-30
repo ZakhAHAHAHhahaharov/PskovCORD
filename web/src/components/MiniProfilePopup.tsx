@@ -9,7 +9,7 @@ import {
   Calendar, Check, Copy, UserPlus, UserCheck, Loader2, MessageSquare,
   NotebookPen, Smile,
 } from 'lucide-react'
-import { api } from '../api'
+import { api, NameEffect } from '../api'
 import { useEscToClose } from '../modalStack'
 import ProfileCardHeader from './ProfileCardHeader'
 import InlineEditableText from './InlineEditableText'
@@ -24,6 +24,12 @@ export interface ProfilePopupUser {
   banner_gradient?: string
   banner_image?: string
   status?: 'online' | 'dnd' | 'offline' | 'invisible'
+  /** Стиль ника (см. nameStyle.ts) — приходит вместе с любым User/Member,
+   * которым открыли этот попап (клик по сообщению/ростеру/списку участников). */
+  name_font: number | null
+  name_effect: NameEffect
+  name_color_1: string
+  name_color_2: string
 }
 
 export interface ProfilePopupTarget {
@@ -81,6 +87,7 @@ export default function MiniProfilePopup({
   const [card, setCard] = useState<{
     gradient: string
     image: string
+    color: string
     bio: string
     pronouns: string
     customStatus: string
@@ -96,6 +103,7 @@ export default function MiniProfilePopup({
           setCard({
             gradient: data.banner_gradient,
             image: data.banner_image,
+            color: data.banner_color,
             bio: data.bio,
             pronouns: data.pronouns,
             customStatus: data.custom_status,
@@ -133,6 +141,7 @@ export default function MiniProfilePopup({
 
   const bannerGradient = card?.gradient ?? user.banner_gradient
   const bannerImage = card?.image ?? user.banner_image
+  const bannerColor = card?.color ?? ''
 
   useLayoutEffect(() => {
     const el = ref.current
@@ -199,10 +208,12 @@ export default function MiniProfilePopup({
         avatarImage={user.avatar_image}
         bannerGradient={bannerGradient}
         bannerImage={bannerImage}
+        bannerColor={bannerColor}
         status={user.status}
         customStatus={card?.customStatus || ''}
         customStatusEmoji={card?.customStatusEmoji || ''}
         pronouns={card?.pronouns || ''}
+        nameStyle={user}
       />
 
       <div className="profile-popup-menu">

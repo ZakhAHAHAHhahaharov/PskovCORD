@@ -22,10 +22,11 @@ from rest_framework_simplejwt.token_blacklist.models import (
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 
-from .models import LoginSession, QRLoginRequest
+from .models import LoginSession, NameFont, QRLoginRequest
 from .serializers import (
     ChangePasswordSerializer,
     MeSerializer,
+    NameFontSerializer,
     ProfileUpdateSerializer,
     RegisterSerializer,
 )
@@ -50,6 +51,10 @@ def _broadcast_profile_update(user):
         "custom_status_emoji": user.custom_status_emoji,
         "avatar_color": user.avatar_color,
         "avatar_image": user.avatar_image,
+        "name_font": user.name_font_id,
+        "name_effect": user.name_effect,
+        "name_color_1": user.name_color_1,
+        "name_color_2": user.name_color_2,
     }
     channel_layer = get_channel_layer()
     for server_id in server_ids:
@@ -300,6 +305,16 @@ class MeView(APIView):
         user = serializer.save()
         _broadcast_profile_update(user)
         return Response(MeSerializer(user).data)
+
+
+class NameFontListView(generics.ListAPIView):
+    """GET /api/auth/name-fonts — каталог шрифтов для пикера стиля ника
+    (ProfileModal → «Стили» → «Стиль отображаемого имени»). Не завязан на
+    конкретного пользователя — то же самое видят все, наполняется только
+    через админку (см. accounts.admin.NameFontAdmin)."""
+
+    serializer_class = NameFontSerializer
+    queryset = NameFont.objects.all()
 
 
 def _current_session_id(request) -> str | None:
