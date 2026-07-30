@@ -3,13 +3,13 @@ import { Loader2, Trash2 } from 'lucide-react'
 import { useEscToClose } from '../modalStack'
 import { useUnsavedChangesGuard } from '../hooks/useUnsavedChangesGuard'
 import {
-  BANNER_MAX_BYTES, BANNER_MAX_H, BANNER_MAX_W, GRADIENT_PRESETS,
+  BANNER_MAX_H, BANNER_MAX_W, GRADIENT_PRESETS, SOURCE_IMAGE_MAX_BYTES,
   buildGradient, fileToBannerDataUrl, parseGradient,
 } from '../images'
 import UnsavedChangesNudge from './UnsavedChangesNudge'
 
 /**
- * Редактор фона карточки профиля (градиент/гифка) — раньше жил инлайн в
+ * Редактор фона карточки профиля (градиент/фото/гифка) — раньше жил инлайн в
  * ProfileModal.tsx, теперь отдельная модалка: открывается по "Изменить" из
  * ImageHoverMenu над баннером. Своей кнопки "Сохранить" в привычном смысле
  * нет — единственная кнопка "Готово" сохраняет текущий выбор и закрывает
@@ -115,7 +115,7 @@ export default function BannerEditorModal({
             className={`banner-mode-tab ${mode === 'gif' ? 'active' : ''}`}
             onClick={() => setMode('gif')}
           >
-            Гифка
+            Фото / гифка
           </button>
         </div>
 
@@ -172,7 +172,7 @@ export default function BannerEditorModal({
               className="btn-secondary"
               onClick={() => bannerFileRef.current?.click()}
             >
-              {image ? 'Заменить гифку' : 'Загрузить гифку'}
+              {image ? 'Заменить фото или гифку' : 'Загрузить фото или гифку'}
             </button>
             <input
               ref={bannerFileRef}
@@ -191,7 +191,9 @@ export default function BannerEditorModal({
               </button>
             )}
             <span className="banner-hint">
-              До {BANNER_MAX_W}×{BANNER_MAX_H}, макс. {Math.round(BANNER_MAX_BYTES / 1_000_000)} МБ.
+              Фото и большая гифка обрежутся и сожмутся до {BANNER_MAX_W}×{BANNER_MAX_H}; гифка
+              подходящего размера останется анимированной. Макс. исходный файл —{' '}
+              {Math.round(SOURCE_IMAGE_MAX_BYTES / 1_000_000)} МБ.
             </span>
           </div>
         )}
