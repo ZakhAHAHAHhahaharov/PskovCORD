@@ -10,6 +10,7 @@ import {
 import { ChevronLeft, Phone, PhoneOff, Users } from 'lucide-react'
 import { useIsMobile } from '../hooks/useIsMobile'
 import { useConversationsData } from '../hooks/useConversationsData'
+import { useInviteLinks } from '../hooks/useInviteLinks'
 import { useMobileNav } from '../hooks/useMobileNav'
 import { useNameFonts } from '../hooks/useNameFonts'
 import { useServerData } from '../hooks/useServerData'
@@ -246,13 +247,12 @@ export default function AppShell() {
     handleRequestScreenShare, handleWakeUser,
   } = voiceCall
 
-  // --- предпросмотр ссылки-приглашения в конкретный голосовой канал (?voiceInvite=) ---
-  const [voiceInvite, setVoiceInvite] = useState<{
-    code: string
-    preview: InvitePreview | null
-    loading: boolean
-    error: string
-  } | null>(null)
+  const inviteLinks = useInviteLinks(servers, setServers, selectServer, handleJoinVoice)
+  const {
+    voiceInvite, setVoiceInvite,
+    handleAcceptServerInvite, handleDeclineServerInvite,
+    handleOpenInvitedServer, handleConfirmVoiceInvite,
+  } = inviteLinks
 
   // --- очередь исходящих (статусы доставки, ретраи, черновики) -----------
   // Транспорт ставится отдельно от самой очереди: outbox живёт вне React (его
@@ -284,49 +284,6 @@ export default function AppShell() {
   const pendingDmMessages = usePendingMessages(conversationTarget)
   // Модерация чата — по праву роли (владельцу chat/roles.py выдаёт всё).
   const canDeleteMessages = !!currentServer?.my_permissions?.delete_messages
-
-  // Ссылка-приглашение (?invite=<код>) — редимпшен один раз при загрузке.
-  // Параметр убирается из URL сразу: ссылка многоразовая, но повторно дёргать
-  // API на каждый ре-рендер/перезагрузку той же вкладки незачем.
-  useEffect(() => {
-    const params = new URLSearchParams(location.search)
-    const code = params.get('invite')
-    if (!code) return
-    const url = new URL(location.href)
-    url.searchParams.delete('invite')
-    window.history.replaceState({}, '', url.toString())
-    void (async () => {
-      try {
-        const server = await api.redeemServerInvite(code)
-        setServers((prev) => (prev.some((s) => s.id === server.id) ? prev : [...prev, server]))
-        selectServer(server)
-      } catch (e) {
-        alert('Не удалось войти по ссылке-приглашению: ' + (e as Error).message)
-      }
-    })()
-  }, [selectServer])
-
-  // Ссылка-приглашение в конкретный голосовой канал (?voiceInvite=<код>) —
-  // в отличие от ?invite= выше, НЕ вступает мгновенно: сначала грузим
-  // предпросмотр (см. backend InvitePreview) и показываем подтверждение
-  // (VoiceInviteJoinModal), само вступление — только по явному клику там.
-  useEffect(() => {
-    const params = new URLSearchParams(location.search)
-    const code = params.get('voiceInvite')
-    if (!code) return
-    const url = new URL(location.href)
-    url.searchParams.delete('voiceInvite')
-    window.history.replaceState({}, '', url.toString())
-    setVoiceInvite({ code, preview: null, loading: true, error: '' })
-    void (async () => {
-      try {
-        const preview = await api.invitePreview(code)
-        setVoiceInvite({ code, preview, loading: false, error: '' })
-      } catch (e) {
-        setVoiceInvite({ code, preview: null, loading: false, error: (e as Error).message })
-      }
-    })()
-  }, [])
 
   // История сообщений при смене текстового канала. useLayoutEffect — по той
   // же причине, что и у аналогичного эффекта для ЛС выше: без него editTarget
@@ -974,58 +931,6 @@ export default function AppShell() {
     },
     [channels, currentChannel],
   )
-
-  // Приглашение теперь карточка прямо в сообщении диалога (см.
-  // ServerInviteCard/MessageList) — статус на ней обновится сам, живым
-  // dm_message_update от бэкенда (см. chat.views._broadcast_invite_message_update),
-  // отдельно патчить локальное состояние не нужно.
-  const handleAcceptServerInvite = async (inviteId: number) => {
-    try {
-      const server = await api.acceptServerInvite(inviteId)
-      setServers((prev) => (prev.some((s) => s.id === server.id) ? prev : [...prev, server]))
-      selectServer(server)
-      // Приглашение было в конкретный голосовой канал (см. ChannelInviteModal)
-      // — сразу заходим в него, а не просто открываем сервер.
-      if (server.invited_channel_id != null) {
-        const ch = server.channels.find((c) => c.id === server.invited_channel_id)
-        if (ch) handleJoinVoice(ch)
-      }
-    } catch (e) {
-      alert((e as Error).message)
-    }
-  }
-
-  const handleDeclineServerInvite = useCallback(async (inviteId: number) => {
-    try {
-      await api.declineServerInvite(inviteId)
-    } catch (e) {
-      alert((e as Error).message)
-    }
-  }, [])
-
-  const handleOpenInvitedServer = useCallback((targetServerId: number) => {
-    const server = servers.find((s) => s.id === targetServerId)
-    if (server) selectServer(server)
-  }, [servers, selectServer])
-
-  // Подтверждение из VoiceInviteJoinModal — вступаем (если ещё не участник)
-  // и сразу подключаемся к каналу, тем же путём, что и приглашение-карточка
-  // в переписке (см. handleAcceptServerInvite).
-  const handleConfirmVoiceInvite = async () => {
-    if (!voiceInvite) return
-    try {
-      const server = await api.redeemServerInvite(voiceInvite.code)
-      setServers((prev) => (prev.some((s) => s.id === server.id) ? prev : [...prev, server]))
-      selectServer(server)
-      if (server.invited_channel_id != null) {
-        const ch = server.channels.find((c) => c.id === server.invited_channel_id)
-        if (ch) handleJoinVoice(ch)
-      }
-      setVoiceInvite(null)
-    } catch (e) {
-      alert('Не удалось подключиться: ' + (e as Error).message)
-    }
-  }
 
   // Отправка идёт не напрямую в сокет, а через очередь: та рисует сообщение
   // сразу, ждёт подтверждения, при молчании повторяет, а окончательно
