@@ -87,6 +87,26 @@ export default function ProfileModal({ onClose }: { onClose: () => void }) {
   return (
     <>
       <div className="modal-overlay" onClick={handleClose}>
+        {/* Флайаут "Стили" — часть ЭТОГО же .modal-overlay (не отдельный,
+            как под-модалки ниже), обычный flex-элемент слева от .modal, а
+            не position:absolute: раньше он рендерился сиблингом снаружи
+            .modal-overlay вообще без позиционированного предка (уезжал за
+            экран) и его перекрывал собой .modal-overlay (z-index:100,
+            inset:0), из-за чего любой клик на нём на самом деле закрывал
+            весь профиль. Здесь же клики по флайауту гасит его собственный
+            stopPropagation, а клик по фону (мимо обоих) закрывает всё разом —
+            так и задумано, это часть одного редактора. */}
+        {showStylesFlyout && (
+          <ProfileStylesFlyout
+            bannerColor={user.banner_color}
+            onSetBannerColor={(v) => patch({ banner_color: v })}
+            onOpenNameStyle={() => {
+              setShowStylesFlyout(false)
+              setShowNameStyleModal(true)
+            }}
+            onClose={() => setShowStylesFlyout(false)}
+          />
+        )}
         <div className="modal profile-modal" onClick={(e) => e.stopPropagation()}>
           <ProfileCardHeader
             username={user.username}
@@ -205,22 +225,6 @@ export default function ProfileModal({ onClose }: { onClose: () => void }) {
             patch({ custom_status_emoji: emoji, custom_status: text })
           }
           onClose={() => setShowStatusEditor(false)}
-        />
-      )}
-
-      {/* Флайаут "Стили" — растёт от правого края .profile-modal (см. его
-          position:relative в index.css), не отдельный .modal-overlay: клик
-          мимо него закрывает его самого через document-mousedown внутри
-          компонента, а не через этот сиблинг-паттерн. */}
-      {showStylesFlyout && (
-        <ProfileStylesFlyout
-          bannerColor={user.banner_color}
-          onSetBannerColor={(v) => patch({ banner_color: v })}
-          onOpenNameStyle={() => {
-            setShowStylesFlyout(false)
-            setShowNameStyleModal(true)
-          }}
-          onClose={() => setShowStylesFlyout(false)}
         />
       )}
 

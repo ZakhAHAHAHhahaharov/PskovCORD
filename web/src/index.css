@@ -1052,22 +1052,21 @@ input {
   overflow: hidden;
 }
 
-/* Точка отсчёта для .profile-styles-tab и ProfileStylesFlyout ниже — оба
-   позиционируются от НЕЁ, а не от .profile-card (там overflow:hidden ради
-   скруглённых углов баннера обрезал бы всё, что торчит за края). */
+/* Точка отсчёта для .profile-styles-tab ниже — позиционируется от НЕЁ, а не
+   от .profile-card (там overflow:hidden ради скруглённых углов баннера
+   обрезал бы всё, что торчит за края). */
 .profile-modal {
   position: relative;
 }
 
-/* Закладка-таб "Стили" (см. ProfileCardHeader/ProfileStylesFlyout) — торчит
-   за правым краем карточки на высоте аватарки. Числа подобраны под текущие
-   размеры баннера/аватарки (banner height 88px, .profile-card-top-row
-   margin-top -42px, AVATAR_SIZE 84 + 4px рамка) — при их изменении сверить
-   заново. */
+/* Закладка-таб "Стили" (см. ProfileCardHeader) — торчит НАРУЖУ за левым
+   краем карточки, близко к верхнему углу. Числа подобраны под текущий
+   padding .modal (24px) — тег наполовину лежит в этом отступе, наполовину
+   торчит дальше влево. */
 .profile-styles-tab {
   position: absolute;
-  top: 78px;
-  right: -14px;
+  top: 14px;
+  left: -14px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1075,9 +1074,9 @@ input {
   height: 30px;
   background: var(--surface-2);
   border: 1px solid var(--surface-2-border);
-  border-radius: 0 8px 8px 0;
+  border-radius: 8px 0 0 8px;
   color: var(--text-muted);
-  box-shadow: 2px 2px 6px rgba(0, 0, 0, 0.3);
+  box-shadow: -2px 2px 6px rgba(0, 0, 0, 0.3);
 }
 
 .profile-styles-tab:hover {
@@ -1085,17 +1084,18 @@ input {
   background: var(--channel-hover);
 }
 
-/* Флайаут "Стили" (ProfileStylesFlyout.tsx) — растёт от правого края
-   .profile-modal (см. position:relative там), сразу под уровнем самого
-   .profile-modal (z-index неявный — просто следующий элемент в DOM после
-   .modal-overlay, тот же приём, что у под-модалок ProfileModal). */
+/* Флайаут "Стили" (ProfileStylesFlyout.tsx) — теперь ЧАСТЬ .modal-overlay
+   профиля (см. ProfileModal.tsx), обычный flex-элемент СЛЕВА от .modal, а
+   НЕ position:absolute: раньше он рендерился сиблингом снаружи
+   .modal-overlay без единого позиционированного предка (улетал в угол всей
+   страницы) и его перекрывал сам .modal-overlay (z-index:100, inset:0) —
+   клик по нему на самом деле закрывал весь профиль. gap между элементами —
+   на самом .modal-overlay (см. там), общий для всех модалок с несколькими
+   flex-детьми. */
 .styles-flyout {
-  position: absolute;
-  top: 0;
-  left: 100%;
-  margin-left: 10px;
+  flex-shrink: 0;
   width: 260px;
-  max-height: 100%;
+  max-height: 90vh;
   overflow-y: auto;
   background: var(--modal-bg);
   border-radius: 8px;
@@ -3626,6 +3626,10 @@ textarea.inline-editable-input {
   align-items: center;
   justify-content: center;
   z-index: 100;
+  /* Большинство модалок кладут сюда ровно один flex-item — gap на них не
+     влияет. У ProfileModal их два (ProfileStylesFlyout + .modal, см.
+     ProfileModal.tsx) — зазор между ними именно отсюда. */
+  gap: 10px;
 }
 
 /* Обёртка модала + плашки "Изменения не сохранены" под ним (см.
