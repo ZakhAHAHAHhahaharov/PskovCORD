@@ -1,8 +1,9 @@
 import { useRef, useState, ChangeEvent } from 'react'
-import { Blocks, Calendar, Check, Copy, MessageSquare, Paintbrush, Plus } from 'lucide-react'
+import { Blocks, Calendar, Check, Copy, MessageSquare, Paintbrush, Plus, X } from 'lucide-react'
 import { useAuth } from '../auth'
 import { api, Me } from '../api'
 import { useEscToClose } from '../modalStack'
+import { useIsMobile } from '../hooks/useIsMobile'
 import { AVATAR_SIZE, fileToSquareDataUrl } from '../images'
 import ProfileCardHeader from './ProfileCardHeader'
 import BannerEditorModal from './BannerEditorModal'
@@ -33,6 +34,7 @@ const BIO_MAX_LENGTH = 300
  */
 export default function ProfileModal({ onClose }: { onClose: () => void }) {
   const { user, updateLocalUser } = useAuth()
+  const isMobile = useIsMobile()
   const fileRef = useRef<HTMLInputElement>(null)
   const [showBannerEditor, setShowBannerEditor] = useState(false)
   const [showStatusEditor, setShowStatusEditor] = useState(false)
@@ -84,144 +86,147 @@ export default function ProfileModal({ onClose }: { onClose: () => void }) {
     day: 'numeric', month: 'long', year: 'numeric',
   })
 
+  // Десктоп: флайаут — отдельная панель СЛЕВА от .modal (position:absolute,
+  // см. .styles-flyout в index.css), не двигает сам .modal — .modal-overlay
+  // центрирует только его, флайаут вне потока. На мобильном экран слишком
+  // узкий, чтобы держать обе панели рядом, поэтому там флайаут вместо этого
+  // подменяет собой содержимое ТОЙ ЖЕ .modal (см. ниже) — тот же принцип,
+  // что у mobileCategoryOpen в SettingsModal, только без отдельного стейта:
+  // showStylesFlyout один на оба случая, ветвимся по isMobile при рендере.
+  const stylesFlyout = (
+    <ProfileStylesFlyout
+      bannerColor={user.banner_color}
+      onSetBannerColor={(v) => patch({ banner_color: v })}
+      onOpenNameStyle={() => {
+        setShowStylesFlyout(false)
+        setShowNameStyleModal(true)
+      }}
+      onClose={() => setShowStylesFlyout(false)}
+    />
+  )
+
   return (
     <>
       <div className="modal-overlay" onClick={handleClose}>
-        {/* Флайаут "Стили" — часть ЭТОГО же .modal-overlay (не отдельный,
-            как под-модалки ниже), обычный flex-элемент слева от .modal, а
-            не position:absolute: раньше он рендерился сиблингом снаружи
-            .modal-overlay вообще без позиционированного предка (уезжал за
-            экран) и его перекрывал собой .modal-overlay (z-index:100,
-            inset:0), из-за чего любой клик на нём на самом деле закрывал
-            весь профиль. Здесь же клики по флайауту гасит его собственный
-            stopPropagation, а клик по фону (мимо обоих) закрывает всё разом —
-            так и задумано, это часть одного редактора. */}
-        {showStylesFlyout && (
-          <ProfileStylesFlyout
-            bannerColor={user.banner_color}
-            onSetBannerColor={(v) => patch({ banner_color: v })}
-            onOpenNameStyle={() => {
-              setShowStylesFlyout(false)
-              setShowNameStyleModal(true)
-            }}
-            onClose={() => setShowStylesFlyout(false)}
-          />
-        )}
-        {/* Обёртка вокруг .modal + закладки "Стили" — тег позиционируется от
-            НЕЁ (см. .profile-modal-wrap в index.css), а не от самого .modal:
-            у того overflow-y:auto (см. index.css .modal), который эффективно
-            клипает и overflow-x тоже (спека: если один из осей не visible, у
-            другой auto вместо visible) — абсолютно спозиционированный
-            потомок, торчащий за левый край .modal, был бы им обрезан. */}
+        {/* Обёртка вокруг .modal + закладки "Стили" — и тег, и (на десктопе)
+            сам флайаут позиционируются от НЕЁ (см. .profile-modal-wrap в
+            index.css), а не от .modal: у того overflow-y:auto, который по
+            спеке эффективно клипает и overflow-x тоже — всё, что торчит за
+            край, было бы им обрезано. */}
         <div className="profile-modal-wrap">
-          {!showStylesFlyout && (
-            <button
-              type="button"
-              className="profile-styles-tab"
-              title="Стили"
-              // Тег — СИБЛИНГ .modal (не внутри него), поэтому клик по нему
-              // без остановки всплывал до onClick={handleClose} на
-              // .modal-overlay и закрывал весь профиль тем же кликом, каким
-              // должен был открыться флайаут — тег visually работал, но
-              // модал тут же захлопывался следом.
-              onClick={(e) => {
-                e.stopPropagation()
-                setShowStylesFlyout(true)
-              }}
-            >
-              <Paintbrush size={14} />
-            </button>
-          )}
-        <div className="modal profile-modal" onClick={(e) => e.stopPropagation()}>
-          <ProfileCardHeader
-            username={user.username}
-            displayName={user.display_name}
-            avatarColor={user.avatar_color}
-            avatarImage={user.avatar_image}
-            bannerGradient={user.banner_gradient}
-            bannerImage={user.banner_image}
-            bannerColor={user.banner_color}
-            status={user.status}
-            customStatus={user.custom_status}
-            customStatusEmoji={user.custom_status_emoji}
-            pronouns={user.pronouns}
-            nameStyle={user}
-            edit={{
-              onEditAvatar: () => fileRef.current?.click(),
-              onRemoveAvatar: () => patch({ avatar_image: '' }),
-              canRemoveAvatar: !!user.avatar_image,
-              onEditBanner: () => setShowBannerEditor(true),
-              onRemoveBanner: () => patch({ banner_gradient: '', banner_image: '' }),
-              canRemoveBanner: !!(user.banner_gradient || user.banner_image),
-              onSaveDisplayName: (v) => patch({ display_name: v }),
-              onSavePronouns: (v) => patch({ pronouns: v }),
-              onEditStatus: () => setShowStatusEditor(true),
-              onClearStatus: () => patch({ custom_status: '', custom_status_emoji: '' }),
+          <button
+            type="button"
+            className="profile-styles-tab"
+            title={showStylesFlyout ? 'Закрыть' : 'Стили'}
+            // Тег — СИБЛИНГ .modal (не внутри него), поэтому клик по нему
+            // без остановки всплывал бы до onClick={handleClose} на
+            // .modal-overlay и закрывал весь профиль тем же кликом.
+            onClick={(e) => {
+              e.stopPropagation()
+              setShowStylesFlyout((v) => !v)
             }}
-          />
-          <input
-            ref={fileRef}
-            type="file"
-            accept="image/*"
-            className="profile-file-input"
-            onChange={handleFileChange}
-          />
-          {avatarError && <div className="login-error">{avatarError}</div>}
-
-          <div className="profile-modal-actions-row profile-modal-actions-row-stacked">
-            <button
-              type="button"
-              className="profile-popup-item mini-profile-action"
-              disabled
-              title="Нельзя написать самому себе"
-            >
-              <MessageSquare size={15} /> Написать сообщение
-            </button>
-            <button type="button" className="profile-popup-item" onClick={copyId}>
-              {copied ? <Check size={15} /> : <Copy size={15} />}
-              {copied ? 'Скопировано' : 'Копировать ID'}
-            </button>
-          </div>
-
-          <div className="profile-popup-divider" />
-
-          <InlineEditableText
-            className="profile-popup-bio"
-            value={user.bio}
-            placeholder="Расскажи о себе"
-            maxLength={BIO_MAX_LENGTH}
-            multiline
-            onSave={(v) => patch({ bio: v })}
-          />
-
-          <div className="profile-popup-divider" />
-
-          <div className="profile-modal-section">
-            <div className="profile-modal-section-title">
-              <Calendar size={13} /> В числе участников с
-            </div>
-            <div className="profile-modal-section-value">{joinedDate}</div>
-          </div>
-
-          <div className="profile-popup-divider" />
-
-          <div className="profile-modal-section">
-            <div className="profile-modal-section-title">
-              <Blocks size={13} /> Интеграции
-            </div>
-            <button
-              type="button"
-              className="profile-modal-add-integration"
-              onClick={() => alert('Пока не реализовано')}
-            >
-              <Plus size={14} /> Добавить интеграцию
-            </button>
-          </div>
-
-          <button className="modal-close" onClick={handleClose}>
-            Закрыть
+          >
+            {showStylesFlyout ? <X size={14} /> : <Paintbrush size={14} />}
           </button>
-        </div>
+
+          {!isMobile && showStylesFlyout && stylesFlyout}
+
+          <div className="modal profile-modal" onClick={(e) => e.stopPropagation()}>
+            {isMobile && showStylesFlyout ? (
+              stylesFlyout
+            ) : (
+              <>
+                <ProfileCardHeader
+                  username={user.username}
+                  displayName={user.display_name}
+                  avatarColor={user.avatar_color}
+                  avatarImage={user.avatar_image}
+                  bannerGradient={user.banner_gradient}
+                  bannerImage={user.banner_image}
+                  bannerColor={user.banner_color}
+                  status={user.status}
+                  customStatus={user.custom_status}
+                  customStatusEmoji={user.custom_status_emoji}
+                  pronouns={user.pronouns}
+                  nameStyle={user}
+                  edit={{
+                    onEditAvatar: () => fileRef.current?.click(),
+                    onRemoveAvatar: () => patch({ avatar_image: '' }),
+                    canRemoveAvatar: !!user.avatar_image,
+                    onEditBanner: () => setShowBannerEditor(true),
+                    onRemoveBanner: () => patch({ banner_gradient: '', banner_image: '' }),
+                    canRemoveBanner: !!(user.banner_gradient || user.banner_image),
+                    onSaveDisplayName: (v) => patch({ display_name: v }),
+                    onSavePronouns: (v) => patch({ pronouns: v }),
+                    onEditStatus: () => setShowStatusEditor(true),
+                    onClearStatus: () => patch({ custom_status: '', custom_status_emoji: '' }),
+                  }}
+                />
+                <input
+                  ref={fileRef}
+                  type="file"
+                  accept="image/*"
+                  className="profile-file-input"
+                  onChange={handleFileChange}
+                />
+                {avatarError && <div className="login-error">{avatarError}</div>}
+
+                <div className="profile-modal-actions-row profile-modal-actions-row-stacked">
+                  <button
+                    type="button"
+                    className="profile-popup-item mini-profile-action"
+                    disabled
+                    title="Нельзя написать самому себе"
+                  >
+                    <MessageSquare size={15} /> Написать сообщение
+                  </button>
+                  <button type="button" className="profile-popup-item" onClick={copyId}>
+                    {copied ? <Check size={15} /> : <Copy size={15} />}
+                    {copied ? 'Скопировано' : 'Копировать ID'}
+                  </button>
+                </div>
+
+                <div className="profile-popup-divider" />
+
+                <InlineEditableText
+                  className="profile-popup-bio"
+                  value={user.bio}
+                  placeholder="Расскажи о себе"
+                  maxLength={BIO_MAX_LENGTH}
+                  multiline
+                  onSave={(v) => patch({ bio: v })}
+                />
+
+                <div className="profile-popup-divider" />
+
+                <div className="profile-modal-section">
+                  <div className="profile-modal-section-title">
+                    <Calendar size={13} /> В числе участников с
+                  </div>
+                  <div className="profile-modal-section-value">{joinedDate}</div>
+                </div>
+
+                <div className="profile-popup-divider" />
+
+                <div className="profile-modal-section">
+                  <div className="profile-modal-section-title">
+                    <Blocks size={13} /> Интеграции
+                  </div>
+                  <button
+                    type="button"
+                    className="profile-modal-add-integration"
+                    onClick={() => alert('Пока не реализовано')}
+                  >
+                    <Plus size={14} /> Добавить интеграцию
+                  </button>
+                </div>
+
+                <button className="modal-close" onClick={handleClose}>
+                  Закрыть
+                </button>
+              </>
+            )}
+          </div>
         </div>
       </div>
 
