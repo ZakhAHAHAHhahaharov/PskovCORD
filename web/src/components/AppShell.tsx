@@ -37,32 +37,12 @@ import {
   playScreenShareStopSound,
   playWakeUpSound,
 } from '../sounds'
-import ServerRail from './ServerRail'
-import ChannelSidebar from './ChannelSidebar'
-import HomeSidebar from './HomeSidebar'
-import NewConversationModal from './NewConversationModal'
-import IncomingCallBanner from './IncomingCallBanner'
-import MessageList from './MessageList'
-import MessageInput, { MessageInputPrefill, OutgoingMessage } from './MessageInput'
-import MembersList from './MembersList'
+import AppShellChat from './AppShellChat'
+import AppShellNav from './AppShellNav'
+import AppShellOverlays from './AppShellOverlays'
 import VoiceProvider, { VoiceStatus } from './VoiceProvider'
-import VoiceStage, { VoiceRosterMember } from './VoiceStage'
-import DiscoverModal from './DiscoverModal'
-import ServerSettingsModal from './ServerSettingsModal'
-import SettingsModal from './SettingsModal'
-import ProfileModal from './ProfileModal'
-import MiniProfilePopup, { ProfilePopupTarget, ProfilePopupUser } from './MiniProfilePopup'
-import ParticipantContextMenu, {
-  ParticipantContextMenuMember,
-  ParticipantContextMenuTarget,
-} from './ParticipantContextMenu'
-import MuteVoteModal from './MuteVoteModal'
-import ServerContextMenu from './ServerContextMenu'
-import ServerPrivacyModal from './ServerPrivacyModal'
-import ServerInviteModal from './ServerInviteModal'
-import ChannelContextMenu from './ChannelContextMenu'
-import ChannelInviteModal from './ChannelInviteModal'
-import VoiceInviteJoinModal from './VoiceInviteJoinModal'
+import { MessageInputPrefill } from './MessageInput'
+import { ProfilePopupTarget, ProfilePopupUser } from './MiniProfilePopup'
 
 const APP_NAME: string = import.meta.env.VITE_APP_NAME || 'PskovCord'
 
@@ -311,12 +291,6 @@ export default function AppShell() {
     [gateway],
   )
 
-  // --- домашний экран: диалоги/группы, друзья, звонки --------------------
-  const handleOpenHome = useCallback(() => {
-    setServerId(null)
-    setChannelId(null)
-  }, [])
-
   return (
     <VoiceProvider voice={voice} onStatus={handleVoiceStatus}>
     {/* screen-* всегда в className, не только при isMobile: сама раскладка
@@ -341,483 +315,57 @@ export default function AppShell() {
           : ''
       }`}
     >
-      {/* Единая "nav-панель" — рельса+сайдбар каналов вместе, всегда
-          настоящий flex-контейнер (см. .mobile-nav-pane в index.css; на ПК
-          это первая 312px-колонка общей grid, на мобилке — nav-экран на
-          весь экран, скрывается целиком при переходе в content). */}
-      <div className="mobile-nav-pane">
-      <ServerRail
-        servers={servers}
-        activeId={serverId}
-        onSelect={selectServer}
-        onCreate={handleCreateServer}
-        onDiscover={() => setShowDiscover(true)}
-        onHome={handleOpenHome}
-        homeNotificationCount={
-          friends.incoming.length + unreadConversationIds.size
-        }
-        unreadServerIds={unreadServerIds}
-        mutedServerIds={mutedServerIds}
-        onContextMenu={(s, e) => setServerContextMenuServerId({ id: s.id, x: e.clientX, y: e.clientY })}
+      <AppShellNav
+        server={serverData}
+        conv={conversationsData}
+        voice={voiceCall}
+        participant={participantContextMenu}
+        user={user!}
+        navigateToContent={navigateToContent}
+        openMobileSettings={openMobileSettings}
+        openProfilePopup={openProfilePopup}
+        onOpenProfile={() => setShowProfile(true)}
       />
 
-      {serverId == null ? (
-        <HomeSidebar
-          conversations={conversations}
-          activeConversationId={activeConversationId}
-          onSelectConversation={(c) => {
-            handleSelectConversation(c)
-            navigateToContent()
-          }}
-          friends={friends}
-          onOpenNewConversation={() => setShowNewConversation(true)}
-          onSendFriendRequest={handleSendFriendRequest}
-          onAcceptFriendRequest={handleAcceptFriendRequest}
-          onDeclineFriendRequest={handleDeclineFriendRequest}
-          voice={voice}
-          voiceRoster={voiceRoster}
-          voiceTopic={voiceTopic}
-          voiceStatus={voiceStatus}
-          user={user!}
-          onLeaveVoice={handleLeaveVoice}
-          onOpenSettings={openMobileSettings}
-          onOpenProfile={() => setShowProfile(true)}
-          onOpenUserProfile={openProfilePopup}
-        />
-      ) : (
-        <ChannelSidebar
-          server={currentServer}
-          channels={channels}
-          activeChannelId={channelId}
-          members={members}
-          voice={voice}
-          voiceRoster={voiceRoster}
-          voiceTopic={voiceTopic}
-          voiceStatus={voiceStatus}
-          user={user!}
-          onSelectText={(c) => {
-            handleSelectChannel(c)
-            navigateToContent()
-          }}
-          onJoinVoice={(c) => {
-            handleJoinVoice(c)
-            navigateToContent()
-          }}
-          onLeaveVoice={handleLeaveVoice}
-          onCreateChannel={handleCreateChannel}
-          onOpenSettings={openMobileSettings}
-          onOpenProfile={() => setShowProfile(true)}
-          onWatchScreen={handleWatchBadge}
-          onOpenServerSettings={() => setShowServerSettings(true)}
-          onParticipantContextMenu={openParticipantContextMenu}
-          onOpenParticipantProfile={openProfilePopup}
-          onChannelContextMenu={(c, e) => setChannelContextMenuId({ id: c.id, x: e.clientX, y: e.clientY })}
-        />
-      )}
-      </div>
+      <AppShellChat
+        server={serverData}
+        conv={conversationsData}
+        voice={voiceCall}
+        participant={participantContextMenu}
+        channelMessages={channelMessages}
+        inviteLinks={inviteLinks}
+        user={user!}
+        isMobile={isMobile}
+        goBackMobile={goBackMobile}
+        activeConversation={activeConversation}
+        canDeleteMessages={canDeleteMessages}
+        pendingChannelMessages={pendingChannelMessages}
+        pendingDmMessages={pendingDmMessages}
+        loadDraft={loadDraft}
+        saveDraft={saveDraft}
+        showMembersList={showMembersList}
+        setShowMembersList={setShowMembersList}
+        openProfilePopup={openProfilePopup}
+        handleToggleDmReaction={handleToggleDmReaction}
+        mentionPrefill={mentionPrefill}
+      />
 
-      <main className={`chat ${currentChannel?.kind === 'voice' ? 'chat-voice' : ''}`}>
-        {serverId == null ? (
-          activeConversation ? (
-            <>
-              <header className="chat-header">
-                {isMobile && (
-                  <button className="chat-back-btn" title="Назад к списку" onClick={goBackMobile}>
-                    <ChevronLeft size={20} />
-                  </button>
-                )}
-                <span className="hash">@</span>
-                <span className="chat-header-name">{conversationDisplayName(activeConversation)}</span>
-                {voice?.room.kind === 'conversation' && voice.room.id === activeConversation.id ? (
-                  <button className="icon-btn dm-call-leave" title="Завершить звонок" onClick={handleLeaveVoice}>
-                    <PhoneOff size={16} />
-                  </button>
-                ) : (
-                  <button
-                    className="icon-btn"
-                    title="Позвонить"
-                    onClick={() => handleDmVoiceJoin(activeConversation.id)}
-                  >
-                    <Phone size={16} />
-                  </button>
-                )}
-              </header>
-              {isInDmCall && (
-                <div className="dm-voicestage-wrap" style={{ height: dmVoiceStageHeight }}>
-                  <VoiceStage
-                    key={activeConversation.id}
-                    roomId={activeConversation.id}
-                    roomName={conversationDisplayName(activeConversation)}
-                    roster={dmRoster}
-                    selfUserId={user!.id}
-                    pendingWatchUserId={dmPendingWatchUserId}
-                    onConsumedPendingWatch={() => setDmPendingWatchUserId(null)}
-                    onRequestWatch={handleDmRequestWatch}
-                    onOpenProfile={openProfilePopup}
-                    onParticipantContextMenu={openParticipantContextMenu}
-                    roomKind="conversation"
-                    // Этот VoiceStage рендерится только пока isInDmCall — то
-                    // есть мы всегда уже подключены, VoiceLanding здесь не
-                    // нужен (для звонка в личке/группе нет отдельного "canала"
-                    // без входа, только сам звонок).
-                    isConnected
-                    onJoin={() => handleDmVoiceJoin(activeConversation.id)}
-                    onLeave={handleLeaveVoice}
-                  />
-                  <div
-                    className="dm-voicestage-resize"
-                    onMouseDown={handleDmVoiceStageResizeStart}
-                    title="Потянуть, чтобы изменить размер"
-                  />
-                </div>
-              )}
-              <MessageList
-                // Неотправленные дописываются в конец ленты: у них ещё нет id
-                // на сервере, но человек должен видеть, что он написал.
-                messages={[
-                  ...dmMessages,
-                  ...pendingDmMessages.map((p) => pendingAsMessage(p, user!)),
-                ]}
-                currentUserId={user!.id}
-                canModerate={false}
-                editingId={dmEditTarget?.id ?? null}
-                onDelete={handleDeleteDmMessage}
-                onEditRequest={handleDmEditRequest}
-                onReply={handleDmReplyRequest}
-                onOpenProfile={openProfilePopup}
-                onToggleReaction={handleToggleDmReaction}
-                resolveUsername={(id) =>
-                  id === user!.id
-                    ? user!.username
-                    : activeConversation.participants.find((p) => p.id === id)?.username
-                }
-                mentionCandidates={[user!, ...activeConversation.participants]}
-                onRetry={(nonce) => outbox.retry(nonce)}
-                onDiscard={(nonce) => outbox.discard(nonce)}
-                onAcceptServerInvite={handleAcceptServerInvite}
-                onDeclineServerInvite={handleDeclineServerInvite}
-                onOpenInvitedServer={handleOpenInvitedServer}
-              />
-              <MessageInput
-                key={`dm-${activeConversation.id}`}
-                draftKey={`dm-${activeConversation.id}`}
-                loadDraft={loadDraft}
-                saveDraft={saveDraft}
-                mentionCandidates={activeConversation.participants}
-                channelName={conversationDisplayName(activeConversation)}
-                hash={false}
-                onSend={handleSendDm}
-                replyTarget={dmReplyTarget}
-                onCancelReply={() => setDmReplyTarget(null)}
-                editTarget={dmEditTarget}
-                onSaveEdit={handleSaveDmEdit}
-                onCancelEdit={() => setDmEditTargetTracked(null)}
-                prefill={mentionPrefill}
-              />
-            </>
-          ) : (
-            <div className="chat-empty">Выбери диалог слева или начни новый</div>
-          )
-        ) : currentChannel && currentChannel.kind === 'voice' ? (
-          <VoiceStage
-            key={currentChannel.id}
-            roomId={currentChannel.id}
-            roomName={currentChannel.name}
-            roster={members.filter((m) => m.voice_channel === String(currentChannel.id))}
-            selfUserId={user!.id}
-            pendingWatchUserId={
-              pendingWatch?.channelId === currentChannel.id ? pendingWatch.userId : null
-            }
-            onConsumedPendingWatch={() => setPendingWatch(null)}
-            onRequestWatch={(userId) => handleWatchScreen(userId, currentChannel.id)}
-            onOpenProfile={openProfilePopup}
-            onParticipantContextMenu={openParticipantContextMenu}
-            roomKind="channel"
-            isConnected={voice?.room.kind === 'channel' && voice.room.id === currentChannel.id}
-            onJoin={() => handleJoinVoice(currentChannel)}
-            onLeave={handleLeaveVoice}
-            isMobile={isMobile}
-            onBack={goBackMobile}
-          />
-        ) : currentChannel && currentChannel.kind === 'text' ? (
-          <>
-            <header className="chat-header">
-              {isMobile && (
-                <button className="chat-back-btn" title="Назад к списку" onClick={goBackMobile}>
-                  <ChevronLeft size={20} />
-                </button>
-              )}
-              <span className="hash">#</span>
-              <span className="chat-header-name">{currentChannel.name}</span>
-              <button
-                type="button"
-                className={`chat-header-members-toggle ${showMembersList ? 'active' : ''}`}
-                title={showMembersList ? 'Скрыть список участников' : 'Показать список участников'}
-                onClick={() => setShowMembersList((v) => !v)}
-              >
-                <Users size={18} />
-              </button>
-            </header>
-            <MessageList
-              messages={[
-                ...messages,
-                ...pendingChannelMessages.map((p) => pendingAsMessage(p, user!)),
-              ]}
-              currentUserId={user!.id}
-              canModerate={canDeleteMessages}
-              editingId={editTarget?.id ?? null}
-              onDelete={handleDeleteMessage}
-              onEditRequest={handleEditRequest}
-              onReply={handleReplyRequest}
-              onOpenProfile={openProfilePopup}
-              onToggleReaction={handleToggleReaction}
-              resolveUsername={(id) => members.find((m) => m.id === id)?.username}
-              mentionCandidates={members}
-              onRetry={(nonce) => outbox.retry(nonce)}
-              onDiscard={(nonce) => outbox.discard(nonce)}
-            />
-            <MessageInput
-              key={`channel-${currentChannel.id}`}
-              draftKey={`channel-${currentChannel.id}`}
-              loadDraft={loadDraft}
-              saveDraft={saveDraft}
-              mentionCandidates={members}
-              channelName={currentChannel.name}
-              onSend={handleSend}
-              replyTarget={replyTarget}
-              onCancelReply={() => setReplyTarget(null)}
-              editTarget={editTarget}
-              onSaveEdit={handleSaveEdit}
-              onCancelEdit={() => setEditTargetTracked(null)}
-              prefill={mentionPrefill}
-            />
-          </>
-        ) : (
-          <div className="chat-empty">
-            {currentServer
-              ? 'Выбери текстовый канал слева'
-              : 'Создай сервер или зайди в существующий'}
-          </div>
-        )}
-      </main>
-
-      {/* Список участников — только для текстового канала (DM/группа, пустой
-          экран без выбранного канала — прячут его, но колонку под пустой
-          aside всё равно держат для консистентности раскладки). Голосовой
-          канал и текстовый с выключенным вручную тумблером (showMembersList,
-          иконка в chat-header) — колонки нет вообще (см. .app-no-members-col
-          выше): иначе выключение тумблера просто гасило бы содержимое,
-          оставляя пустую 240px-полосу серым блоком вместо реального
-          освобождения ширины под чат. */}
-      {serverId != null && currentChannel?.kind === 'text' && showMembersList ? (
-        <MembersList
-          members={members}
-          channels={channels}
-          roles={rolesForServer(serverId)}
-          ownerId={currentServer?.owner ?? -1}
-          onOpenProfile={openProfilePopup}
-        />
-      ) : currentChannel?.kind === 'voice' ||
-        (currentChannel?.kind === 'text' && !showMembersList) ? null : (
-        <aside className="members-list" />
-      )}
-
-      {showNewConversation && (
-        <NewConversationModal
-          people={knownPeople}
-          onClose={() => setShowNewConversation(false)}
-          onCreate={(data) =>
-            handleCreateConversation({ kind: data.kind, userIds: data.userIds, name: data.name })
-          }
-        />
-      )}
-      {incomingCall && (
-        <IncomingCallBanner
-          callerUsername={incomingCall.caller.username}
-          callerAvatarColor={incomingCall.caller.avatar_color}
-          callerAvatarImage={incomingCall.caller.avatar_image}
-          conversationLabel={
-            conversations.find((c) => c.id === incomingCall.conversationId)?.kind === 'group'
-              ? conversationDisplayName(conversations.find((c) => c.id === incomingCall.conversationId)!)
-              : incomingCall.caller.username
-          }
-          onAccept={handleAcceptIncomingCall}
-          onDecline={handleDeclineIncomingCall}
-        />
-      )}
-
-      {showDiscover && (
-        <DiscoverModal
-          onClose={() => setShowDiscover(false)}
-          onJoined={handleJoined}
-        />
-      )}
-      {showServerSettings && currentServer && (
-        <ServerSettingsModal
-          server={currentServer}
-          members={members}
-          onClose={() => setShowServerSettings(false)}
-          onServerUpdated={handleServerUpdated}
-          onMembersChanged={reloadMembers}
-          onRolesChanged={reloadRoles}
-          isMobile={isMobile}
-        />
-      )}
-      {showSettings && (
-        <SettingsModal onClose={closeSettings} onLogout={logout} isMobile={isMobile} />
-      )}
-      {showProfile && <ProfileModal onClose={() => setShowProfile(false)} />}
-      {profilePopup && (
-        <MiniProfilePopup
-          target={profilePopup}
-          currentUserId={user!.id}
-          isFriend={friends.friends.some((f) => f.id === profilePopup.user.id)}
-          onClose={() => setProfilePopup(null)}
-          onAddFriend={handleMiniProfileAddFriend}
-          onSendMessage={handleMiniProfileSendMessage}
-        />
-      )}
-      {contextMenuTarget && (
-        <ParticipantContextMenu
-          target={contextMenuTarget}
-          canManageMembers={
-            contextMenuTarget.room.kind === 'channel' &&
-            !!currentServer?.my_permissions?.manage_members
-          }
-          voteDisabled={
-            activeMuteVoteChannelId != null &&
-            voice?.room.kind === 'channel' &&
-            voice.room.id === activeMuteVoteChannelId
-          }
-          // Голосование за мут / запрос демонстрации / блокировка зрителя
-          // демонстрации требуют, чтобы мы сами были ПОЛНОСТЬЮ подключены
-          // именно к комнате member'а из target — само меню открывается и
-          // без этого (см. ChannelSidebar/VoiceStage), просто эти пункты
-          // будут задизейблены.
-          voiceActionsEnabled={
-            voiceStatus === 'connected' &&
-            !!voice &&
-            voice.room.kind === contextMenuTarget.room.kind &&
-            voice.room.id === contextMenuTarget.room.id
-          }
-          onClose={() => setContextMenuTarget(null)}
-          onMention={(member) => handleMention(member, contextMenuTarget.room)}
-          onDisconnect={handleDisconnectUser}
-          onStartMuteVote={handleStartMuteVote}
-          onRequestScreenShare={handleRequestScreenShare}
-          onWakeUser={handleWakeUser}
-        />
-      )}
-      {muteVote && voice?.room.kind === 'channel' && voice.room.id === muteVote.channelId && (
-        <MuteVoteModal
-          vote={{
-            channelId: muteVote.channelId,
-            targetUserId: muteVote.targetUserId,
-            targetUsername:
-              members.find((m) => m.id === muteVote.targetUserId)?.username ??
-              `Участник ${muteVote.targetUserId}`,
-            endsAt: muteVote.endsAt,
-          }}
-          onCastVote={handleCastMuteVote}
-        />
-      )}
-      {serverContextMenuServerId && (() => {
-        const menuServer = servers.find((s) => s.id === serverContextMenuServerId.id)
-        // Сервер мог исчезнуть из списка (вышли/выгнали) прямо пока меню
-        // открыто — тогда просто не рендерим его вместо падения на undefined.
-        if (!menuServer) return null
-        return (
-          <ServerContextMenu
-            server={menuServer}
-            x={serverContextMenuServerId.x}
-            y={serverContextMenuServerId.y}
-            canManageServer={
-              !!menuServer.my_permissions &&
-              (menuServer.my_permissions.manage_server ||
-                menuServer.my_permissions.manage_roles ||
-                menuServer.my_permissions.manage_members)
-            }
-            isOwner={menuServer.owner === user!.id}
-            onClose={() => setServerContextMenuServerId(null)}
-            onMarkRead={() => handleMarkServerRead(menuServer)}
-            onInvite={() => setShowServerInviteId(menuServer.id)}
-            onMute={(minutes) => handleMuteServer(menuServer, minutes)}
-            onUnmute={() => handleUnmuteServer(menuServer)}
-            onNotificationLevel={(level) => handleSetNotificationLevel(menuServer, level)}
-            onToggleIgnoreAtHere={(v) => handleToggleIgnoreAtHere(menuServer, v)}
-            onToggleSuppressRoleMentions={(v) => handleToggleSuppressRoleMentions(menuServer, v)}
-            onOpenServerSettings={() => {
-              selectServer(menuServer)
-              setShowServerSettings(true)
-            }}
-            onOpenPrivacy={() => setShowServerPrivacyId(menuServer.id)}
-            onLeave={() => handleLeaveServer(menuServer)}
-          />
-        )
-      })()}
-      {showServerInviteId != null && (() => {
-        const inviteServer = servers.find((s) => s.id === showServerInviteId)
-        if (!inviteServer) return null
-        return (
-          <ServerInviteModal
-            server={inviteServer}
-            people={knownPeople}
-            onClose={() => setShowServerInviteId(null)}
-          />
-        )
-      })()}
-      {showServerPrivacyId != null && (() => {
-        const privacyServer = servers.find((s) => s.id === showServerPrivacyId)
-        if (!privacyServer) return null
-        return (
-          <ServerPrivacyModal
-            server={privacyServer}
-            onClose={() => setShowServerPrivacyId(null)}
-            onSettingsUpdated={patchServerSettings}
-          />
-        )
-      })()}
-      {channelContextMenuId && (() => {
-        // Сервер/канал могли исчезнуть (канал удалили, сами вышли) прямо
-        // пока меню открыто — тогда просто не рендерим (см. serverContextMenuServerId).
-        const menuChannel = currentServer?.channels.find((c) => c.id === channelContextMenuId.id)
-        if (!currentServer || !menuChannel) return null
-        return (
-          <ChannelContextMenu
-            channel={menuChannel}
-            x={channelContextMenuId.x}
-            y={channelContextMenuId.y}
-            canManageChannels={!!currentServer.my_permissions?.manage_channels}
-            isPinned={currentServer.my_settings.pinned_channel_ids.includes(menuChannel.id)}
-            onClose={() => setChannelContextMenuId(null)}
-            onInvite={() => setShowChannelInviteId(menuChannel.id)}
-            onTogglePin={() => handleTogglePinChannel(currentServer, menuChannel)}
-            onCopyLink={() => handleCopyChannelLink(currentServer, menuChannel)}
-            onSetStatus={(status) => handleSetChannelStatus(menuChannel, status)}
-          />
-        )
-      })()}
-      {showChannelInviteId != null && (() => {
-        const inviteChannel = currentServer?.channels.find((c) => c.id === showChannelInviteId)
-        if (!currentServer || !inviteChannel) return null
-        return (
-          <ChannelInviteModal
-            server={currentServer}
-            channel={inviteChannel}
-            people={knownPeople}
-            onClose={() => setShowChannelInviteId(null)}
-          />
-        )
-      })()}
-      {voiceInvite && (
-        <VoiceInviteJoinModal
-          preview={voiceInvite.preview}
-          loading={voiceInvite.loading}
-          error={voiceInvite.error}
-          onConfirm={handleConfirmVoiceInvite}
-          onClose={() => setVoiceInvite(null)}
-        />
-      )}
+      <AppShellOverlays
+        server={serverData}
+        conv={conversationsData}
+        voice={voiceCall}
+        participant={participantContextMenu}
+        inviteLinks={inviteLinks}
+        user={user!}
+        isMobile={isMobile}
+        logout={logout}
+        showSettings={showSettings}
+        closeSettings={closeSettings}
+        showProfile={showProfile}
+        setShowProfile={setShowProfile}
+        profilePopup={profilePopup}
+        setProfilePopup={setProfilePopup}
+      />
     </div>
     </VoiceProvider>
   )
