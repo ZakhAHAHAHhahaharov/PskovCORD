@@ -309,6 +309,25 @@ class ServerInviteSerializer(serializers.ModelSerializer):
         return {"id": obj.channel_id, "name": obj.channel.name}
 
 
+class ServerInviteLinkSerializer(serializers.ModelSerializer):
+    """Одна ссылка-приглашение (kind=LINK) для GET /api/servers/<id>/invite-links
+    (см. chat.views.ServerInviteLinksList) — модераторский список ВСЕХ
+    ссылок сервера, у каждого участника своя (см. created_by в lookup'е
+    ServerInviteLink.get), с числом реально вступивших по ней (uses)."""
+
+    created_by = UserSerializer(read_only=True)
+    channel = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ServerInvite
+        fields = ["id", "code", "channel", "created_by", "uses", "created_at"]
+
+    def get_channel(self, obj):
+        if obj.channel_id is None:
+            return None
+        return {"id": obj.channel_id, "name": obj.channel.name}
+
+
 class ConversationServerInviteSerializer(serializers.ModelSerializer):
     """Приглашение как оно встроено КАРТОЧКОЙ в сообщение диалога (см.
     ConversationMessageSerializer.server_invite) — компактнее
