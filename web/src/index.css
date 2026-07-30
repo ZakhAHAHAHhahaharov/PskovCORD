@@ -4250,6 +4250,83 @@ textarea.inline-editable-input {
   width: 100%;
 }
 
+/* ---- редактор гифки-аватара (GifAvatarModal) ----
+   Две круглые превьюшки рядом: слева живая анимация, справа — тот самый
+   кадр, который станет обычным аватаром. Рядом, а не по очереди: выбирая
+   кадр слайдером, важно видеть оба сразу. */
+.gif-avatar-previews {
+  display: flex;
+  gap: 20px;
+  justify-content: center;
+  padding: 14px 0 6px;
+}
+
+.gif-avatar-preview {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+.gif-avatar-preview-img {
+  width: 96px;
+  height: 96px;
+  border-radius: 50%;
+  object-fit: cover;
+  background: var(--input-bg);
+}
+
+.gif-avatar-preview-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+}
+
+.gif-avatar-preview-label {
+  font-size: calc(12px * var(--font-scale, 1));
+  color: var(--text-muted);
+}
+
+.gif-avatar-frame-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.gif-avatar-frame-row input[type='range'] {
+  width: 100%;
+}
+
+.gif-avatar-frame-label {
+  font-size: calc(13px * var(--font-scale, 1));
+  color: var(--text-muted);
+}
+
+.gif-avatar-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 14px;
+  cursor: pointer;
+  font-size: calc(13px * var(--font-scale, 1));
+  color: var(--body-text);
+}
+
+.gif-avatar-toggle span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.gif-avatar-hint {
+  font-size: calc(12px * var(--font-scale, 1));
+  color: var(--text-muted);
+  margin: 10px 0 0;
+  line-height: 1.45;
+}
+
 /* ---- редактор облачка статуса (StatusEditModal) ---- */
 .status-edit-preview {
   display: flex;

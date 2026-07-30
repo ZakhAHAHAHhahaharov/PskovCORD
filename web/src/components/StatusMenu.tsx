@@ -178,6 +178,8 @@ export default function StatusMenu({
             displayName={user.display_name}
             avatarColor={user.avatar_color}
             avatarImage={user.avatar_image}
+            userId={user.id}
+            avatarAnimated={user.avatar_animated}
             bannerGradient={user.banner_gradient}
             bannerImage={user.banner_image}
             bannerColor={user.banner_color}
@@ -290,7 +292,13 @@ export default function StatusMenu({
                   <div className="status-flyout-scroll">
                     {[
                       { ...user, isActive: true },
-                      ...knownAccounts.map((a) => ({ ...a, isActive: false })),
+                      // Активный аккаунт не должен попасть в список второй
+                      // раз (см. auth.addAccount — там закрыта причина, а
+                      // здесь страховка от уже сохранённого дубля: одинаковый
+                      // key сломал бы ещё и React-список).
+                      ...knownAccounts
+                        .filter((a) => a.id !== user.id)
+                        .map((a) => ({ ...a, isActive: false })),
                     ].map((a) => (
                       <button
                         key={a.id}

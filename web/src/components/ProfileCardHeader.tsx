@@ -37,6 +37,8 @@ export default function ProfileCardHeader({
   displayName,
   avatarColor,
   avatarImage,
+  userId,
+  avatarAnimated = false,
   bannerGradient,
   bannerImage,
   bannerColor,
@@ -51,6 +53,11 @@ export default function ProfileCardHeader({
   displayName: string
   avatarColor: string
   avatarImage: string
+  /** Чей аватар — нужен, чтобы догрузить гифку анимированного (см.
+   * avatarAnim.ts). В карточке профиля она играет ВСЕГДА: карточку
+   * открывают осознанно и на время, мельтешения в ленте это не создаёт. */
+  userId?: number
+  avatarAnimated?: boolean
   bannerGradient?: string
   bannerImage?: string
   /** Фон ПОД баннером — виден только когда bannerImage задан и он с
@@ -90,6 +97,9 @@ export default function ProfileCardHeader({
       size={AVATAR_SIZE}
       status={status}
       showStatus={!!status}
+      userId={userId}
+      animated={avatarAnimated}
+      playAnimation
     />
   )
 

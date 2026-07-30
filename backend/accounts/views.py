@@ -51,6 +51,11 @@ def _broadcast_profile_update(user):
         "custom_status_emoji": user.custom_status_emoji,
         "avatar_color": user.avatar_color,
         "avatar_image": user.avatar_image,
+        # Сама гифка (avatar_anim) по WS не летит — только флаг: остальные
+        # догрузят её по требованию (chat.views.UserAvatarAnimation), а
+        # изменившийся флаг заодно велит им сбросить свой кэш анимации.
+        "avatar_animated": bool(user.avatar_anim),
+        "avatar_downloadable": user.avatar_downloadable,
         "name_font": user.name_font_id,
         "name_effect": user.name_effect,
         "name_color_1": user.name_color_1,

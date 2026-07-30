@@ -170,6 +170,10 @@ export function useVoiceMesh(
   // которую смотрели, просто пропадала бы навсегда — новый клиент никогда не
   // узнает, что её нужно снова consume'ить.
   const watchedScreenUserIdsRef = useRef<Set<number>>(new Set())
+  // Перезапрос SFU-креденшлов, поставленный эффектом подключения (см. ниже) —
+  // нужен и вне его: токен несёт права роли, и попытка начать демонстрацию с
+  // токеном, выданным ДО того, как право вернули, отклоняется самим SFU.
+  const refreshCredentialsRef = useRef<(() => Promise<string>) | null>(null)
   // Живой уровень своего микрофона для метра в настройках — см. VoiceMesh.getMicLevel.
   const micLevelRef = useRef(0)
 
@@ -224,7 +228,11 @@ export function useVoiceMesh(
           : await api.voiceCredentials(roomId)
       creds.url = res.sfu_url
       creds.token = res.sfu_token
+      return res.sfu_token
     }
+    // Тот же запрос нужен и снаружи эффекта — при попытке начать
+    // демонстрацию с устаревшими правами в токене (см. toggleScreenShare).
+    refreshCredentialsRef.current = refreshCredentials
 
     const startAttempt = () => {
       if (cancelled) return
@@ -664,6 +672,32 @@ export function useVoiceMesh(
     setOwnScreenStream(null)
   }
 
+  /** startScreen с одной повторной попыткой на «нет права показывать видео».
+   *
+   * Права роли зашиты в SFU-токен, а он предъявляется единожды — при входе в
+   * канал (см. chat/sfu.py и sfu/src/server.ts). Поэтому «Показывать видео»,
+   * снятое и возвращённое обратно, до этого требовало выйти из голосового
+   * канала и зайти заново. Здесь отказ по правам приводит к перезапросу
+   * токена у Django (тот выдаст его с АКТУАЛЬНЫМИ правами — или откажет
+   * вовсе, если право так и не вернули) и повторной попытке. */
+  const startScreenWithFreshRights = async (
+    sfu: SfuClient,
+    tracks: MediaStreamTrack[],
+  ) => {
+    try {
+      await sfu.startScreen(tracks)
+    } catch (err) {
+      const denied = /not allowed by server role/.test((err as Error).message)
+      const refresh = refreshCredentialsRef.current
+      if (!denied || !refresh) throw err
+      // Если первый трек успел уехать до отказа на втором — убираем его,
+      // чтобы повтор не создал второго продюсера на ту же дорожку.
+      sfu.stopScreen()
+      await sfu.updateToken(await refresh())
+      await sfu.startScreen(tracks)
+    }
+  }
+
   const toggleScreenShare = () => {
     if (isSharingScreen) {
       stopSharing()
@@ -690,7 +724,7 @@ export function useVoiceMesh(
         const videoTrack = stream.getVideoTracks()[0]
         if (videoTrack) videoTrack.addEventListener('ended', stopSharing)
         try {
-          await sfu.startScreen(stream.getTracks())
+          await startScreenWithFreshRights(sfu, stream.getTracks())
         } catch (e) {
           // Не смогли отдать треки SFU (нет права «Показывать видео», обрыв) —
           // обязательно гасим сам захват, иначе он останется висеть.

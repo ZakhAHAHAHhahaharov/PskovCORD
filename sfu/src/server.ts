@@ -1,30 +1,15 @@
 import http from 'http'
 import { URL } from 'url'
 import { WebSocketServer, WebSocket } from 'ws'
-import jwt from 'jsonwebtoken'
 import { config } from './config'
+import { TokenClaims, verifyToken } from './auth'
 import { Rooms, Peer } from './room'
 import { handleRequest } from './signaling'
 
-interface TokenClaims {
-  uid: number
-  room: string
-  name?: string
-  /** Права роли на сервере (см. chat/sfu.py). В токенах, выпущенных до их
-   * появления, отсутствуют — тогда считаем разрешённым (см. Peer). */
-  speak?: boolean
-  video?: boolean
-}
-
 /** Верификация access-токена из query (?token=...), подписан SFU_SECRET. */
-function verifyToken(rawUrl: string | undefined): TokenClaims {
+function verifyTokenFromUrl(rawUrl: string | undefined): TokenClaims {
   const url = new URL(rawUrl || '', 'http://localhost')
-  const token = url.searchParams.get('token') || ''
-  // Явный allow-list алгоритмов: иначе проверка опирается на дефолты
-  // библиотеки, а не на наше решение.
-  return jwt.verify(token, config.sfuSecret, {
-    algorithms: ['HS256'],
-  }) as TokenClaims
+  return verifyToken(url.searchParams.get('token') || '')
 }
 
 export function startServer(): void {
@@ -34,7 +19,7 @@ export function startServer(): void {
   wss.on('connection', (ws: WebSocket, req) => {
     let claims: TokenClaims
     try {
-      claims = verifyToken(req.url)
+      claims = verifyTokenFromUrl(req.url)
     } catch {
       ws.close(4001, 'unauthorized')
       return

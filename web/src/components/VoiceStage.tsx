@@ -92,6 +92,8 @@ export interface VoiceRosterMember {
   username: string
   avatar_color: string
   avatar_image: string
+  /** У аватара есть гифка — играет, пока участник говорит (см. avatarAnim.ts). */
+  avatar_animated?: boolean
   muted: boolean
   deafened: boolean
   sharing_screen: boolean
@@ -200,6 +202,11 @@ function ParticipantTile({
           color={member.avatar_color}
           image={member.avatar_image}
           size={72}
+          userId={member.id}
+          animated={!!member.avatar_animated}
+          // Гифка играет, пока человек говорит — тот же сигнал, что и
+          // подсветка тайла.
+          playAnimation={speaking}
         />
       </div>
       {/* Клик по нику — БЕЗ своего onClick/stopPropagation: пусть всплывает
@@ -769,6 +776,9 @@ export default function VoiceStage({
                     image={expandedMember?.avatar_image ?? ''}
                     size={200}
                     speaking={speakingUserIds.has(expanded.userId)}
+                    userId={expanded.userId}
+                    animated={!!expandedMember?.avatar_animated}
+                    playAnimation={speakingUserIds.has(expanded.userId)}
                   />
                 </div>
               )}

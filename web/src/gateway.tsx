@@ -7,7 +7,7 @@ import {
   useRef,
   ReactNode,
 } from 'react'
-import { getToken, UserStatus } from './api'
+import { ensureAccessToken, getToken, UserStatus } from './api'
 
 type Handler = (payload: any) => void
 
@@ -135,8 +135,12 @@ export function GatewayProvider({ children }: { children: ReactNode }) {
   const attempt = useRef(0)
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  const connect = useCallback(() => {
-    const token = getToken()
+  const connect = useCallback(async () => {
+    // Не getToken(): у сокета нет пути «получил 401 — обнови и повтори», он
+    // просто закрывается, и вкладка, проспавшая дольше жизни access-токена,
+    // переподключалась бы протухшим токеном бесконечно. ensureAccessToken
+    // обновляет его заранее (см. api.ts).
+    const token = await ensureAccessToken()
     if (!token || closed.current) return
 
     const ws = new WebSocket(`${WS}/ws/gateway?token=${token}&device_id=${DEVICE_ID}`)
@@ -169,13 +173,13 @@ export function GatewayProvider({ children }: { children: ReactNode }) {
       // Джиттер: без него после рестарта сервера все клиенты приходят
       // ровно одновременно и роняют его повторно.
       const delay = backoff * (0.5 + Math.random() * 0.5)
-      reconnectTimer.current = setTimeout(connect, delay)
+      reconnectTimer.current = setTimeout(() => void connect(), delay)
     }
   }, [])
 
   useEffect(() => {
     closed.current = false
-    connect()
+    void connect()
     return () => {
       closed.current = true
       if (reconnectTimer.current) clearTimeout(reconnectTimer.current)

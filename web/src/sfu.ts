@@ -450,6 +450,16 @@ export class SfuClient {
     else if (!paused && this.micProducer.paused) this.micProducer.resume()
   }
 
+  /** Предъявить свежий access-токен, не переподключаясь.
+   *
+   * Права роли («Говорить»/«Показывать видео») живут в токене, а он
+   * предъявляется один раз — при открытии соединения (см. sfu/src/server.ts).
+   * Из-за этого право, снятое и возвращённое обратно, начинало работать
+   * только после выхода и повторного входа в канал. */
+  async updateToken(token: string): Promise<void> {
+    await this.request('updateToken', { token })
+  }
+
   /** Начать демонстрацию экрана: продюсим видео (и системный звук, если есть). */
   async startScreen(tracks: MediaStreamTrack[]): Promise<void> {
     if (!this.sendTransport) throw new Error('send transport not ready')

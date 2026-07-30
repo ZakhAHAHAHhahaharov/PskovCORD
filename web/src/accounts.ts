@@ -28,10 +28,23 @@ export function loadKnownAccounts(): StoredAccount[] {
     const raw = localStorage.getItem(KEY)
     if (!raw) return []
     const parsed = JSON.parse(raw)
-    return Array.isArray(parsed) ? parsed : []
+    return Array.isArray(parsed) ? dedupeById(parsed) : []
   } catch {
     return []
   }
+}
+
+/** Схлопывает записи с одинаковым id, оставляя последнюю (самый свежий
+ * refresh). Чинит уже испорченные хранилища: раньше «добавить аккаунт» тем
+ * же самым аккаунтом, под которым уже сидишь, клало его копию в этот список,
+ * и в переключателе он показывался дважды (см. auth.addAccount — там же
+ * закрыта и сама причина). Заодно снимает дубликат React-ключа в списке. */
+function dedupeById(accounts: StoredAccount[]): StoredAccount[] {
+  const byId = new Map<number, StoredAccount>()
+  for (const a of accounts) {
+    if (a && typeof a.id === 'number') byId.set(a.id, a)
+  }
+  return [...byId.values()]
 }
 
 function saveKnownAccounts(accounts: StoredAccount[]): void {

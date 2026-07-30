@@ -69,6 +69,11 @@ function VoiceUserRow({
         image={m.avatar_image}
         size={20}
         speaking={speaking}
+        userId={m.id}
+        animated={m.avatar_animated}
+        // Гифка-аватар оживает ровно на время речи — тот же сигнал, что и
+        // зелёное кольцо вокруг аватарки.
+        playAnimation={speaking}
       />
       <span
         className={`${speaking ? 'speaking' : ''} ${styledNameProps(m).className}`}

@@ -11,6 +11,7 @@ import { useServerData } from '../hooks/useServerData'
 import { useVoiceCall } from '../hooks/useVoiceCall'
 import { ChatMessageBase } from '../api'
 import { useAuth } from '../auth'
+import { ComposerDraft, loadComposerDraft, saveComposerDraft } from '../drafts'
 import { useGateway } from '../gateway'
 import { outbox, usePendingMessages, OutboxTarget } from '../outbox'
 import AppShellChat from './AppShellChat'
@@ -88,15 +89,18 @@ export default function AppShell() {
   // Черновики композера — по одному на канал/диалог, переживают переключение
   // между ними (и отлучку в голосовой канал/пустой экран): сам MessageInput
   // размонтируется при смене места (см. key={draftKey} у обоих <MessageInput>
-  // ниже), поэтому текст живёт здесь, а не локальным стейтом компонента.
-  const draftsRef = useRef<Map<string, string>>(new Map())
-  const saveDraft = useCallback((key: string, text: string) => {
-    if (text) draftsRef.current.set(key, text)
-    else draftsRef.current.delete(key)
-  }, [])
-  const loadDraft = useCallback((key: string): string | undefined => {
-    return draftsRef.current.get(key)
-  }, [])
+  // ниже), поэтому текст живёт снаружи, а не локальным стейтом компонента.
+  // Хранилище — localStorage (см. drafts.ts): набранное переживает и
+  // перезагрузку страницы, и закрытие вкладки, а не только смену канала.
+  const draftScope = user?.id ?? 0
+  const saveDraft = useCallback(
+    (key: string, draft: ComposerDraft) => saveComposerDraft(draftScope, key, draft),
+    [draftScope],
+  )
+  const loadDraft = useCallback(
+    (key: string) => loadComposerDraft(draftScope, key),
+    [draftScope],
+  )
   // Незавершённое редактирование сообщения — как и черновик, привязано к
   // конкретному каналу/диалогу (тот же формат ключа: "channel-5"/"dm-12") и
   // должно вернуться, если уйти в другой канал/диалог и вернуться обратно, а

@@ -1879,6 +1879,37 @@ class PublicProfileSerializerTests(APITestCase):
         self.assertIn("date_joined", resp.data)
 
 
+class AvatarAnimationTests(APITestCase):
+    """Гифка анимированного аватара — отдельной ручкой, по требованию (в
+    самом профиле только флаг avatar_animated, см. accounts.serializers)."""
+
+    GIF = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"
+
+    def setUp(self):
+        self.me = User.objects.create_user(username="anim_me", password="pw12345")
+        self.other = User.objects.create_user(username="anim_other", password="pw12345")
+        self.client.force_authenticate(self.me)
+
+    def test_empty_when_avatar_is_not_animated(self):
+        resp = self.client.get(f"/api/users/{self.other.id}/avatar-anim")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data["avatar_anim"], "")
+
+    def test_returns_gif_and_download_preference(self):
+        self.other.avatar_anim = self.GIF
+        self.other.avatar_downloadable = False
+        self.other.save(update_fields=["avatar_anim", "avatar_downloadable"])
+        resp = self.client.get(f"/api/users/{self.other.id}/avatar-anim")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data["avatar_anim"], self.GIF)
+        self.assertFalse(resp.data["downloadable"])
+
+    def test_requires_authentication(self):
+        self.client.force_authenticate(None)
+        resp = self.client.get(f"/api/users/{self.other.id}/avatar-anim")
+        self.assertEqual(resp.status_code, 401)
+
+
 class ProfileNoteTests(APITestCase):
     """Приватная заметка о другом пользователе — своя у каждого
     просматривающего, виден только автору."""
