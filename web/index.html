@@ -8,7 +8,14 @@
          композер чата съезжал и становился еле видим. Запрет пинч-зума
          сделан отдельно, только через gesturestart/wheel в main.tsx —
          тот путь клавиатуру не трогает вообще. -->
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <!-- Без viewport-fit=cover в standalone-режиме (иконка на домашнем экране
+         iOS) env(safe-area-inset-*) ниже по CSS всегда возвращает 0 — тогда
+         как раз в standalone (без чрома Safari, который обычно сам даёт
+         отступ) нижние панели утыкаются в скруглённые края экрана/зону жеста
+         Home Indicator. apple-mobile-web-app-capable — для консистентности
+         с manifest display:standalone на iOS. -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
     <title>PskovCord</title>
     <!--
       Пути стабильны, а какой именно favicon отдать (стандартный или личный
