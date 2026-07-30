@@ -13,6 +13,7 @@ import { useConversationsData } from '../hooks/useConversationsData'
 import { useInviteLinks } from '../hooks/useInviteLinks'
 import { useMobileNav } from '../hooks/useMobileNav'
 import { useNameFonts } from '../hooks/useNameFonts'
+import { useParticipantContextMenu } from '../hooks/useParticipantContextMenu'
 import { useServerData } from '../hooks/useServerData'
 import { useVoiceCall } from '../hooks/useVoiceCall'
 import {
@@ -179,11 +180,6 @@ export default function AppShell() {
     editTargetRef.current = m
     setEditTarget(m)
   }, [])
-  // --- контекстное меню участника голосового канала (правый клик) --------
-  const [contextMenuTarget, setContextMenuTarget] = useState<ParticipantContextMenuTarget | null>(
-    null,
-  )
-  const [mentionPrefill, setMentionPrefill] = useState<MessageInputPrefill | null>(null)
   // Черновики композера — по одному на канал/диалог, переживают переключение
   // между ними (и отлучку в голосовой канал/пустой экран): сам MessageInput
   // размонтируется при смене места (см. key={draftKey} у обоих <MessageInput>
@@ -246,6 +242,15 @@ export default function AppShell() {
     handleDisconnectUser, handleStartMuteVote, handleCastMuteVote,
     handleRequestScreenShare, handleWakeUser,
   } = voiceCall
+
+  const participantContextMenu = useParticipantContextMenu(
+    channels, currentChannel, setChannelId, setServerId, setActiveConversationId,
+  )
+  const {
+    contextMenuTarget, setContextMenuTarget,
+    mentionPrefill,
+    openParticipantContextMenu, handleMention,
+  } = participantContextMenu
 
   const inviteLinks = useInviteLinks(servers, setServers, selectServer, handleJoinVoice)
   const {
@@ -888,49 +893,6 @@ export default function AppShell() {
     e.stopPropagation()
     setProfilePopup({ user: popupUser, x: e.clientX, y: e.clientY })
   }, [])
-
-  // --- контекстное меню участника голосового канала -----------------------
-  // Открывается для ЛЮБОГО голосового канала/звонка, даже если мы сами сейчас
-  // не подключены к нему вообще — какие пункты внутри доступны, решает уже
-  // сам рендер ParticipantContextMenu ниже (см. voiceActionsEnabled).
-  const openParticipantContextMenu = useCallback(
-    (
-      member: ParticipantContextMenuMember,
-      e: ReactMouseEvent,
-      room: { kind: 'channel' | 'conversation'; id: number | string },
-    ) => {
-      e.preventDefault()
-      e.stopPropagation()
-      setContextMenuTarget({ member, x: e.clientX, y: e.clientY, room })
-    },
-    [],
-  )
-
-  // «Упомянуть» — для канала сервера переключаемся на текущий выбранный
-  // текстовый канал (или на первый текстовый) и подставляем "@Имя " в поле
-  // ввода; для звонка в личке/группе подставляем в поле ввода ЭТОГО диалога.
-  const handleMention = useCallback(
-    (
-      member: ParticipantContextMenuMember,
-      room: { kind: 'channel' | 'conversation'; id: number | string },
-    ) => {
-      setContextMenuTarget(null)
-      if (room.kind === 'conversation') {
-        setServerId(null)
-        setActiveConversationId(room.id as number)
-        setMentionPrefill({ token: Date.now(), text: `@${member.username} ` })
-        return
-      }
-      const target =
-        currentChannel && currentChannel.kind === 'text'
-          ? currentChannel
-          : channels.find((c) => c.kind === 'text')
-      if (!target) return
-      setChannelId(target.id)
-      setMentionPrefill({ token: Date.now(), text: `@${member.username} ` })
-    },
-    [channels, currentChannel],
-  )
 
   // Отправка идёт не напрямую в сокет, а через очередь: та рисует сообщение
   // сразу, ждёт подтверждения, при молчании повторяет, а окончательно
