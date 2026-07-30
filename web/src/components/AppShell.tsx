@@ -9,12 +9,14 @@ import {
 } from 'react'
 import { ChevronLeft, Phone, PhoneOff, Users } from 'lucide-react'
 import { useIsMobile } from '../hooks/useIsMobile'
+import { useMobileNav } from '../hooks/useMobileNav'
 import { useNameFonts } from '../hooks/useNameFonts'
 import {
   api, Channel, ChatMessageBase, Conversation, ConversationMessage, FriendsState, InvitePreview,
   KnownPerson, Member, Message, NameEffect, NotificationLevel, Role, Server, ServerMemberSettings,
 } from '../api'
 import { useAuth } from '../auth'
+import { conversationDisplayName } from '../conversation'
 import { useGateway } from '../gateway'
 import { isMentioned } from '../mentions'
 import {
@@ -56,13 +58,6 @@ import ChannelInviteModal from './ChannelInviteModal'
 import VoiceInviteJoinModal from './VoiceInviteJoinModal'
 
 const APP_NAME: string = import.meta.env.VITE_APP_NAME || 'PskovCord'
-
-function conversationDisplayName(c: Conversation): string {
-  if (c.kind === 'group') {
-    return c.name || c.participants.map((p) => p.username).join(', ') || 'Группа'
-  }
-  return c.participants[0]?.username ?? 'Личное сообщение'
-}
 
 /** Комната активного звонка — голосовой канал сервера ИЛИ диалог/группа.
  * voice.ts/VoiceProvider работают только с `.id` (ключ WebRTC-mesh эффектов)
@@ -110,43 +105,8 @@ export default function AppShell() {
   // промис уже общий и второго запроса не будет).
   useNameFonts()
 
-  // --- мобильный layout: список каналов (nav) vs открытый канал (content),
-  // плюс модалки поверх (настройки и т.п.) — на мобилке полноэкранные и
-  // тоже закрываются "назад". На ПК всё видно разом (grid-колонки) или как
-  // обычная модалка, isMobile здесь нужен только для истории браузера. ---
   const isMobile = useIsMobile()
-  const [mobileScreen, setMobileScreen] = useState<'nav' | 'content'>('nav')
-  // Стек "слоёв" мобильной навигации, каждый — одна pushState-запись в
-  // истории браузера. Popstate снимает верхний слой и откатывает именно
-  // его (закрывает то, что было открыто ПОСЛЕДНИМ — например настройки
-  // поверх открытого канала — а не всегда возвращает на список каналов).
-  const mobileBackStack = useRef<Array<() => void>>([])
-  const pushMobileLayer = useCallback(
-    (onPop: () => void) => {
-      if (!isMobile) return
-      history.pushState({ pskovcordMobile: true }, '')
-      mobileBackStack.current.push(onPop)
-    },
-    [isMobile],
-  )
-  useEffect(() => {
-    const onPopState = () => {
-      const undo = mobileBackStack.current.pop()
-      undo?.()
-    }
-    window.addEventListener('popstate', onPopState)
-    return () => window.removeEventListener('popstate', onPopState)
-  }, [])
-  const goBackMobile = useCallback(() => {
-    history.back()
-  }, [])
-  const navigateToContent = useCallback(() => {
-    // Уже в content и просто переключились на другой канал/диалог — слой
-    // истории не плодим, там нечего откатывать (мобильный "экран" тот же).
-    if (!isMobile || mobileScreen === 'content') return
-    pushMobileLayer(() => setMobileScreen('nav'))
-    setMobileScreen('content')
-  }, [isMobile, mobileScreen, pushMobileLayer])
+  const { mobileScreen, pushMobileLayer, goBackMobile, navigateToContent } = useMobileNav(isMobile)
 
   const [servers, setServers] = useState<Server[]>([])
   const [serverId, setServerId] = useState<number | null>(null)
