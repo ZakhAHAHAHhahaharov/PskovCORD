@@ -243,6 +243,18 @@ export default function DisplayNameStyleModal({
               </div>
             </div>
 
+            {/* Тот же ряд, что и в списке каналов слева (см. ChannelSidebar
+                VoiceUserRow) — ник виден и там, в ростере голосового канала
+                под его названием. */}
+            <div className="dns-preview-sidebar">
+              <div className="voice-user dns-preview-sidebar-row">
+                <Avatar name={user.username} color={user.avatar_color} image={user.avatar_image} size={20} />
+                <span className={draftNameProps.className} style={draftNameProps.style}>
+                  {user.display_name || user.username}
+                </span>
+              </div>
+            </div>
+
             <div className="participant-tile dns-preview-voice-tile">
               <Avatar name={user.username} color={user.avatar_color} image={user.avatar_image} size={56} />
               <span className={`participant-tile-name ${draftNameProps.className}`} style={draftNameProps.style}>

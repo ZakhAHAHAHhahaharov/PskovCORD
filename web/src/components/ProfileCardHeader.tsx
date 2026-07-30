@@ -1,4 +1,4 @@
-import { Paintbrush, Pencil, Sparkles, Trash2 } from 'lucide-react'
+import { Pencil, Sparkles, Trash2 } from 'lucide-react'
 import { useHoverFlyout } from '../hooks/useHoverFlyout'
 import { NameStyleSource, styledNameProps } from '../nameStyle'
 import Avatar from './Avatar'
@@ -63,11 +63,10 @@ export default function ProfileCardHeader({
   customStatusEmoji: string
   /** Пусто — вторая строка обходится без " · местоимения". */
   pronouns: string
-  /** Стиль ника (шрифт/эффект/цвета, см. nameStyle.ts) — применяется только
-   * к ТОЛЬКО ЧТЕНИЕ варианту имени (см. ниже): в режиме edit имя — обычный
-   * InlineEditableText, эффект туда намеренно не тянем (это поле для
-   * редактирования ТЕКСТА, а не превью эффекта — тот уже есть в
-   * DisplayNameStyleModal). */
+  /** Стиль ника (шрифт/эффект/цвета, см. nameStyle.ts) — применяется и к
+   * тексту-для-чтения, и к самому полю InlineEditableText в режиме edit:
+   * выбранный стиль должен быть виден сразу в поле ввода имени, не только
+   * после сохранения/в других местах приложения. */
   nameStyle?: NameStyleSource
   edit?: {
     onEditAvatar: () => void
@@ -81,10 +80,6 @@ export default function ProfileCardHeader({
     /** Открывает StatusEditModal (эмодзи + текст, со своей кнопкой «Сохранить»). */
     onEditStatus: () => void
     onClearStatus: () => Promise<void>
-    /** Открывает ProfileStylesFlyout (закладка-кисточка, торчащая у верхнего
-     * края карточки) — пусто/не передано, кнопка не рисуется вовсе (сейчас
-     * это только ProfileModal). */
-    onOpenStyles?: () => void
   }
 }) {
   const avatarNode = (
@@ -102,7 +97,6 @@ export default function ProfileCardHeader({
   const statusActions = useHoverFlyout()
 
   return (
-    <>
     <div className="profile-card">
       <div
         className="profile-card-banner"
@@ -201,7 +195,8 @@ export default function ProfileCardHeader({
 
         {edit ? (
           <InlineEditableText
-            className="profile-card-name"
+            className={`profile-card-name ${nameStyle ? styledNameProps(nameStyle).className : ''}`}
+            style={nameStyle ? styledNameProps(nameStyle).style : undefined}
             value={displayName}
             placeholder={username}
             maxLength={64}
@@ -249,23 +244,5 @@ export default function ProfileCardHeader({
         </div>
       </div>
     </div>
-
-    {/* Закладка-таб "Стили" — торчит из-за правого края карточки, у
-        аватарки (см. .profile-styles-tab в index.css). СИБЛИНГ .profile-card,
-        а не внутри неё: у .profile-card overflow:hidden ради скруглённых
-        углов баннера, поэтому позиционируется от ближайшего родителя со
-        своим position (см. .profile-modal position:relative) — сейчас это
-        только ProfileModal (edit.onOpenStyles задаётся только там). */}
-    {edit?.onOpenStyles && (
-      <button
-        type="button"
-        className="profile-styles-tab"
-        title="Стили"
-        onClick={edit.onOpenStyles}
-      >
-        <Paintbrush size={14} />
-      </button>
-    )}
-    </>
   )
 }
