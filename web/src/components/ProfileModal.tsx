@@ -119,7 +119,15 @@ export default function ProfileModal({ onClose }: { onClose: () => void }) {
               type="button"
               className="profile-styles-tab"
               title="Стили"
-              onClick={() => setShowStylesFlyout(true)}
+              // Тег — СИБЛИНГ .modal (не внутри него), поэтому клик по нему
+              // без остановки всплывал до onClick={handleClose} на
+              // .modal-overlay и закрывал весь профиль тем же кликом, каким
+              // должен был открыться флайаут — тег visually работал, но
+              // модал тут же захлопывался следом.
+              onClick={(e) => {
+                e.stopPropagation()
+                setShowStylesFlyout(true)
+              }}
             >
               <Paintbrush size={14} />
             </button>
