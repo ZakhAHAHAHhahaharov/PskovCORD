@@ -989,6 +989,13 @@ input {
   text-overflow: ellipsis;
 }
 
+/* См. .profile-card-name.effect-neon выше — тот же приём против обрезки
+   свечения оверфлоу, нужным для многоточия у длинных ников. */
+.user-panel-username.effect-neon {
+  padding: 6px 8px;
+  margin: -6px -8px;
+}
+
 .user-panel-status {
   font-size: calc(12px * var(--font-scale, 1));
   color: var(--text-muted);
@@ -1275,6 +1282,23 @@ input {
   display: flex;
   gap: 20px;
   align-items: flex-start;
+}
+
+/* На мобильном модалка (см. .modal max-width:92vw) уже узкая, а тут ещё и
+   .dns-preview с фиксированной шириной 280px (flex-shrink:0, см. ниже) —
+   вдвоём с .dns-settings они физически не влезают в одну строку, и
+   настройки визуально наезжали на превью вместо аккуратного переноса.
+   Перестраиваем в колонку: настройки сверху, превью снизу на всю ширину. */
+@media (max-width: 768px) {
+  .display-name-style-modal {
+    width: 100%;
+  }
+  .dns-layout {
+    flex-direction: column;
+  }
+  .dns-preview {
+    width: 100%;
+  }
 }
 
 .dns-settings {
@@ -1596,6 +1620,17 @@ input {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* overflow:hidden выше (нужен для многоточия у длинных имён) обрезает и
+   text-shadow неона, который рисуется ЗА пределами бокса текста — раздвигаем
+   бокс паддингом и тут же компенсируем его отрицательным margin, чтобы
+   видимое положение/отступы не поменялись у остальных эффектов. Только
+   neon — у остальных (gradient/cartoon/highlight) нет свечения за пределами
+   глифов, обрезать нечего. */
+.profile-card-name.effect-neon {
+  padding: 6px 8px;
+  margin: 4px -8px -6px;
 }
 
 /* Строка username · местоимения · значок под отображаемым именем — см.
@@ -2872,6 +2907,14 @@ textarea.inline-editable-input {
   transition: opacity 0.2s ease;
 }
 
+/* См. .profile-card-name.effect-neon — тот же приём против обрезки свечения.
+   Тут БЕЗ компенсирующего отрицательного margin: бейдж абсолютно
+   спозиционирован (left/bottom), лишний паддинг просто растит его внутрь
+   тайла от зафиксированных краёв, не сдвигая сам якорь позиционирования. */
+.participant-tile-name.effect-neon {
+  padding: 6px 10px;
+}
+
 /* Раньше .controls-hidden (курсор надолго замер, см.
    VoiceStage.scheduleHideControls) гасила и подпись с ником вместе с
    остальным тулбаром — ник должен быть виден всегда, независимо от
@@ -3326,7 +3369,8 @@ textarea.inline-editable-input {
      умолчанию наследует currentColor, а тот здесь transparent) и пропал бы
      из виду прямо во время печати. */
   caret-color: var(--text-normal);
-  animation: name-style-gradient-shift 3s linear infinite;
+  /* --name-anim-speed — см. .name-style.effect-neon ниже, тот же слайдер. */
+  animation: name-style-gradient-shift calc(3s / var(--name-anim-speed, 1)) linear infinite;
 }
 
 @keyframes name-style-gradient-shift {
@@ -3347,9 +3391,11 @@ textarea.inline-editable-input {
 
 /* Дышит именно радиус свечения (text-shadow), а не opacity всего текста —
    сам ник остаётся полностью читаемым, "неонит" только ореол вокруг него.
-   Амплитуда (2px/6px -> 12px/28px) — заметно шире, чем раньше (4/10 -> 8/20):
-   на прежней разнице рост-и-затухание глаза почти не ловили, выглядело как
-   ровное свечение, а не пульс. */
+   Амплитуда (2px/6px -> 8px/18px) — шире, чем было изначально (4/10 -> 8/20),
+   рост-и-затухание теперь заметны, но пик blur-радиуса НЕ увеличен сверх
+   исходного — см. .profile-card-name.effect-neon и соседей ниже: у контейнеров
+   с overflow:hidden (нужен для многоточия у длинных имён) свечение обрезается
+   по границе бокса, чем больше радиус — тем заметнее срез. */
 @keyframes name-style-neon-pulse {
   0%,
   100% {
@@ -3359,8 +3405,8 @@ textarea.inline-editable-input {
   }
   50% {
     text-shadow:
-      0 0 12px var(--name-color-1, var(--blurple)),
-      0 0 28px var(--name-color-1, var(--blurple));
+      0 0 8px var(--name-color-1, var(--blurple)),
+      0 0 18px var(--name-color-1, var(--blurple));
   }
 }
 

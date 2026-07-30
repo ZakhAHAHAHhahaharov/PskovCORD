@@ -28,7 +28,7 @@ export interface NameEffectMeta {
 
 export const NAME_EFFECTS: NameEffectMeta[] = [
   { id: 'standard', label: 'Минимализм', colorCount: 1 },
-  { id: 'gradient', label: 'Градиент', colorCount: 2 },
+  { id: 'gradient', label: 'Градиент', colorCount: 2, hasAnimation: true },
   { id: 'neon', label: 'Неон', colorCount: 1, hasAnimation: true },
   { id: 'cartoon', label: 'Мультфильм', colorCount: 1, hasAnimation: true },
   { id: 'highlight', label: 'Выделение', colorCount: 2 },
