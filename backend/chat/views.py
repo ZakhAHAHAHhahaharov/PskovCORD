@@ -22,10 +22,10 @@ from . import presence, roles, sfu, uploads
 from .models import (
     Attachment, Channel, Conversation, ConversationMessage,
     ConversationParticipant, Membership, Message, ProfileNote, Role, Server,
-    ServerBan, ServerInvite, ServerJoinRequest, MAX_ATTACHMENT_BYTES,
-    _invite_code, dm_room,
+    ServerBan, ServerInvite, ServerJoinRequest, UserRelationState,
+    MAX_ATTACHMENT_BYTES, _invite_code, dm_room,
 )
-from .permissions import are_friends, can_dm
+from .permissions import are_friends, blocked_user_ids, can_dm
 from .serializers import (
     AttachmentSerializer, ChannelSerializer, ConversationMessageSerializer,
     ConversationSerializer, MembershipSettingsSerializer, MessageSerializer,
@@ -209,12 +209,36 @@ def conversation_context(request, conversations):
         "request": request,
         "call_states": presence.call_states([dm_room(cid) for cid in ids]),
         "last_messages": _last_messages(ids),
+        # Своё участие в каждой беседе — оттуда сериализатор берёт личные
+        # настройки (закрепление). Одним запросом, а не по строке на беседу.
+        "my_memberships": {
+            m.conversation_id: m
+            for m in ConversationParticipant.objects.filter(
+                user=request.user, conversation_id__in=ids)
+        },
     }
 
 
 def is_participant(user, conversation) -> bool:
     return ConversationParticipant.objects.filter(
         user=user, conversation=conversation).exists()
+
+
+def _hide_blocked(user, qs):
+    """Убрать из ленты сообщения тех, кого user заблокировал.
+
+    Односторонне: у самого заблокированного ничего не меняется, он даже не
+    узнаёт (см. chat.models.UserRelationState). Фильтруем в БД, а не на
+    фронте, чтобы заблокированный текст вообще не покидал сервер — иначе
+    «скрытие» держалось бы на честном слове клиента.
+
+    Живые сообщения приходят мимо этой функции, через WebSocket — их
+    отсеивает клиент по тому же списку (см. фронт useGatewayEvents).
+    """
+    blocked = blocked_user_ids(user)
+    if not blocked:
+        return qs
+    return qs.exclude(author_id__in=blocked)
 
 
 def _notify_user(user_id, payload):
@@ -1297,8 +1321,14 @@ class UserNote(APIView):
 
 class ConversationListCreate(APIView):
     def get(self, request):
+        # «Закрытые» (см. ConversationSettings) в списке не показываем —
+        # участие и история при этом целы, беседа вернётся сама при новом
+        # сообщении (см. chat.consumers._reopen_for_recipients).
+        closed_ids = ConversationParticipant.objects.filter(
+            user=request.user, closed=True).values_list("conversation_id", flat=True)
         conversations = list(
             Conversation.objects.filter(participants=request.user)
+            .exclude(id__in=closed_ids)
             .prefetch_related("participants")
             .order_by("-created_at")
             .distinct()
@@ -1453,6 +1483,86 @@ class ConversationDetail(APIView):
         return Response(status=204)
 
 
+class ConversationSettings(APIView):
+    """PATCH /api/conversations/<id>/settings — личные настройки беседы у
+    того, кто их меняет (см. chat.models.ConversationParticipant).
+
+    Оба поля необязательны и меняются независимо:
+      pinned — держать беседу вверху списка «Диалоги»;
+      closed — убрать её из списка, не удаляя ни историю, ни участие
+        (в отличие от DELETE выше — тот именно ВЫХОДИТ из беседы).
+    """
+
+    def patch(self, request, conversation_id):
+        conversation = get_object_or_404(Conversation, id=conversation_id)
+        membership = ConversationParticipant.objects.filter(
+            conversation=conversation, user=request.user).first()
+        if membership is None:
+            return Response({"detail": "Нет доступа."}, status=403)
+
+        updated = []
+        for field in ("pinned", "closed"):
+            if field in request.data:
+                setattr(membership, field, bool(request.data[field]))
+                updated.append(field)
+        if updated:
+            membership.save(update_fields=updated)
+        return Response({
+            "pinned": membership.pinned,
+            "closed": membership.closed,
+        })
+
+
+class MyRelations(APIView):
+    """GET /api/relations — все, кого я игнорирую или заблокировал.
+
+    Нужен клиенту на старте: REST-ленты сервер уже фильтрует сам
+    (см. _hide_blocked), но живые сообщения приходят по WebSocket мимо этой
+    фильтрации, и отсеивать их клиенту нужно по готовому списку — иначе
+    пришлось бы спрашивать про каждого автора отдельно.
+    """
+
+    def get(self, request):
+        states = UserRelationState.objects.filter(user=request.user).filter(
+            Q(ignored=True) | Q(blocked=True))
+        return Response([
+            {"user_id": s.target_id, "ignored": s.ignored, "blocked": s.blocked}
+            for s in states
+        ])
+
+
+class UserRelation(APIView):
+    """GET/PUT /api/users/<id>/relation — игнор и блокировка конкретного
+    человека, личные и односторонние (см. chat.models.UserRelationState).
+
+    Никакого уведомления второй стороне не уходит намеренно: и «игнорирую»,
+    и «заблокировал» — это про СВОЮ ленту и свои уведомления, знать об этом
+    объекту не нужно (тот же принцип, что у приватной заметки — UserNote).
+    """
+
+    def get(self, request, user_id):
+        target = get_object_or_404(User, id=user_id)
+        state = UserRelationState.objects.filter(
+            user=request.user, target=target).first()
+        return Response({
+            "ignored": bool(state and state.ignored),
+            "blocked": bool(state and state.blocked),
+        })
+
+    def put(self, request, user_id):
+        target = get_object_or_404(User, id=user_id)
+        if target.id == request.user.id:
+            return Response(
+                {"detail": "Нельзя заблокировать самого себя."}, status=400)
+        state, _ = UserRelationState.objects.get_or_create(
+            user=request.user, target=target)
+        for field in ("ignored", "blocked"):
+            if field in request.data:
+                setattr(state, field, bool(request.data[field]))
+        state.save(update_fields=["ignored", "blocked", "updated_at"])
+        return Response({"ignored": state.ignored, "blocked": state.blocked})
+
+
 class ConversationMessages(APIView):
     def get(self, request, conversation_id):
         conversation = get_object_or_404(Conversation, id=conversation_id)
@@ -1461,6 +1571,7 @@ class ConversationMessages(APIView):
         qs = conversation.messages.select_related(
             "author", "reply_to__author", "server_invite__server"
         ).prefetch_related("attachments", "reactions")
+        qs = _hide_blocked(request.user, qs)
         messages = _paginate_messages(request, qs)
         return Response(ConversationMessageSerializer(messages, many=True).data)
 
@@ -1557,6 +1668,7 @@ class ChannelMessages(APIView):
         qs = channel.messages.select_related(
             "author", "reply_to__author"
         ).prefetch_related("attachments", "reactions")
+        qs = _hide_blocked(request.user, qs)
         messages = _paginate_messages(request, qs)
         return Response(MessageSerializer(messages, many=True).data)
 

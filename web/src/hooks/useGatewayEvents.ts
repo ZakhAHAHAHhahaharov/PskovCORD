@@ -45,6 +45,9 @@ interface UseGatewayEventsParams {
   dmMessagesRef: MutableRefObject<ConversationMessage[]>
   channelServerIdRef: MutableRefObject<Record<number, number>>
   shouldNotifyRef: MutableRefObject<(ownerServerId: number, authorId: number, content: string) => boolean>
+  /** Кого я игнорирую — их сообщения не поднимают непрочитанное. Ref, а не
+   * значение: см. комментарий про зависимости эффекта ниже. */
+  ignoredUserIdsRef: MutableRefObject<Set<number>>
   fetchedServerDataIds: MutableRefObject<Set<number>>
   setMessages: Dispatch<SetStateAction<Message[]>>
   setMembers: Dispatch<SetStateAction<Member[]>>
@@ -79,7 +82,7 @@ export function useGatewayEvents(params: UseGatewayEventsParams) {
   const {
     gateway, channelId, serverId, activeConversationId,
     userRef, voiceRef, conversationsRef, serversRef, messagesRef, dmMessagesRef,
-    channelServerIdRef, shouldNotifyRef, fetchedServerDataIds,
+    channelServerIdRef, shouldNotifyRef, ignoredUserIdsRef, fetchedServerDataIds,
     setMessages, setMembers, setServers, setServerRoles, setServerMembersCache,
     setUnreadChannelIds, setChannelId, setServerId, setVoice, setDmCallParticipants,
     setActiveMuteVoteChannelId, setMuteVote, setIncomingCall,
@@ -105,6 +108,7 @@ export function useGatewayEvents(params: UseGatewayEventsParams) {
       const ownerServerId = channelServerIdRef.current[d.message.channel]
       if (
         ownerServerId != null &&
+        !ignoredUserIdsRef.current.has(d.message.author.id) &&
         shouldNotifyRef.current(ownerServerId, d.message.author.id, d.message.content)
       ) {
         setUnreadChannelIds((prev) =>
@@ -388,7 +392,13 @@ export function useGatewayEvents(params: UseGatewayEventsParams) {
       // сервер, поэтому одной проверки id диалога недостаточно).
       const isViewingThisConversation =
         serverId == null && d.message.conversation === activeConversationId
-      if (d.message.author.id !== userRef.current?.id && !isViewingThisConversation) {
+      if (
+        d.message.author.id !== userRef.current?.id &&
+        !isViewingThisConversation &&
+        // «Игнорировать» — сообщение приходит и видно, но о нём не
+        // сигналим (см. chat.models.UserRelationState.ignored).
+        !ignoredUserIdsRef.current.has(d.message.author.id)
+      ) {
         setUnreadConversationIds((prev) =>
           prev.has(d.message.conversation) ? prev : new Set(prev).add(d.message.conversation),
         )

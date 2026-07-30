@@ -4262,6 +4262,41 @@ textarea.inline-editable-input {
   width: 100%;
 }
 
+/* ---- контекстное меню диалога/группы (ConversationContextMenu) ---- */
+/* Стрелка-раскрывашка подменю серверов — прижата к правому краю пункта. */
+.conversation-menu-chevron {
+  margin-left: auto;
+  color: var(--text-muted);
+  font-size: calc(11px * var(--font-scale, 1));
+}
+
+/* Список серверов раскрывается ВНУТРИ того же попапа (см. комментарий в
+   ConversationContextMenu) — отступ слева показывает вложенность, а
+   ограничение высоты не даёт меню уехать за экран при десятке серверов. */
+.conversation-menu-submenu {
+  max-height: 180px;
+  overflow-y: auto;
+  padding-left: 12px;
+  margin-left: 8px;
+  border-left: 2px solid var(--channel-hover);
+}
+
+.conversation-menu-check {
+  margin-left: auto;
+  color: var(--blurple);
+}
+
+.profile-popup-item-danger {
+  color: var(--red);
+}
+
+/* Значок закрепления в строке диалога — справа, не мешает нику/превью. */
+.conversation-pin-mark {
+  margin-left: auto;
+  flex: none;
+  color: var(--text-muted);
+}
+
 /* ---- редактор гифки-аватара (GifAvatarModal) ----
    Две круглые превьюшки рядом: слева живая анимация, справа — тот самый
    кадр, который станет обычным аватаром. Рядом, а не по очереди: выбирая

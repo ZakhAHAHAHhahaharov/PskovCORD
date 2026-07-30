@@ -7,7 +7,8 @@ from accounts.serializers import (
 
 from . import presence, roles
 from .models import (
-    Attachment, Channel, Conversation, ConversationMessage, Membership,
+    Attachment, Channel, Conversation, ConversationMessage,
+    ConversationParticipant, Membership,
     Message, Role, Server, ServerBan, ServerInvite, ServerJoinRequest, dm_room,
 )
 
@@ -457,10 +458,27 @@ class ConversationSerializer(serializers.ModelSerializer):
     # каналы серверов — просто под синтетическим room (см. models.dm_room).
     call_started_at = serializers.SerializerMethodField()
 
+    # Личные настройки ЭТОЙ беседы у того, кто её запрашивает (закрепление,
+    # см. ConversationParticipant) — как my_settings у сервера.
+    pinned = serializers.SerializerMethodField()
+
     class Meta:
         model = Conversation
         fields = ["id", "kind", "name", "created_at", "participants",
-                  "last_message", "call_started_at"]
+                  "last_message", "call_started_at", "pinned"]
+
+    def get_pinned(self, obj) -> bool:
+        request = self.context.get("request")
+        if request is None:
+            return False
+        # Карта участий, если вызывающий сложил её в контекст одним запросом
+        # (см. chat.views.conversation_context) — иначе точечный запрос.
+        memberships = self.context.get("my_memberships")
+        if memberships is not None:
+            membership = memberships.get(obj.id)
+            return bool(membership and membership.pinned)
+        return ConversationParticipant.objects.filter(
+            conversation=obj, user=request.user, pinned=True).exists()
 
     def get_participants(self, obj):
         request = self.context.get("request")

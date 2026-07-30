@@ -6,8 +6,8 @@ import {
   KeyboardEvent as ReactKeyboardEvent,
 } from 'react'
 import {
-  Calendar, Check, Copy, Download, UserPlus, UserCheck, Loader2, MessageSquare,
-  NotebookPen, Smile,
+  Calendar, Check, Copy, Download, UserPlus, UserCheck, UserMinus, Loader2,
+  MessageSquare, NotebookPen, Smile,
 } from 'lucide-react'
 import { api, NameEffect } from '../api'
 import { loadAvatarAnimation } from '../avatarAnim'
@@ -58,6 +58,7 @@ export default function MiniProfilePopup({
   onClose,
   onAddFriend,
   onSendMessage,
+  onRemoveFriend,
 }: {
   target: ProfilePopupTarget
   currentUserId: number
@@ -68,11 +69,15 @@ export default function MiniProfilePopup({
   /** Возвращает успех — попап сам показывает отклик на кнопке (см. addStatus). */
   onAddFriend: (userId: number) => Promise<boolean>
   onSendMessage: (userId: number, content: string) => void
+  /** «Удалить из друзей» — тот же обработчик, что и у одноимённого пункта в
+   * контекстном меню диалога (см. ConversationContextMenu). */
+  onRemoveFriend: (userId: number) => Promise<boolean>
 }) {
   const ref = useRef<HTMLDivElement>(null)
   const [composing, setComposing] = useState(false)
   const [message, setMessage] = useState('')
   const [addStatus, setAddStatus] = useState<'idle' | 'sending' | 'sent'>('idle')
+  const [removing, setRemoving] = useState(false)
   const [copied, setCopied] = useState(false)
   const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const { user } = target
@@ -255,9 +260,21 @@ export default function MiniProfilePopup({
       <div className="profile-popup-menu">
         {!isSelf && (
           isFriend ? (
-            <div className="profile-popup-item mini-profile-note">
-              <UserPlus size={15} /> Уже в друзьях
-            </div>
+            <button
+              type="button"
+              className="profile-popup-item mini-profile-action"
+              disabled={removing}
+              onClick={async () => {
+                setRemoving(true)
+                const ok = await onRemoveFriend(user.id)
+                // Успех сам уберёт кнопку (isFriend пересчитается снаружи),
+                // поэтому снимаем блокировку только если не вышло.
+                if (!ok) setRemoving(false)
+              }}
+            >
+              {removing ? <Loader2 size={15} className="spin" /> : <UserMinus size={15} />}
+              {removing ? 'Удаляем…' : 'Удалить из друзей'}
+            </button>
           ) : (
             <button
               type="button"

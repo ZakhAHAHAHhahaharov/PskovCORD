@@ -1,4 +1,5 @@
-import { Me } from '../api'
+import { Me, Server } from '../api'
+import type { useConversationContextMenu } from '../hooks/useConversationContextMenu'
 import type { useConversationsData } from '../hooks/useConversationsData'
 import type { useInviteLinks } from '../hooks/useInviteLinks'
 import type { useParticipantContextMenu } from '../hooks/useParticipantContextMenu'
@@ -19,6 +20,7 @@ import ServerPrivacyModal from './ServerPrivacyModal'
 import ServerInviteModal from './ServerInviteModal'
 import ChannelContextMenu from './ChannelContextMenu'
 import ChannelInviteModal from './ChannelInviteModal'
+import ConversationContextMenu from './ConversationContextMenu'
 import VoiceInviteJoinModal from './VoiceInviteJoinModal'
 
 interface AppShellOverlaysProps {
@@ -36,6 +38,9 @@ interface AppShellOverlaysProps {
   setShowProfile: (v: boolean) => void
   profilePopup: ProfilePopupTarget | null
   setProfilePopup: (v: ProfilePopupTarget | null) => void
+  conversationMenu: ReturnType<typeof useConversationContextMenu>
+  /** Мои серверы — из них выбирается, куда пригласить собеседника. */
+  servers: Server[]
 }
 
 /** Все модалки/попапы/контекстные меню, наложенные поверх основного layout'а
@@ -47,7 +52,16 @@ export default function AppShellOverlays({
   user, isMobile, logout,
   showSettings, closeSettings, showProfile, setShowProfile,
   profilePopup, setProfilePopup,
+  conversationMenu, servers,
 }: AppShellOverlaysProps) {
+  const menuTarget = conversationMenu.menuTarget
+  // Беседу резолвим из живого списка по id, а не берём снимок момента
+  // открытия — иначе, например, «Закрепить» рисовало бы прежнее состояние
+  // (тот же приём, что и у остальных меню здесь).
+  const menuConversation = menuTarget
+    ? conv.conversations.find((c) => c.id === menuTarget.conversation.id) ?? menuTarget.conversation
+    : null
+  const menuPeerId = menuConversation?.participants[0]?.id
   return (
     <>
       {conv.showNewConversation && (
@@ -105,6 +119,41 @@ export default function AppShellOverlays({
           onClose={() => setProfilePopup(null)}
           onAddFriend={conv.handleMiniProfileAddFriend}
           onSendMessage={conv.handleMiniProfileSendMessage}
+          onRemoveFriend={conv.handleRemoveFriend}
+        />
+      )}
+      {menuTarget && menuConversation && (
+        <ConversationContextMenu
+          conversation={menuConversation}
+          x={menuTarget.x}
+          y={menuTarget.y}
+          isFriend={
+            menuPeerId != null && conv.friends.friends.some((f) => f.id === menuPeerId)
+          }
+          servers={servers}
+          onClose={conversationMenu.closeMenu}
+          onMarkRead={() => conversationMenu.handleMarkRead(menuConversation.id)}
+          onTogglePin={() => void conversationMenu.handleTogglePin(menuConversation)}
+          onOpenProfile={() =>
+            conversationMenu.handleOpenPeerProfile(menuConversation, menuTarget.x, menuTarget.y)
+          }
+          onStartCall={() => conversationMenu.handleStartCall(menuConversation.id)}
+          // «Добавить заметку» — та же карточка профиля: поле заметки живёт
+          // прямо в ней (см. MiniProfilePopup), отдельной модалки для одного
+          // текстового поля заводить незачем.
+          onAddNote={() =>
+            conversationMenu.handleOpenPeerProfile(menuConversation, menuTarget.x, menuTarget.y)
+          }
+          onCloseConversation={() =>
+            void conversationMenu.handleCloseConversation(menuConversation)
+          }
+          onInviteToServer={(serverId) =>
+            void conversationMenu.handleInviteToServer(menuConversation, serverId)
+          }
+          onRemoveFriend={() => void conversationMenu.handleRemoveFriend(menuConversation)}
+          onRelationChange={(relation) =>
+            conversationMenu.handleRelationChange(menuConversation, relation)
+          }
         />
       )}
       {participant.contextMenuTarget && (

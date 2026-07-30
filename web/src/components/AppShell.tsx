@@ -8,6 +8,8 @@ import { useMobileNav } from '../hooks/useMobileNav'
 import { useNameFonts } from '../hooks/useNameFonts'
 import { useParticipantContextMenu } from '../hooks/useParticipantContextMenu'
 import { useServerData } from '../hooks/useServerData'
+import { useUserRelations } from '../hooks/useUserRelations'
+import { useConversationContextMenu } from '../hooks/useConversationContextMenu'
 import { useVoiceCall } from '../hooks/useVoiceCall'
 import { ChatMessageBase } from '../api'
 import { useAuth } from '../auth'
@@ -138,6 +140,32 @@ export default function AppShell() {
   )
   const { mentionPrefill } = participantContextMenu
 
+  // Игнор и блокировка (см. useUserRelations): множества нужны и ленте
+  // (скрыть сообщения заблокированных, пришедшие живьём по WS), и
+  // уведомлениям (молчать про игнорируемых).
+  const relations = useUserRelations()
+  const { blockedUserIds, setBlockedUserIds, ignoredUserIds, setIgnoredUserIds } = relations
+  // Через ref — большой gateway-эффект намеренно не держит быстро меняющиеся
+  // значения в зависимостях (см. комментарий там же).
+  const ignoredUserIdsRef = useRef(ignoredUserIds)
+  ignoredUserIdsRef.current = ignoredUserIds
+
+  const conversationMenu = useConversationContextMenu({
+    conversations,
+    setConversations,
+    setUnreadConversationIds,
+    setActiveConversationId,
+    activeConversationId,
+    onStartCall: (conversationId) => voiceCall.handleDmVoiceJoin(conversationId),
+    onOpenProfile: (conversation, x, y) => {
+      const peer = conversation.participants[0]
+      if (peer) setProfilePopup({ user: peer, x, y })
+    },
+    setBlockedUserIds,
+    setIgnoredUserIds,
+    setFriends,
+  })
+
   const channelMessages = useChannelMessages(currentChannel, channelId, gateway, pendingEditsRef)
   const { setMessages, messagesRef } = channelMessages
 
@@ -177,7 +205,7 @@ export default function AppShell() {
   useGatewayEvents({
     gateway, channelId, serverId, activeConversationId,
     userRef, voiceRef, conversationsRef, serversRef, messagesRef, dmMessagesRef,
-    channelServerIdRef, shouldNotifyRef, fetchedServerDataIds,
+    channelServerIdRef, shouldNotifyRef, ignoredUserIdsRef, fetchedServerDataIds,
     setMessages, setMembers, setServers, setServerRoles, setServerMembersCache,
     setUnreadChannelIds, setChannelId, setServerId, setVoice, setDmCallParticipants,
     setActiveMuteVoteChannelId, setMuteVote, setIncomingCall,
@@ -234,6 +262,7 @@ export default function AppShell() {
         openMobileSettings={openMobileSettings}
         openProfilePopup={openProfilePopup}
         onOpenProfile={() => setShowProfile(true)}
+        onConversationContextMenu={conversationMenu.openConversationContextMenu}
       />
 
       <AppShellChat
@@ -257,6 +286,7 @@ export default function AppShell() {
         openProfilePopup={openProfilePopup}
         handleToggleDmReaction={handleToggleDmReaction}
         mentionPrefill={mentionPrefill}
+        blockedUserIds={blockedUserIds}
       />
 
       <AppShellOverlays
@@ -274,6 +304,8 @@ export default function AppShell() {
         setShowProfile={setShowProfile}
         profilePopup={profilePopup}
         setProfilePopup={setProfilePopup}
+        conversationMenu={conversationMenu}
+        servers={servers}
       />
     </div>
     </VoiceProvider>

@@ -1,6 +1,7 @@
 import { useState, MouseEvent as ReactMouseEvent } from 'react'
-import { MessageCircle, Users, UserPlus, Check, X } from 'lucide-react'
+import { MessageCircle, Pin, Users, UserPlus, Check, X } from 'lucide-react'
 import { Conversation, FriendsState, User } from '../api'
+
 import Avatar from './Avatar'
 import SidebarBottomBar from './SidebarBottomBar'
 import { VoiceState } from './AppShell'
@@ -46,6 +47,7 @@ export default function HomeSidebar({
   onOpenSettings,
   onOpenProfile,
   onOpenUserProfile,
+  onConversationContextMenu,
 }: {
   conversations: Conversation[]
   activeConversationId: number | null
@@ -69,9 +71,19 @@ export default function HomeSidebar({
   /** Клик по строке друга/заявки — мини-профиль у курсора, как в списке
    * участников сервера (см. MembersList). */
   onOpenUserProfile: (user: ProfilePopupUser, e: ReactMouseEvent) => void
+  /** Правый клик по диалогу/группе — меню действий (см.
+   * ConversationContextMenu); живёт на уровне AppShell, как и мини-профиль. */
+  onConversationContextMenu: (c: Conversation, e: ReactMouseEvent) => void
 }) {
   const [tab, setTab] = useState<'conversations' | 'friends'>('conversations')
   const [addUsername, setAddUsername] = useState('')
+
+  // Закреплённые — всегда вверху, внутри каждой группы порядок остаётся тем,
+  // что пришёл с сервера (по времени создания). Сортируем копию: пропсы
+  // мутировать нельзя, а .sort() работает на месте.
+  const sortedConversations = [...conversations].sort(
+    (a, b) => Number(b.pinned) - Number(a.pinned),
+  )
 
   const submitFriendRequest = () => {
     const trimmed = addUsername.trim()
@@ -114,7 +126,7 @@ export default function HomeSidebar({
           {conversations.length === 0 && (
             <div className="home-empty">Пока нет диалогов — начни новый выше.</div>
           )}
-          {conversations.map((c) => {
+          {sortedConversations.map((c) => {
             const av = conversationAvatar(c)
             return (
               <button
@@ -122,6 +134,10 @@ export default function HomeSidebar({
                 type="button"
                 className={`member-row ${activeConversationId === c.id ? 'active' : ''}`}
                 onClick={() => onSelectConversation(c)}
+                onContextMenu={(e) => {
+                  e.preventDefault()
+                  onConversationContextMenu(c, e)
+                }}
               >
                 <Avatar name={av.name} color={av.color} image={av.image} size={32} />
                 <div className="member-info">
@@ -130,6 +146,7 @@ export default function HomeSidebar({
                     <span className="member-voice">{c.last_message.content.slice(0, 42)}</span>
                   )}
                 </div>
+                {c.pinned && <Pin size={12} className="conversation-pin-mark" />}
               </button>
             )
           })}

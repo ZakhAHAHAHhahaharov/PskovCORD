@@ -488,12 +488,61 @@ class ConversationParticipant(models.Model):
         settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
         related_name="conversation_memberships")
     joined_at = models.DateTimeField(auto_now_add=True)
+    # Закреплён вверху списка «Диалоги» — личное предпочтение, поэтому лежит
+    # на участии, а не на самой беседе: закрепивший видит её первой, у
+    # собеседника порядок свой.
+    pinned = models.BooleanField(default=False)
+    # «Закрыть ЛС» — беседа пропадает из списка, но НЕ удаляется: история
+    # цела, участие тоже (в отличие от выхода из группы, см.
+    # chat.views.ConversationDetail.delete). Возвращается сама, когда придёт
+    # новое сообщение (см. chat.consumers._reopen_for_recipients) — ровно как
+    # в Discord: закрыл переписку, человек написал — она снова на месте.
+    closed = models.BooleanField(default=False)
 
     class Meta:
         unique_together = ("conversation", "user")
 
     def __str__(self) -> str:
         return f"{self.user} in {self.conversation}"
+
+
+class UserRelationState(models.Model):
+    """Личное отношение ОДНОГО пользователя к другому: игнор и блокировка.
+
+    Одна строка на упорядоченную пару (user → target), оба флага в ней же:
+    смыслы разные, но живут вместе, потому что спрашивают их всегда вместе
+    (один запрос на отрисовку меню, один — на фильтрацию ленты).
+
+    ignored — «не беспокоить»: сообщения видны как обычно, но уведомления и
+      звук по ним не поднимаются (см. фронт useGatewayEvents).
+    blocked — сообщения target'а скрываются из серверных чатов и лички у
+      того, кто заблокировал (см. chat.views._visible_messages), и target
+      больше не может начать с ним личку (см. chat.permissions.can_dm).
+      Односторонне и невзаимно: заблокированный об этом не уведомляется и
+      продолжает видеть чужие сообщения у себя — как в Discord.
+
+    Только для «мягких» личных настроек. Бан на сервере — совсем другое
+    (ServerBan): тот действует на всех и выкидывает с сервера.
+    """
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+        related_name="relation_states")
+    target = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+        related_name="relation_states_about")
+    ignored = models.BooleanField(default=False)
+    blocked = models.BooleanField(default=False)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ("user", "target")
+
+    def __str__(self) -> str:
+        flags = ", ".join(
+            [f for f, on in (("ignored", self.ignored), ("blocked", self.blocked)) if on]
+        ) or "none"
+        return f"{self.user_id} → {self.target_id}: {flags}"
 
 
 class ConversationMessage(models.Model):

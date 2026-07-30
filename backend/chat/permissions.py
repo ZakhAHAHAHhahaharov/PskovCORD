@@ -14,6 +14,28 @@ def are_friends(a, b) -> bool:
     ).exists()
 
 
+def blocked_user_ids(user) -> set:
+    """Кого ЭТОТ пользователь заблокировал (см. chat.models.UserRelationState).
+
+    Возвращает множество id — вызывающие фильтруют им ленту сообщений одним
+    проходом, без запроса на каждого автора.
+    """
+    from .models import UserRelationState
+
+    return set(
+        UserRelationState.objects.filter(user=user, blocked=True).values_list(
+            "target_id", flat=True)
+    )
+
+
+def has_blocked(user, target) -> bool:
+    """Заблокировал ли user именно target'а."""
+    from .models import UserRelationState
+
+    return UserRelationState.objects.filter(
+        user=user, target=target, blocked=True).exists()
+
+
 def can_dm(sender, recipient) -> bool:
     """Может ли sender НАЧАТЬ личку с recipient — смотрит на dm_privacy
     получателя. Не действует на уже существующие диалоги (см.
@@ -25,8 +47,14 @@ def can_dm(sender, recipient) -> bool:
     личную настройку «Личные сообщения» (Membership.allow_dms_from_server,
     см. chat.models) — так участник сервера может написать даже не будучи
     другом, если получатель сам это разрешил именно для этого сервера.
+
+    Блокировка сильнее всех разрешений разом: заблокировавший не получит
+    новую личку от заблокированного, даже если они друзья и стоит
+    dm_privacy=EVERYONE.
     """
     if sender.id == recipient.id:
+        return False
+    if has_blocked(recipient, sender):
         return False
     if recipient.dm_privacy == recipient.DM_NOBODY:
         return False

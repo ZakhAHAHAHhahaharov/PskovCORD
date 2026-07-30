@@ -456,6 +456,18 @@ export interface Conversation {
   participants: User[]
   last_message: ConversationLastMessage | null
   call_started_at: number | null
+  /** Закреплена вверху списка «Диалоги» — личное, у собеседника своё
+   * (см. backend chat.models.ConversationParticipant.pinned). */
+  pinned: boolean
+}
+
+/** Личное отношение к другому пользователю — игнор и блокировка, обе
+ * односторонние и невзаимные (см. backend chat.models.UserRelationState). */
+export interface UserRelation {
+  /** Не поднимать уведомления от него (сообщения при этом видны). */
+  ignored: boolean
+  /** Скрыть его сообщения и запретить ему начинать со мной личку. */
+  blocked: boolean
 }
 
 export interface ConversationMessage extends ChatMessageBase {
@@ -1124,6 +1136,32 @@ export const api = {
    *  в которую тебя добавили, деться было некуда. */
   leaveConversation: (conversationId: number) =>
     req(`/api/conversations/${conversationId}`, { method: 'DELETE' }),
+  /** Личные настройки беседы: закрепить вверху и/или «закрыть» (убрать из
+   * списка, не удаляя ни историю, ни участие — вернётся сама при новом
+   * сообщении, см. backend ConversationSettings). */
+  updateConversationSettings: (
+    conversationId: number,
+    data: { pinned?: boolean; closed?: boolean },
+  ): Promise<{ pinned: boolean; closed: boolean }> =>
+    req(`/api/conversations/${conversationId}/settings`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    }),
+  /** Все, кого я игнорирую/заблокировал — грузится один раз на старте, чтобы
+   * отсеивать живые сообщения из WebSocket (REST-ленты сервер фильтрует сам). */
+  myRelations: (): Promise<
+    { user_id: number; ignored: boolean; blocked: boolean }[]
+  > => req('/api/relations'),
+  getUserRelation: (userId: number): Promise<UserRelation> =>
+    req(`/api/users/${userId}/relation`),
+  setUserRelation: (
+    userId: number,
+    data: { ignored?: boolean; blocked?: boolean },
+  ): Promise<UserRelation> =>
+    req(`/api/users/${userId}/relation`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }),
   conversationVoiceCredentials: (
     conversationId: number,
   ): Promise<{ sfu_url: string; sfu_token: string; ttl: number }> =>

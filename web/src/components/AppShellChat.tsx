@@ -37,6 +37,10 @@ interface AppShellChatProps {
   openProfilePopup: (user: ProfilePopupUser, e: ReactMouseEvent) => void
   handleToggleDmReaction: (messageId: number, emoji: string, mine: boolean) => void
   mentionPrefill: MessageInputPrefill | null
+  /** Кого я заблокировал — их сообщения в ленту не попадают. REST-историю
+   * фильтрует сервер (см. backend _hide_blocked), здесь отсеиваются те, что
+   * пришли живьём по WebSocket. */
+  blockedUserIds: Set<number>
 }
 
 /** Основная рабочая область — <main> (домашний DM-чат / VoiceStage
@@ -47,9 +51,11 @@ export default function AppShellChat({
   user, isMobile, goBackMobile, activeConversation, canDeleteMessages,
   pendingChannelMessages, pendingDmMessages, loadDraft, saveDraft,
   showMembersList, setShowMembersList, openProfilePopup, handleToggleDmReaction,
-  mentionPrefill,
+  mentionPrefill, blockedUserIds,
 }: AppShellChatProps) {
   const { currentServer, channels, currentChannel, serverId, members, rolesForServer } = server
+  const visible = <T extends { author: { id: number } }>(list: T[]) =>
+    blockedUserIds.size === 0 ? list : list.filter((m) => !blockedUserIds.has(m.author.id))
 
   return (
     <>
@@ -112,7 +118,7 @@ export default function AppShellChat({
                 // Неотправленные дописываются в конец ленты: у них ещё нет id
                 // на сервере, но человек должен видеть, что он написал.
                 messages={[
-                  ...conv.dmMessages,
+                  ...visible(conv.dmMessages),
                   ...pendingDmMessages.map((p) => pendingAsMessage(p, user)),
                 ]}
                 currentUserId={user.id}
@@ -197,7 +203,7 @@ export default function AppShellChat({
             </header>
             <MessageList
               messages={[
-                ...channelMessages.messages,
+                ...visible(channelMessages.messages),
                 ...pendingChannelMessages.map((p) => pendingAsMessage(p, user)),
               ]}
               currentUserId={user.id}

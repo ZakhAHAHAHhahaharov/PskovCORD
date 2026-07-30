@@ -217,6 +217,19 @@ export function useConversationsData(
     }
   }
 
+  /** «Удалить из друзей» — и из карточки профиля, и из контекстного меню
+   * диалога (см. ConversationContextMenu): ручка одна, точек входа две. */
+  const handleRemoveFriend = async (userId: number): Promise<boolean> => {
+    try {
+      await api.removeFriend(userId)
+      setFriends(await api.friends())
+      return true
+    } catch (e) {
+      alert((e as Error).message)
+      return false
+    }
+  }
+
   const handleMiniProfileSendMessage = async (userId: number, content: string) => {
     try {
       const conv = await api.createConversation({ kind: 'dm', user_ids: [userId] })
@@ -249,6 +262,6 @@ export function useConversationsData(
     handleSendDm, handleDeleteDmMessage,
     handleDmReplyRequest, handleDmEditRequest, handleSaveDmEdit,
     handleSendFriendRequest, handleAcceptFriendRequest, handleDeclineFriendRequest,
-    handleMiniProfileAddFriend, handleMiniProfileSendMessage,
+    handleMiniProfileAddFriend, handleMiniProfileSendMessage, handleRemoveFriend,
   }
 }

@@ -1879,6 +1879,123 @@ class PublicProfileSerializerTests(APITestCase):
         self.assertIn("date_joined", resp.data)
 
 
+class ConversationSettingsTests(APITestCase):
+    """Закрепление и «закрытие» диалога — личные настройки участия
+    (см. chat.models.ConversationParticipant)."""
+
+    def setUp(self):
+        self.me = User.objects.create_user(username="conv_me", password="pw12345")
+        self.peer = User.objects.create_user(username="conv_peer", password="pw12345")
+        self.conversation = Conversation.objects.create(kind=Conversation.DM)
+        for u in (self.me, self.peer):
+            ConversationParticipant.objects.create(conversation=self.conversation, user=u)
+        self.client.force_authenticate(self.me)
+
+    def test_pin_roundtrip_and_visible_in_list(self):
+        resp = self.client.patch(
+            f"/api/conversations/{self.conversation.id}/settings",
+            {"pinned": True}, format="json")
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(resp.data["pinned"])
+        listing = self.client.get("/api/conversations")
+        self.assertTrue(listing.data[0]["pinned"])
+
+    def test_pin_is_personal(self):
+        self.client.patch(
+            f"/api/conversations/{self.conversation.id}/settings",
+            {"pinned": True}, format="json")
+        self.client.force_authenticate(self.peer)
+        listing = self.client.get("/api/conversations")
+        self.assertFalse(listing.data[0]["pinned"])
+
+    def test_closed_hides_from_list_but_keeps_membership(self):
+        self.client.patch(
+            f"/api/conversations/{self.conversation.id}/settings",
+            {"closed": True}, format="json")
+        self.assertEqual(self.client.get("/api/conversations").data, [])
+        # Участие и история на месте — «закрыть» это не «выйти».
+        self.assertTrue(ConversationParticipant.objects.filter(
+            conversation=self.conversation, user=self.me).exists())
+        # Сообщения по-прежнему доступны, если открыть диалог напрямую.
+        self.assertEqual(
+            self.client.get(f"/api/conversations/{self.conversation.id}/messages").status_code,
+            200)
+
+    def test_non_participant_cannot_change_settings(self):
+        stranger = User.objects.create_user(username="conv_stranger", password="pw12345")
+        self.client.force_authenticate(stranger)
+        resp = self.client.patch(
+            f"/api/conversations/{self.conversation.id}/settings",
+            {"pinned": True}, format="json")
+        self.assertEqual(resp.status_code, 403)
+
+
+class UserRelationTests(APITestCase):
+    """Игнор и блокировка — личные, односторонние (см. UserRelationState)."""
+
+    def setUp(self):
+        self.me = User.objects.create_user(username="rel_me", password="pw12345")
+        self.peer = User.objects.create_user(username="rel_peer", password="pw12345")
+        self.client.force_authenticate(self.me)
+
+    def test_defaults_are_off(self):
+        resp = self.client.get(f"/api/users/{self.peer.id}/relation")
+        self.assertEqual(resp.status_code, 200)
+        self.assertFalse(resp.data["ignored"])
+        self.assertFalse(resp.data["blocked"])
+
+    def test_set_and_list(self):
+        self.client.put(
+            f"/api/users/{self.peer.id}/relation", {"blocked": True}, format="json")
+        self.assertTrue(
+            self.client.get(f"/api/users/{self.peer.id}/relation").data["blocked"])
+        listing = self.client.get("/api/relations")
+        self.assertEqual(len(listing.data), 1)
+        self.assertEqual(listing.data[0]["user_id"], self.peer.id)
+
+    def test_cannot_block_self(self):
+        resp = self.client.put(
+            f"/api/users/{self.me.id}/relation", {"blocked": True}, format="json")
+        self.assertEqual(resp.status_code, 400)
+
+    def test_relation_is_one_sided(self):
+        self.client.put(
+            f"/api/users/{self.peer.id}/relation", {"blocked": True}, format="json")
+        self.client.force_authenticate(self.peer)
+        # Заблокированный ничего об этом не знает: у него своё отношение пустое.
+        self.assertFalse(
+            self.client.get(f"/api/users/{self.me.id}/relation").data["blocked"])
+        self.assertEqual(self.client.get("/api/relations").data, [])
+
+    def test_blocked_author_messages_hidden_in_channel(self):
+        server = Server.objects.create(name="s", owner=self.me)
+        Membership.objects.create(user=self.me, server=server)
+        Membership.objects.create(user=self.peer, server=server)
+        channel = Channel.objects.create(server=server, name="general", kind=Channel.TEXT)
+        Message.objects.create(channel=channel, author=self.peer, content="от заблокированного")
+        Message.objects.create(channel=channel, author=self.me, content="моё")
+
+        before = self.client.get(f"/api/channels/{channel.id}/messages")
+        self.assertEqual(len(before.data), 2)
+
+        self.client.put(
+            f"/api/users/{self.peer.id}/relation", {"blocked": True}, format="json")
+        after = self.client.get(f"/api/channels/{channel.id}/messages")
+        self.assertEqual([m["content"] for m in after.data], ["моё"])
+
+    def test_blocked_user_cannot_start_dm(self):
+        # Блокировка сильнее «пишут все».
+        self.me.dm_privacy = self.me.DM_EVERYONE
+        self.me.save(update_fields=["dm_privacy"])
+        self.client.put(
+            f"/api/users/{self.peer.id}/relation", {"blocked": True}, format="json")
+        self.client.force_authenticate(self.peer)
+        resp = self.client.post(
+            "/api/conversations",
+            {"kind": "dm", "user_ids": [self.me.id]}, format="json")
+        self.assertEqual(resp.status_code, 403)
+
+
 class AvatarAnimationTests(APITestCase):
     """Гифка анимированного аватара — отдельной ручкой, по требованию (в
     самом профиле только флаг avatar_animated, см. accounts.serializers)."""
