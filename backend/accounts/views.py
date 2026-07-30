@@ -55,6 +55,7 @@ def _broadcast_profile_update(user):
         "name_effect": user.name_effect,
         "name_color_1": user.name_color_1,
         "name_color_2": user.name_color_2,
+        "name_anim_speed": user.name_anim_speed,
     }
     channel_layer = get_channel_layer()
     for server_id in server_ids:

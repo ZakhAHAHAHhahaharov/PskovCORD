@@ -19,19 +19,31 @@ export interface NameEffectMeta {
   /** Сколько цветов реально использует эффект — 1 или 2 (см. DisplayNameStyleModal:
    * ровно столько color-инпутов показывается). */
   colorCount: 1 | 2
+  /** Крутится ли у эффекта CSS-анимация (см. .name-style.effect-neon/
+   * .effect-cartoon в index.css) — только у них есть смысл показывать
+   * слайдер скорости в DisplayNameStyleModal и выставлять --name-anim-speed
+   * в styledNameProps ниже. */
+  hasAnimation?: boolean
 }
 
 export const NAME_EFFECTS: NameEffectMeta[] = [
   { id: 'standard', label: 'Минимализм', colorCount: 1 },
   { id: 'gradient', label: 'Градиент', colorCount: 2 },
-  { id: 'neon', label: 'Неон', colorCount: 1 },
-  { id: 'cartoon', label: 'Мультфильм', colorCount: 1 },
+  { id: 'neon', label: 'Неон', colorCount: 1, hasAnimation: true },
+  { id: 'cartoon', label: 'Мультфильм', colorCount: 1, hasAnimation: true },
   { id: 'highlight', label: 'Выделение', colorCount: 2 },
 ]
 
 export function nameEffectMeta(effect: NameEffect): NameEffectMeta {
   return NAME_EFFECTS.find((e) => e.id === effect) ?? NAME_EFFECTS[0]
 }
+
+/** Диапазон слайдера скорости анимации (DisplayNameStyleModal) — синхронизирован
+ * с backend accounts.serializers.ProfileUpdateSerializer.NAME_ANIM_SPEED_MIN/MAX,
+ * значение зажимается ещё и там на случай ручного PATCH мимо слайдера. */
+export const NAME_ANIM_SPEED_MIN = 0.5
+export const NAME_ANIM_SPEED_MAX = 2.5
+export const NAME_ANIM_SPEED_DEFAULT = 1
 
 /** Часть User, которой достаточно для расчёта стиля — так функцию можно
  * скормить и обычному User/Member, и локальному черновику в
@@ -41,6 +53,7 @@ export interface NameStyleSource {
   name_effect: NameEffect
   name_color_1: string
   name_color_2: string
+  name_anim_speed: number
 }
 
 /** CSS font-family для NameFont с данным id — см. accounts.models.NameFont.family_name,
@@ -51,7 +64,12 @@ export function fontFamilyFor(nameFontId: number | null): string | undefined {
 
 /** Контрастная обводка (мультфильм-эффект) — чёрная на светлом цвете текста,
  * белая на тёмном. Простая эвристика по относительной яркости, без точной
- * цветовой модели — тут важно "видно ли обводку", а не колориметрия. */
+ * цветовой модели — тут важно "видно ли обводку", а не колориметрия.
+ *
+ * Белая ветка — полупрозрачная (0.6), а не чистый #fff: сплошная белая
+ * обводка на тонких засечках мелкого шрифта (12–19px) светилась заметно
+ * ярче самой заливки и "съедала" буквы. Чёрная ветка непрозрачная — тёмный
+ * контур и так визуально мягче, той же проблемы не было. */
 function pickContrastOutline(hex: string): string {
   const clean = hex.replace('#', '')
   if (clean.length !== 6) return '#000000'
@@ -59,7 +77,7 @@ function pickContrastOutline(hex: string): string {
   const g = parseInt(clean.slice(2, 4), 16)
   const b = parseInt(clean.slice(4, 6), 16)
   const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255
-  return luminance > 0.6 ? '#000000' : '#ffffff'
+  return luminance > 0.6 ? '#000000' : 'rgba(255, 255, 255, 0.6)'
 }
 
 /** Класс + inline-стиль для узла с ником — className вешает
@@ -91,6 +109,14 @@ export function styledNameProps(user: NameStyleSource): {
   }
   if (meta.id === 'cartoon' && user.name_color_1) {
     style['--name-outline-color'] = pickContrastOutline(user.name_color_1)
+  }
+  // Не 1 по умолчанию через CSS-фолбэк (var(--name-anim-speed, 1)) — тут
+  // выставляем явно ТОЛЬКО у анимированных эффектов, чтобы у остальных
+  // (gradient/highlight) переменная в style вообще не появлялась: она бы
+  // всё равно ни на что не влияла (их keyframes её не используют), но
+  // добавляла бы кастомное CSS-свойство в атрибут style без нужды.
+  if (meta.hasAnimation) {
+    style['--name-anim-speed'] = String(user.name_anim_speed || NAME_ANIM_SPEED_DEFAULT)
   }
   return { className, style }
 }

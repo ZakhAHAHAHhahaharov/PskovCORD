@@ -1,10 +1,11 @@
 import { useState } from 'react'
-import { Loader2 } from 'lucide-react'
+import { Loader2, Zap } from 'lucide-react'
 import { Me, NameEffect } from '../api'
 import { useEscToClose } from '../modalStack'
 import { useUnsavedChangesGuard } from '../hooks/useUnsavedChangesGuard'
 import { useNameFonts } from '../hooks/useNameFonts'
 import {
+  NAME_ANIM_SPEED_DEFAULT, NAME_ANIM_SPEED_MAX, NAME_ANIM_SPEED_MIN,
   NAME_EFFECTS, fontFamilyFor, nameEffectMeta, nameInitialPair, styledNameProps,
 } from '../nameStyle'
 import Avatar from './Avatar'
@@ -38,6 +39,7 @@ export default function DisplayNameStyleModal({
     name_effect: NameEffect
     name_color_1: string
     name_color_2: string
+    name_anim_speed: number
   }) => Promise<void>
   onClose: () => void
 }) {
@@ -46,11 +48,15 @@ export default function DisplayNameStyleModal({
   const [nameEffect, setNameEffect] = useState(user.name_effect)
   const [color1, setColor1] = useState(user.name_color_1)
   const [color2, setColor2] = useState(user.name_color_2)
+  const [animSpeed, setAnimSpeed] = useState(user.name_anim_speed || NAME_ANIM_SPEED_DEFAULT)
   const [previewTheme, setPreviewTheme] = useState<'dark' | 'light'>('dark')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
 
-  const draft = { name_font: nameFont, name_effect: nameEffect, name_color_1: color1, name_color_2: color2 }
+  const draft = {
+    name_font: nameFont, name_effect: nameEffect, name_color_1: color1, name_color_2: color2,
+    name_anim_speed: animSpeed,
+  }
   const effectMeta = nameEffectMeta(nameEffect)
   const draftNameProps = styledNameProps(draft)
 
@@ -58,7 +64,8 @@ export default function DisplayNameStyleModal({
     nameFont !== user.name_font ||
     nameEffect !== user.name_effect ||
     color1 !== user.name_color_1 ||
-    color2 !== user.name_color_2
+    color2 !== user.name_color_2 ||
+    !!(effectMeta.hasAnimation && animSpeed !== (user.name_anim_speed || NAME_ANIM_SPEED_DEFAULT))
 
   const handleSave = async () => {
     setSaving(true)
@@ -79,6 +86,7 @@ export default function DisplayNameStyleModal({
     setNameEffect(user.name_effect)
     setColor1(user.name_color_1)
     setColor2(user.name_color_2)
+    setAnimSpeed(user.name_anim_speed || NAME_ANIM_SPEED_DEFAULT)
     onClose()
   }
 
@@ -175,6 +183,30 @@ export default function DisplayNameStyleModal({
                 </button>
               )}
             </div>
+
+            {/* Только у анимированных эффектов (neon/cartoon, см.
+                NAME_EFFECTS.hasAnimation) — у остальных слайдер нечем
+                иллюстрировать в превью справа, он бы просто ничего не делал. */}
+            {effectMeta.hasAnimation && (
+              <div className="settings-field">
+                <div className="settings-field-header">
+                  <span className="settings-field-label">
+                    <Zap size={14} /> Скорость анимации
+                  </span>
+                  <span className="settings-field-value">{animSpeed.toFixed(1)}×</span>
+                </div>
+                <div className="settings-field-row">
+                  <input
+                    type="range"
+                    min={NAME_ANIM_SPEED_MIN}
+                    max={NAME_ANIM_SPEED_MAX}
+                    step={0.1}
+                    value={animSpeed}
+                    onChange={(e) => setAnimSpeed(Number(e.target.value))}
+                  />
+                </div>
+              </div>
+            )}
 
             {error && <div className="login-error">{error}</div>}
 

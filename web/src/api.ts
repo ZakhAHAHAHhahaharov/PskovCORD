@@ -32,6 +32,11 @@ export interface User {
    * текста темы, без переопределения. */
   name_color_1: string
   name_color_2: string
+  /** Множитель скорости CSS-анимации для эффектов, у которых она есть
+   * (neon/cartoon) — 1 обычная, диапазон 0.5..2.5 (см. DisplayNameStyleModal
+   * и accounts.serializers.ProfileUpdateSerializer.validate_name_anim_speed).
+   * Для остальных эффектов ни на что не влияет. */
+  name_anim_speed: number
 }
 
 /** См. accounts.models.User.NAME_EFFECT_CHOICES. */
@@ -386,6 +391,7 @@ export interface MentionCandidate {
   name_effect: NameEffect
   name_color_1: string
   name_color_2: string
+  name_anim_speed: number
 }
 
 export interface DiscoverServer {
@@ -696,6 +702,7 @@ export const api = {
     name_effect?: NameEffect
     name_color_1?: string
     name_color_2?: string
+    name_anim_speed?: number
   }): Promise<Me> => req('/api/auth/me', { method: 'PATCH', body: JSON.stringify(data) }),
   profileCard: (userId: number): Promise<ProfileCard> =>
     req(`/api/users/${userId}/profile-card`),
