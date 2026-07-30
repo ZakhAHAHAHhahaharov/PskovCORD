@@ -1,10 +1,12 @@
 import { useRef, useState, ChangeEvent } from 'react'
 import { Loader2, Trash2 } from 'lucide-react'
 import { useEscToClose } from '../modalStack'
+import { useUnsavedChangesGuard } from '../hooks/useUnsavedChangesGuard'
 import {
   BANNER_MAX_BYTES, BANNER_MAX_H, BANNER_MAX_W, GRADIENT_PRESETS,
   buildGradient, fileToBannerDataUrl, parseGradient,
 } from '../images'
+import UnsavedChangesNudge from './UnsavedChangesNudge'
 
 /**
  * Редактор фона карточки профиля (градиент/гифка) — раньше жил инлайн в
@@ -31,13 +33,30 @@ export default function BannerEditorModal({
   const bannerFileRef = useRef<HTMLInputElement>(null)
 
   const initialGradient = parseGradient(currentGradient)
-  const [mode, setMode] = useState<'gradient' | 'gif'>(currentImage ? 'gif' : 'gradient')
+  const initialMode: 'gradient' | 'gif' = currentImage ? 'gif' : 'gradient'
+  const [mode, setMode] = useState<'gradient' | 'gif'>(initialMode)
   const [gradientFrom, setGradientFrom] = useState(initialGradient.from)
   const [gradientTo, setGradientTo] = useState(initialGradient.to)
   const [gradientAngle, setGradientAngle] = useState(initialGradient.angle)
   const [image, setImage] = useState(currentImage)
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
+
+  const isDirty =
+    mode !== initialMode ||
+    gradientFrom !== initialGradient.from ||
+    gradientTo !== initialGradient.to ||
+    gradientAngle !== initialGradient.angle ||
+    image !== currentImage
+  const { modalRef, showNudge, handleOverlayClick } = useUnsavedChangesGuard(isDirty, onClose)
+  const handleDiscard = () => {
+    setMode(initialMode)
+    setGradientFrom(initialGradient.from)
+    setGradientTo(initialGradient.to)
+    setGradientAngle(initialGradient.angle)
+    setImage(currentImage)
+    onClose()
+  }
 
   const currentGradientCss = buildGradient(gradientAngle, gradientFrom, gradientTo)
 
@@ -69,8 +88,9 @@ export default function BannerEditorModal({
   }
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
+    <div className="modal-overlay" onClick={handleOverlayClick}>
+      <div className="unsaved-guard-stack">
+      <div className="modal" ref={modalRef} onClick={(e) => e.stopPropagation()}>
         <h2 className="modal-title">Фон карточки профиля</h2>
 
         <div
@@ -184,6 +204,11 @@ export default function BannerEditorModal({
         <button className="modal-close" onClick={onClose}>
           Отмена
         </button>
+      </div>
+
+      {showNudge && (
+        <UnsavedChangesNudge onSave={handleDone} onDiscard={handleDiscard} saving={saving} />
+      )}
       </div>
     </div>
   )

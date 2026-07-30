@@ -1209,6 +1209,7 @@ class UserProfileCard(APIView):
             "id": target.id,
             "banner_gradient": target.banner_gradient,
             "banner_image": target.banner_image,
+            "banner_color": target.banner_color,
             "bio": target.bio,
             "pronouns": target.pronouns,
             "custom_status": target.custom_status,

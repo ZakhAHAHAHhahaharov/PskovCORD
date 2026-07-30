@@ -16,8 +16,16 @@ import {
   Loader2,
   QrCode,
   MessageCircle,
+  ZoomIn,
+  Type,
 } from 'lucide-react'
-import { useSettings, DEFAULT_SETTINGS, ThemeChoice } from '../settings'
+import {
+  useSettings,
+  DEFAULT_SETTINGS,
+  ThemeChoice,
+  UI_SCALE_STEPS,
+  FONT_SIZE_STEPS,
+} from '../settings'
 import { useAuth } from '../auth'
 import { useEscToClose } from '../modalStack'
 import { describeUserAgent, isMobileDevice } from '../deviceInfo'
@@ -62,7 +70,11 @@ const CATEGORIES: Category[] = [
     id: 'appearance',
     label: 'Внешний вид',
     icon: <Palette size={16} />,
-    subcategories: [{ id: 'appearance-theme', label: 'Тема оформления' }],
+    subcategories: [
+      { id: 'appearance-theme', label: 'Тема оформления' },
+      { id: 'appearance-scale', label: 'Масштаб интерфейса' },
+      { id: 'appearance-readability', label: 'Удобочитаемость' },
+    ],
   },
   {
     id: 'voice',
@@ -290,6 +302,73 @@ function SliderField({
         <button className="settings-field-reset" title="Сбросить по умолчанию" onClick={onReset}>
           <X size={13} />
         </button>
+      </div>
+    </div>
+  )
+}
+
+/** Ползунок с "магнитными" отметками — в отличие от SliderField (любое
+ * значение в диапазоне), тут доступны только конкретные шаги (steps), между
+ * ними прыгать нельзя: сам range двигает ИНДЕКС в steps, а не значение
+ * напрямую, поэтому и магнитится только к перечисленным отметкам, а не к
+ * произвольному проценту между ними. Используется для масштаба интерфейса и
+ * размера шрифта (см. UI_SCALE_STEPS/FONT_SIZE_STEPS в settings.tsx). */
+function SteppedSliderField({
+  icon,
+  label,
+  steps,
+  value,
+  unit,
+  onChange,
+  onReset,
+}: {
+  icon: ReactNode
+  label: string
+  steps: number[]
+  value: number
+  unit: string
+  onChange: (v: number) => void
+  onReset: () => void
+}) {
+  // Значение могло прийти из старого localStorage мимо текущего набора
+  // отметок — берём ближайшую, а не всегда 0-ю, чтобы ползунок не
+  // телепортировался в неожиданное место.
+  const closestIndex = steps.reduce(
+    (best, s, i) => (Math.abs(s - value) < Math.abs(steps[best] - value) ? i : best),
+    0,
+  )
+
+  return (
+    <div className="settings-field">
+      <div className="settings-field-header">
+        <span className="settings-field-label">
+          {icon} {label}
+        </span>
+        <span className="settings-field-value">
+          {steps[closestIndex]}
+          {unit}
+        </span>
+      </div>
+      <div className="settings-field-row">
+        <input
+          type="range"
+          min={0}
+          max={steps.length - 1}
+          step={1}
+          value={closestIndex}
+          onChange={(e) => onChange(steps[Number(e.target.value)])}
+        />
+        <button className="settings-field-reset" title="Сбросить по умолчанию" onClick={onReset}>
+          <X size={13} />
+        </button>
+      </div>
+      <div className="slider-ticks">
+        {steps.map((s, i) => (
+          <span key={s} className={`slider-tick${i === closestIndex ? ' active' : ''}`}>
+            {s}
+            {unit}
+          </span>
+        ))}
       </div>
     </div>
   )
@@ -777,6 +856,10 @@ export default function SettingsModal({
     setMicGain,
     micThreshold,
     setMicThreshold,
+    uiScale,
+    setUiScale,
+    baseFontSize,
+    setBaseFontSize,
   } = useSettings()
 
   useEscToClose(onClose)
@@ -1019,6 +1102,51 @@ export default function SettingsModal({
                 >
                   <ImageIcon size={15} /> Иконка сайта (скоро)
                 </button>
+              </SettingsSection>
+            )}
+
+            {!detailView && activeCategory === 'appearance' && (
+              <SettingsSection
+                id="appearance-scale"
+                title="Масштаб интерфейса"
+                sectionRefs={sectionRefs}
+              >
+                <SteppedSliderField
+                  icon={<ZoomIn size={15} />}
+                  label="Масштаб интерфейса"
+                  steps={UI_SCALE_STEPS}
+                  value={uiScale}
+                  unit="%"
+                  onChange={setUiScale}
+                  onReset={() => setUiScale(DEFAULT_SETTINGS.uiScale)}
+                />
+                <p className="settings-hint">
+                  Меняет размер вообще всего: иконок, отступов и текста разом — как зум
+                  страницы в браузере.
+                </p>
+              </SettingsSection>
+            )}
+
+            {!detailView && activeCategory === 'appearance' && (
+              <SettingsSection
+                id="appearance-readability"
+                title="Удобочитаемость"
+                sectionRefs={sectionRefs}
+              >
+                <SteppedSliderField
+                  icon={<Type size={15} />}
+                  label="Размер шрифта"
+                  steps={FONT_SIZE_STEPS}
+                  value={baseFontSize}
+                  unit="px"
+                  onChange={setBaseFontSize}
+                  onReset={() => setBaseFontSize(DEFAULT_SETTINGS.baseFontSize)}
+                />
+                <p className="settings-hint">
+                  Меняет только размер текста — иконки и отступы остаются как есть. На
+                  телефоне поля ввода всё равно не мельче 16px: иначе браузер сам
+                  приближает страницу при тапе в поле.
+                </p>
               </SettingsSection>
             )}
 

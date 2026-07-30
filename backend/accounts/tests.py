@@ -1,13 +1,16 @@
 """Тесты профиля: смена ника/аватара (PATCH /api/auth/me) и пароля."""
+import tempfile
 from datetime import timedelta
 
 from django.contrib.auth import get_user_model
 from django.core.cache import cache
+from django.core.files.uploadedfile import SimpleUploadedFile
+from django.test import override_settings
 from django.utils import timezone
 from rest_framework.test import APITestCase
 from rest_framework.throttling import SimpleRateThrottle
 
-from .models import QRLoginRequest
+from .models import NameFont, QRLoginRequest
 
 User = get_user_model()
 
@@ -164,6 +167,97 @@ class ProfileUpdateTests(APITestCase):
     def test_unauthenticated_cannot_patch(self):
         self.client.force_authenticate(None)
         resp = self.client.patch("/api/auth/me", {"username": "hacker"})
+        self.assertEqual(resp.status_code, 401)
+
+    def test_patch_name_style_roundtrip(self):
+        resp = self.client.patch(
+            "/api/auth/me",
+            {
+                "name_effect": "gradient",
+                "name_color_1": "#ff0000",
+                "name_color_2": "#00ff00",
+            },
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data["name_effect"], "gradient")
+        self.assertEqual(resp.data["name_color_1"], "#ff0000")
+        self.assertEqual(resp.data["name_color_2"], "#00ff00")
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.name_effect, "gradient")
+
+    def test_patch_name_color_rejects_bad_hex(self):
+        resp = self.client.patch("/api/auth/me", {"name_color_1": "red"})
+        self.assertEqual(resp.status_code, 400)
+
+    def test_patch_name_color_can_clear(self):
+        self.user.name_color_1 = "#123456"
+        self.user.save(update_fields=["name_color_1"])
+        resp = self.client.patch("/api/auth/me", {"name_color_1": ""})
+        self.assertEqual(resp.status_code, 200)
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.name_color_1, "")
+
+    def test_patch_name_effect_rejects_unknown_value(self):
+        resp = self.client.patch("/api/auth/me", {"name_effect": "sparkles"})
+        self.assertEqual(resp.status_code, 400)
+
+    def test_patch_banner_color_roundtrip_and_validation(self):
+        resp = self.client.patch("/api/auth/me", {"banner_color": "#abcdef"})
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data["banner_color"], "#abcdef")
+        resp = self.client.patch("/api/auth/me", {"banner_color": "not-a-color"})
+        self.assertEqual(resp.status_code, 400)
+
+    # NameFont.file пишет реальные файлы на диск (MEDIA_ROOT) — override,
+    # чтобы тестовые "шрифты" не оседали в backend/media/name_fonts/ на
+    # реальной машине разработчика.
+    @override_settings(MEDIA_ROOT=tempfile.mkdtemp())
+    def test_patch_name_font_by_id(self):
+        font = NameFont.objects.create(
+            label="Comic",
+            file=SimpleUploadedFile("comic.woff2", b"fake-font-bytes"),
+            uploaded_by=self.other,
+        )
+        resp = self.client.patch("/api/auth/me", {"name_font": font.id})
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data["name_font"], font.id)
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.name_font_id, font.id)
+
+    @override_settings(MEDIA_ROOT=tempfile.mkdtemp())
+    def test_deleting_name_font_resets_user_to_null(self):
+        font = NameFont.objects.create(
+            label="Comic",
+            file=SimpleUploadedFile("comic.woff2", b"fake-font-bytes"),
+            uploaded_by=self.other,
+        )
+        self.user.name_font = font
+        self.user.save(update_fields=["name_font"])
+        font.delete()
+        self.user.refresh_from_db()
+        self.assertIsNone(self.user.name_font_id)
+
+
+class NameFontListTests(APITestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(username="alice", password="pw12345")
+        self.client.force_authenticate(self.user)
+
+    @override_settings(MEDIA_ROOT=tempfile.mkdtemp())
+    def test_list_returns_uploaded_fonts(self):
+        NameFont.objects.create(
+            label="Comic",
+            file=SimpleUploadedFile("comic.woff2", b"fake-font-bytes"),
+            uploaded_by=self.user,
+        )
+        resp = self.client.get("/api/auth/name-fonts")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(len(resp.data), 1)
+        self.assertEqual(resp.data[0]["label"], "Comic")
+
+    def test_unauthenticated_cannot_list(self):
+        self.client.force_authenticate(None)
+        resp = self.client.get("/api/auth/name-fonts")
         self.assertEqual(resp.status_code, 401)
 
 

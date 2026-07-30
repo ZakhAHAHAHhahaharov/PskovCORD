@@ -80,11 +80,11 @@ export default function MessageInput({
   prefill?: MessageInputPrefill | null
   /** Идентичность получателя ("channel-5", "dm-12") — вместе с ключом на самом
    * компоненте (см. AppShell) заставляет React пересоздавать инпут при смене
-   * канала/диалога, а loadDraft/saveDraft — какой текст восстановить в
-   * СВЕЖЕМ инстансе. Не хранится тут же локальным стейтом: черновик должен
-   * пережить конкретно эту пару unmount/mount (переход в голосовой канал и
-   * обратно), а не сам компонент, поэтому источник правды — снаружи, в
-   * AppShell (см. pendingDraftRef там). */
+   * канала/диалога, а loadDraft/saveDraft читают и пишут черновик именно этого
+   * канала в общую карту черновиков. Не хранится тут же локальным стейтом:
+   * черновик должен пережить unmount этого инстанса (переход в другой канал,
+   * в голосовой канал и обратно), а не просто исчезнуть вместе с компонентом,
+   * поэтому источник правды — снаружи, в AppShell (см. draftsRef там). */
   draftKey?: string
   loadDraft?: (key: string) => string | undefined
   saveDraft?: (key: string, text: string) => void
@@ -101,13 +101,16 @@ export default function MessageInput({
 
   // Обёртка вместо голого setValue — черновик обязан улететь наружу при
   // КАЖДОМ изменении текста, иначе AppShell отдаст следующему инстансу
-  // (после отлучки в голосовой канал) устаревшее значение.
+  // (после отлучки в голосовой канал) устаревшее значение. Исключение — режим
+  // редактирования: то, что печатается в textarea, тогда это правка чужого
+  // сообщения, а не черновик нового, и не должна затирать реальный черновик
+  // (см. preEditValueRef ниже — вот что вернётся в поле после отмены/сохранения).
   const updateValue = useCallback(
     (next: string) => {
       setValue(next)
-      if (draftKey && saveDraft) saveDraft(draftKey, next)
+      if (draftKey && saveDraft && !editTarget) saveDraft(draftKey, next)
     },
-    [draftKey, saveDraft],
+    [draftKey, saveDraft, editTarget],
   )
 
   // --- автокомплит @упоминаний -------------------------------------------
@@ -180,9 +183,22 @@ export default function MessageInput({
   // проехать над кнопкой внутри зоны.
   const dragDepth = useRef(0)
 
-  // При входе в режим редактирования подставляем текущий текст сообщения.
+  // При входе в режим редактирования подставляем текст редактируемого
+  // сообщения, спрятав то, что было в поле до этого (черновик нового
+  // сообщения), в preEditValueRef. При выходе (отмена/сохранение — оба
+  // приводят к editTarget: null) возвращаем спрятанный текст обратно: без
+  // этого несохранённый черновик пропадал бы бесследно при каждом клике на
+  // "редактировать".
+  const preEditValueRef = useRef<string | null>(null)
   useEffect(() => {
-    if (editTarget) setValue(editTarget.content)
+    if (editTarget) {
+      preEditValueRef.current = value
+      setValue(editTarget.content)
+    } else if (preEditValueRef.current !== null) {
+      setValue(preEditValueRef.current)
+      preEditValueRef.current = null
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editTarget])
 
   useEffect(() => {
@@ -291,7 +307,8 @@ export default function MessageInput({
       // умеет, хуже, чем не предлагать.
       if (!content) return
       onSaveEdit(editTarget.id, content)
-      setValue('')
+      // Не setValue('') — editTarget вот-вот станет null, и эффект выше сам
+      // вернёт в поле черновик, который был тут до начала редактирования.
       return
     }
     // Отправлять нечего, если нет ни текста, ни долетевших файлов.
@@ -331,8 +348,9 @@ export default function MessageInput({
       }
     }
     if (e.key === 'Escape' && editTarget) {
+      // Не setValue('') — onCancelEdit обнулит editTarget, и эффект выше сам
+      // вернёт в поле черновик, который был тут до начала редактирования.
       onCancelEdit()
-      setValue('')
       return
     }
     // Enter отправляет, Shift+Enter — перенос строки (стандартный textarea

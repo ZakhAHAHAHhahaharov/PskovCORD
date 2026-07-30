@@ -1,9 +1,11 @@
 import { useState } from 'react'
 import { Loader2 } from 'lucide-react'
 import { useEscToClose } from '../modalStack'
+import { useUnsavedChangesGuard } from '../hooks/useUnsavedChangesGuard'
 import Avatar from './Avatar'
 import StatusBubble from './StatusBubble'
 import EmojiPicker, { EmojiPickerAnchor } from './EmojiPicker'
+import UnsavedChangesNudge from './UnsavedChangesNudge'
 
 const TEXT_MAX_LENGTH = 64
 
@@ -51,9 +53,18 @@ export default function StatusEditModal({
     }
   }
 
+  const isDirty = emoji !== currentEmoji || text !== currentText
+  const { modalRef, showNudge, handleOverlayClick } = useUnsavedChangesGuard(isDirty, onClose)
+  const handleDiscard = () => {
+    setEmoji(currentEmoji)
+    setText(currentText)
+    onClose()
+  }
+
   return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div className="modal status-edit-modal" onClick={(e) => e.stopPropagation()}>
+    <div className="modal-overlay" onClick={handleOverlayClick}>
+      <div className="unsaved-guard-stack">
+      <div className="modal status-edit-modal" ref={modalRef} onClick={(e) => e.stopPropagation()}>
         <h2 className="modal-title">Статус</h2>
 
         <div className="status-edit-preview">
@@ -105,6 +116,11 @@ export default function StatusEditModal({
             onClose={() => setEmojiAnchor(null)}
           />
         )}
+      </div>
+
+      {showNudge && (
+        <UnsavedChangesNudge onSave={handleSave} onDiscard={handleDiscard} saving={saving} />
+      )}
       </div>
     </div>
   )

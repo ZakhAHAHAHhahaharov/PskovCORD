@@ -1,9 +1,18 @@
-import { useCallback, useEffect, useMemo, useRef, useState, MouseEvent as ReactMouseEvent } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  MouseEvent as ReactMouseEvent,
+} from 'react'
 import { ChevronLeft, Phone, PhoneOff, Users } from 'lucide-react'
 import { useIsMobile } from '../hooks/useIsMobile'
+import { useNameFonts } from '../hooks/useNameFonts'
 import {
   api, Channel, ChatMessageBase, Conversation, ConversationMessage, FriendsState, InvitePreview,
-  KnownPerson, Member, Message, NotificationLevel, Role, Server, ServerMemberSettings,
+  KnownPerson, Member, Message, NameEffect, NotificationLevel, Role, Server, ServerMemberSettings,
 } from '../api'
 import { useAuth } from '../auth'
 import { useGateway } from '../gateway'
@@ -80,6 +89,10 @@ interface CallParticipant {
   muted: boolean
   deafened: boolean
   sharing_screen: boolean
+  name_font: number | null
+  name_effect: NameEffect
+  name_color_1: string
+  name_color_2: string
 }
 
 interface IncomingCall {
@@ -90,6 +103,12 @@ interface IncomingCall {
 export default function AppShell() {
   const { user, logout } = useAuth()
   const gateway = useGateway()
+  // Прогревает каталог шрифтов ника (@font-face, см. useNameFonts) один раз
+  // на всё приложение — до этого стиль ника с кастомным шрифтом в
+  // сообщениях/войсе рисовался бы системным шрифтом, пока кто-нибудь не
+  // откроет DisplayNameStyleModal (там тот же хук вызывается снова, но
+  // промис уже общий и второго запроса не будет).
+  useNameFonts()
 
   // --- мобильный layout: список каналов (nav) vs открытый канал (content),
   // плюс модалки поверх (настройки и т.п.) — на мобилке полноэкранные и
@@ -171,31 +190,37 @@ export default function AppShell() {
   const [profilePopup, setProfilePopup] = useState<ProfilePopupTarget | null>(null)
   const [replyTarget, setReplyTarget] = useState<ChatMessageBase | null>(null)
   const [editTarget, setEditTarget] = useState<ChatMessageBase | null>(null)
+  // Всегда актуальное значение editTarget — читается в cleanup-функции
+  // эффекта переключения канала (см. ниже), где сам editTarget из замыкания
+  // был бы устаревшим (значением на момент запуска ТОГО эффекта, а не на
+  // момент выхода из канала).
+  const editTargetRef = useRef<ChatMessageBase | null>(null)
+  const setEditTargetTracked = useCallback((m: ChatMessageBase | null) => {
+    editTargetRef.current = m
+    setEditTarget(m)
+  }, [])
   // --- контекстное меню участника голосового канала (правый клик) --------
   const [contextMenuTarget, setContextMenuTarget] = useState<ParticipantContextMenuTarget | null>(
     null,
   )
   const [mentionPrefill, setMentionPrefill] = useState<MessageInputPrefill | null>(null)
-  // Черновик композера переживает только "отлучку" в НЕ-текстовое место
-  // (голосовой канал, пустой экран) — сам MessageInput размонтируется там
-  // (см. key={draftKey} у обоих <MessageInput> ниже), и без этого хранилища
-  // текст терялся бы безвозвратно. При этом переключение на ДРУГОЙ текстовый
-  // канал/диалог черновик явно стирает (см. loadDraft) — по этому каналу он
-  // "не должен сохраняться", а не просто не долетать до чужого поля ввода.
-  const pendingDraftRef = useRef<{ key: string; text: string } | null>(null)
+  // Черновики композера — по одному на канал/диалог, переживают переключение
+  // между ними (и отлучку в голосовой канал/пустой экран): сам MessageInput
+  // размонтируется при смене места (см. key={draftKey} у обоих <MessageInput>
+  // ниже), поэтому текст живёт здесь, а не локальным стейтом компонента.
+  const draftsRef = useRef<Map<string, string>>(new Map())
   const saveDraft = useCallback((key: string, text: string) => {
-    pendingDraftRef.current = text ? { key, text } : null
+    if (text) draftsRef.current.set(key, text)
+    else draftsRef.current.delete(key)
   }, [])
   const loadDraft = useCallback((key: string): string | undefined => {
-    const pending = pendingDraftRef.current
-    if (!pending) return undefined
-    if (pending.key === key) return pending.text
-    // Чужой черновик (другого канала/диалога) — не подсовываем и не бережём
-    // на случай возврата, он был привязан к тому месту, а не к "последнему
-    // тексту вообще".
-    pendingDraftRef.current = null
-    return undefined
+    return draftsRef.current.get(key)
   }, [])
+  // Незавершённое редактирование сообщения — как и черновик, привязано к
+  // конкретному каналу/диалогу (тот же формат ключа: "channel-5"/"dm-12") и
+  // должно вернуться, если уйти в другой канал/диалог и вернуться обратно, а
+  // не просто закрыться. Сохраняется в cleanup-функциях эффектов ниже.
+  const pendingEditsRef = useRef<Map<string, ChatMessageBase>>(new Map())
   // channel_id канала, где ПРЯМО СЕЙЧАС идёт голосование за мут (по кому бы
   // то ни было) — используется, только чтобы задизейблить «начать ещё одно»
   // в ParticipantContextMenu; сам факт голосования и его результат живут в
@@ -222,6 +247,15 @@ export default function AppShell() {
   dmMessagesRef.current = dmMessages
   const [dmReplyTarget, setDmReplyTarget] = useState<ChatMessageBase | null>(null)
   const [dmEditTarget, setDmEditTarget] = useState<ChatMessageBase | null>(null)
+  // Всегда актуальное значение dmEditTarget — читается в cleanup-функции
+  // эффекта переключения диалога (см. ниже), где сам dmEditTarget из
+  // замыкания был бы устаревшим (значением на момент запуска ТОГО эффекта,
+  // а не на момент выхода из диалога).
+  const dmEditTargetRef = useRef<ChatMessageBase | null>(null)
+  const setDmEditTargetTracked = useCallback((m: ChatMessageBase | null) => {
+    dmEditTargetRef.current = m
+    setDmEditTarget(m)
+  }, [])
   // Диалоги с непрочитанными сообщениями — клиентское состояние (бэкенд не
   // хранит read-статус), сбрасывается при перезагрузке. Наполняется в
   // gateway.on('dm_message_create') ниже, чистится при открытии диалога (см.
@@ -345,6 +379,8 @@ export default function AppShell() {
   const dmRoster: VoiceRosterMember[] = Object.values(dmCallParticipants).map((p) => ({
     id: p.id, username: p.username, avatar_color: p.avatar_color, avatar_image: p.avatar_image,
     muted: p.muted, deafened: p.deafened, sharing_screen: p.sharing_screen,
+    name_font: p.name_font, name_effect: p.name_effect,
+    name_color_1: p.name_color_1, name_color_2: p.name_color_2,
   }))
   const isInDmCall =
     voice?.room.kind === 'conversation' && activeConversation != null && voice.room.id === activeConversation.id
@@ -606,22 +642,35 @@ export default function AppShell() {
     })()
   }, [])
 
-  // История сообщений выбранного диалога/группы.
-  useEffect(() => {
+  // История сообщений выбранного диалога/группы. useLayoutEffect, а не
+  // useEffect: восстановленный editTarget должен попасть в проп ДО того, как
+  // браузер отрисует кадр — иначе на миг мелькнёт editTarget уходящего
+  // диалога (стейт ещё не успел синхронизироваться с новым activeConversationId).
+  useLayoutEffect(() => {
     setDmReplyTarget(null)
-    setDmEditTarget(null)
+    const key = activeConversationId != null ? `dm-${activeConversationId}` : null
+    const restored = key ? pendingEditsRef.current.get(key) ?? null : null
+    setDmEditTargetTracked(restored)
     if (activeConversationId == null) {
       setDmMessages([])
-      return
+    } else {
+      ;(async () => {
+        try {
+          setDmMessages(await api.conversationMessages(activeConversationId))
+        } catch {
+          setDmMessages([])
+        }
+      })()
     }
-    ;(async () => {
-      try {
-        setDmMessages(await api.conversationMessages(activeConversationId))
-      } catch {
-        setDmMessages([])
-      }
-    })()
-  }, [activeConversationId])
+    // Уход из диалога (смена activeConversationId или размонтирование) —
+    // запоминаем, на чём остановилось редактирование, чтобы отдать его
+    // обратно при возврате именно в этот диалог.
+    return () => {
+      if (!key) return
+      if (dmEditTargetRef.current) pendingEditsRef.current.set(key, dmEditTargetRef.current)
+      else pendingEditsRef.current.delete(key)
+    }
+  }, [activeConversationId, setDmEditTargetTracked])
 
   // Список людей для пикера «новый диалог/группа» И «Пригласить на сервер» —
   // обновляем при каждом открытии любой из двух модалок (мог появиться новый
@@ -637,23 +686,35 @@ export default function AppShell() {
     })()
   }, [showNewConversation, showServerInviteId])
 
-  // История сообщений при смене текстового канала.
-  useEffect(() => {
+  // История сообщений при смене текстового канала. useLayoutEffect — по той
+  // же причине, что и у аналогичного эффекта для ЛС выше: без него editTarget
+  // уходящего канала на миг мелькнул бы в новом.
+  useLayoutEffect(() => {
     setReplyTarget(null)
-    setEditTarget(null)
+    const key = currentChannel && currentChannel.kind === 'text' ? `channel-${currentChannel.id}` : null
+    const restored = key ? pendingEditsRef.current.get(key) ?? null : null
+    setEditTargetTracked(restored)
     if (!currentChannel || currentChannel.kind !== 'text') {
       setMessages([])
-      return
+    } else {
+      ;(async () => {
+        try {
+          setMessages(await api.messages(currentChannel.id))
+        } catch {
+          setMessages([])
+        }
+      })()
     }
-    ;(async () => {
-      try {
-        setMessages(await api.messages(currentChannel.id))
-      } catch {
-        setMessages([])
-      }
-    })()
+    // Уход из канала (смена channelId или размонтирование) — запоминаем, на
+    // чём остановилось редактирование, чтобы отдать его обратно при
+    // возврате именно в этот канал.
+    return () => {
+      if (!key) return
+      if (editTargetRef.current) pendingEditsRef.current.set(key, editTargetRef.current)
+      else pendingEditsRef.current.delete(key)
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [channelId])
+  }, [channelId, setEditTargetTracked])
 
   // Realtime-события gateway.
   useEffect(() => {
@@ -734,6 +795,13 @@ export default function AppShell() {
             avatar_image: d.avatar_image ?? '',
             banner_gradient: '',
             banner_image: '',
+            // Стиль ника (см. nameStyle.ts) сюда не приезжает — так же, как и
+            // роли ниже, уточнится следующим полным api.members(). До тех
+            // пор ник рисуется как обычный текст, без стиля.
+            name_font: null,
+            name_effect: 'standard',
+            name_color_1: '',
+            name_color_2: '',
             online: true,
             status: 'online' as const,
             voice_channel: vc,
@@ -852,6 +920,10 @@ export default function AppShell() {
                 display_name: d.display_name,
                 avatar_color: d.avatar_color,
                 avatar_image: d.avatar_image,
+                name_font: d.name_font,
+                name_effect: d.name_effect,
+                name_color_1: d.name_color_1,
+                name_color_2: d.name_color_2,
               }
             : m,
         ),
@@ -984,6 +1056,14 @@ export default function AppShell() {
             id: d.user_id, username: d.username,
             avatar_color: d.avatar_color, avatar_image: d.avatar_image,
             muted: false, deafened: false, sharing_screen: false,
+            // Стиль ника сюда не приезжает (см. аналогичный комментарий у
+            // voice_state_update выше) — участник уже виден в
+            // conv.participants (User), но конкретно этот payload — только
+            // id/username/avatar. Уточнится при следующей загрузке диалога.
+            name_font: null,
+            name_effect: 'standard',
+            name_color_1: '',
+            name_color_2: '',
           }
         } else {
           delete next[d.user_id]
@@ -1015,6 +1095,10 @@ export default function AppShell() {
               avatar_color: p.avatar_color, avatar_image: p.avatar_image,
               muted: !!flags.muted, deafened: !!flags.deafened,
               sharing_screen: !!flags.sharing_screen,
+              name_font: p.name_font,
+              name_effect: p.name_effect,
+              name_color_1: p.name_color_1,
+              name_color_2: p.name_color_2,
             }
           }
         }
@@ -1585,18 +1669,18 @@ export default function AppShell() {
   }
 
   const handleReplyRequest = (m: ChatMessageBase) => {
-    setEditTarget(null)
+    setEditTargetTracked(null)
     setReplyTarget(m)
   }
 
   const handleEditRequest = (m: ChatMessageBase) => {
     setReplyTarget(null)
-    setEditTarget(m)
+    setEditTargetTracked(m)
   }
 
   const handleSaveEdit = (messageId: number, content: string) => {
     gateway.editMessage(messageId, content)
-    setEditTarget(null)
+    setEditTargetTracked(null)
   }
 
   const handleJoinVoice = async (ch: Channel) => {
@@ -1709,18 +1793,18 @@ export default function AppShell() {
   }
 
   const handleDmReplyRequest = (m: ChatMessageBase) => {
-    setDmEditTarget(null)
+    setDmEditTargetTracked(null)
     setDmReplyTarget(m)
   }
 
   const handleDmEditRequest = (m: ChatMessageBase) => {
     setDmReplyTarget(null)
-    setDmEditTarget(m)
+    setDmEditTargetTracked(m)
   }
 
   const handleSaveDmEdit = (messageId: number, content: string) => {
     gateway.dmEditMessage(messageId, content)
-    setDmEditTarget(null)
+    setDmEditTargetTracked(null)
   }
 
   const handleDmVoiceJoin = useCallback(
@@ -2189,7 +2273,7 @@ export default function AppShell() {
                 onCancelReply={() => setDmReplyTarget(null)}
                 editTarget={dmEditTarget}
                 onSaveEdit={handleSaveDmEdit}
-                onCancelEdit={() => setDmEditTarget(null)}
+                onCancelEdit={() => setDmEditTargetTracked(null)}
                 prefill={mentionPrefill}
               />
             </>
@@ -2266,7 +2350,7 @@ export default function AppShell() {
               onCancelReply={() => setReplyTarget(null)}
               editTarget={editTarget}
               onSaveEdit={handleSaveEdit}
-              onCancelEdit={() => setEditTarget(null)}
+              onCancelEdit={() => setEditTargetTracked(null)}
               prefill={mentionPrefill}
             />
           </>
