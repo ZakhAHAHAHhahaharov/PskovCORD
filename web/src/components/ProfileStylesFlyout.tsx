@@ -1,4 +1,3 @@
-import { useEffect, useRef } from 'react'
 import { Lock, Palette } from 'lucide-react'
 import { useEscToClose } from '../modalStack'
 
@@ -28,17 +27,12 @@ function PlaceholderRow() {
 
 /**
  * Флайаут "Стили" — открывается закладкой-кисточкой у аватарки в
- * ProfileModal (см. ProfileCardHeader.profile-styles-tab), растёт от правого
- * края модалки (см. .styles-flyout в index.css, позиционируется от
- * .profile-modal — см. комментарий там).
- *
- * Клик мимо закрывает его САМОГО, не задевая ProfileModal под ним — тот же
- * приём, что в MiniProfilePopup (document-level mousedown с проверкой
- * ref.contains, а не собственный .modal-overlay: флайаут не должен гасить
- * весь экран, это лёгкая панелька, а не полноценный модал). ProfileModal'у
- * тут не нужен guard на несохранённые изменения (см. useUnsavedChangesGuard) —
- * внутри либо мгновенный автосейв (цвет баннера), либо переход в отдельный
- * DisplayNameStyleModal со своим черновиком и своим guard'ом.
+ * ProfileModal (см. ProfileCardHeader.profile-styles-tab). Рендерится
+ * ВНУТРИ того же .modal-overlay, что и сам ProfileModal (см. ProfileModal.tsx),
+ * обычным flex-элементом слева от .modal — часть одного редактора профиля, а
+ * не отдельная плавающая панель: тот же z-index, клик по фону закрывает всё
+ * разом. Свой stopPropagation ниже — только чтобы клик ВНУТРИ флайаута не
+ * долетал до onClick этого общего .modal-overlay.
  */
 export default function ProfileStylesFlyout({
   bannerColor,
@@ -51,19 +45,10 @@ export default function ProfileStylesFlyout({
   onOpenNameStyle: () => void
   onClose: () => void
 }) {
-  const ref = useRef<HTMLDivElement>(null)
   useEscToClose(onClose)
 
-  useEffect(() => {
-    const onMouseDown = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) onClose()
-    }
-    document.addEventListener('mousedown', onMouseDown)
-    return () => document.removeEventListener('mousedown', onMouseDown)
-  }, [onClose])
-
   return (
-    <div ref={ref} className="styles-flyout">
+    <div className="styles-flyout" onClick={(e) => e.stopPropagation()}>
       <h3 className="styles-flyout-title">
         <Palette size={15} /> Стили
       </h3>
