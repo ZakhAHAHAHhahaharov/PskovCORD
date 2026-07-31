@@ -43,7 +43,18 @@ const DEDUP_WINDOW_MS = 60_000
  * компонент по-своему) — дедуп такое не ловит, а слать бесконечно нельзя. */
 const MAX_PER_SESSION = 50
 
+/** Сколько последних ошибок помним для формы обращения. Ровно столько же
+ * разбирает сервер (support.views.MAX_LINKED_ERRORS) — присылать больше
+ * бессмысленно. */
+const RECENT_BUFFER = 10
+
 const lastSentAt = new Map<string, number>()
+/** Кольцо последних пойманных ошибок — то, что прикладывается к обращению
+ * пользователя (см. BugReportModal). Пишется на КАЖДУЮ пойманную ошибку, в
+ * том числе на заглушенные дедупом: человек жалуется как раз тогда, когда
+ * одно и то же повторяется, и потерять для связки именно повтор было бы
+ * обидно. */
+const recent: ErrorPayload[] = []
 let sentThisSession = 0
 // Страховка от СИНХРОННОЙ петли: если что-то внутри подготовки отчёта само
 // бросит, глобальный обработчик позовёт reportError повторно, не выйдя из
@@ -91,6 +102,8 @@ export function reportError(payload: ErrorPayload): void {
   if (inReport) return
   inReport = true
   try {
+    recent.push(payload)
+    if (recent.length > RECENT_BUFFER) recent.shift()
     if (!shouldSend(payload)) return
     sentThisSession += 1
 
@@ -112,7 +125,7 @@ export function reportError(payload: ErrorPayload): void {
         stack: payload.stack || '',
         route: location.pathname,
         platform: platform(),
-        app_version: typeof __APP_VERSION__ === 'string' ? __APP_VERSION__ : '',
+        app_version: APP_VERSION,
       }),
     }).catch(() => {})
   } catch {
@@ -123,9 +136,28 @@ export function reportError(payload: ErrorPayload): void {
   }
 }
 
+/**
+ * Последние пойманные ошибки — прикладываются к обращению пользователя.
+ * Сервер сам сведёт их с известными группами по той же подписи, что считает
+ * при приёме отчётов (см. support.views.BugReportCreate._match_groups),
+ * поэтому отсюда уходит сырой текст, а не какие-либо идентификаторы: своих
+ * id клиент и не знает — приём отчётов отвечает пустым 204.
+ */
+export function recentErrors(): ErrorPayload[] {
+  return recent.slice()
+}
+
+/** Описание платформы для формы обращения — то же, что уезжает с ошибками. */
+export function currentPlatform(): string {
+  return platform()
+}
+
+export const APP_VERSION = typeof __APP_VERSION__ === 'string' ? __APP_VERSION__ : ''
+
 /** Только для тестов: сбросить накопленное состояние дедупа. */
 export function __resetTransportState() {
   lastSentAt.clear()
+  recent.length = 0
   sentThisSession = 0
   inReport = false
 }
