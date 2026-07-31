@@ -10,6 +10,9 @@ GatewayConsumer — единственный WebSocket на клиента (по
      "attachment_ids": ["<uuid>", ...], "nonce": "<строка клиента>"}
     {"op": "delete_message", "message_id": <id>}
     {"op": "edit_message", "message_id": <id>, "content": "..."}
+    {"op": "pin_message", "message_id": <id>, "pinned": bool} — закрепить/
+     открепить сообщение в текстовом канале (нужно право "delete_messages" —
+     то же «модерация сообщений», что и на удаление чужих).
     {"op": "add_reaction", "message_id": <id>, "emoji": "🔥"}
     {"op": "remove_reaction", "message_id": <id>, "emoji": "🔥"}
     {"op": "voice_join",   "channel_id": <id>}
@@ -188,6 +191,9 @@ add_reaction/remove_reaction — поставить/снять свою реак
 delete_message — удалить сообщение может автор ИЛИ владелец сервера (админ).
 edit_message — редактировать может ТОЛЬКО автор, даже владелец сервера не
 может править чужие сообщения (может только удалить).
+pin_message — закрепление это модерация канала, а не право на своё
+сообщение: закреплять и откреплять может тот, у кого есть "delete_messages"
+(автору своего сообщения этого мало — иначе каждый вешал бы себя в шапку).
 
 set_status — online/dnd/invisible, это ВЫБОР пользователя, а не факт его
 онлайн-статуса; реальная видимость другим считается отдельно через
@@ -357,6 +363,8 @@ class GatewayConsumer(AsyncWebsocketConsumer):
                 await self._handle_delete_message(data)
             elif op == "edit_message":
                 await self._handle_edit_message(data)
+            elif op == "pin_message":
+                await self._handle_pin_message(data)
             elif op == "add_reaction":
                 await self._handle_reaction(data, add=True, dm=False)
             elif op == "remove_reaction":
@@ -510,6 +518,22 @@ class GatewayConsumer(AsyncWebsocketConsumer):
         result = await self._edit_message(message_id, content[:4000])
         if not result:
             return
+        await self.channel_layer.group_send(
+            f"server_{result['server_id']}",
+            {"type": "broadcast", "payload": {
+                "op": "message_update", "message": result["data"]}},
+        )
+
+    async def _handle_pin_message(self, data):
+        message_id = data.get("message_id")
+        if not message_id:
+            return
+        result = await self._pin_message(message_id, bool(data.get("pinned")))
+        if not result:
+            return
+        # Отдельного op'а нет: закрепление — это изменение самого сообщения
+        # (поле pinned в MessageSerializer), и лента обновляет его тем же
+        # обработчиком, что и правку текста.
         await self.channel_layer.group_send(
             f"server_{result['server_id']}",
             {"type": "broadcast", "payload": {
@@ -1201,6 +1225,35 @@ class GatewayConsumer(AsyncWebsocketConsumer):
         msg.save(update_fields=["content", "edited_at"])
         return {
             "server_id": msg.channel.server_id,
+            "data": MessageSerializer(msg).data,
+        }
+
+    @database_sync_to_async
+    def _pin_message(self, message_id, pinned):
+        try:
+            msg = Message.objects.select_related(
+                "channel__server", "author", "reply_to__author").get(id=message_id)
+        except Message.DoesNotExist:
+            return None
+        server = msg.channel.server
+        if not Membership.objects.filter(user=self.user, server=server).exists():
+            return None
+        perms = roles.permissions_for(self.user, server)
+        if not perms.get("delete_messages"):
+            logger.info(
+                "pin_message: user %s lacks permission to pin message %s on server %s",
+                self.user.id, message_id, server.id,
+            )
+            return None
+        was_pinned = msg.pinned
+        if was_pinned == pinned:
+            # Двойной клик/гонка двух модераторов — состояние уже нужное,
+            # но время закрепления перебивать не за чем.
+            return None
+        msg.pinned_at = timezone.now() if pinned else None
+        msg.save(update_fields=["pinned_at"])
+        return {
+            "server_id": server.id,
             "data": MessageSerializer(msg).data,
         }
 

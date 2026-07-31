@@ -100,6 +100,16 @@ export function useChannelMessages(
     setEditTargetTracked(m)
   }
 
+  /** Закрепить/открепить. Ответ придёт обычным message_update (см.
+   * chat.consumers._handle_pin_message) и обновит сообщение в ленте у всех,
+   * поэтому локально ничего не трогаем. */
+  const handleTogglePin = useCallback(
+    (messageId: number, pinned: boolean) => {
+      gateway.pinMessage(messageId, pinned)
+    },
+    [gateway],
+  )
+
   const handleSaveEdit = (messageId: number, content: string) => {
     gateway.editMessage(messageId, content)
     setEditTargetTracked(null)
@@ -110,6 +120,6 @@ export function useChannelMessages(
     replyTarget, setReplyTarget,
     editTarget, setEditTargetTracked,
     handleSend, handleToggleReaction, handleDeleteMessage,
-    handleReplyRequest, handleEditRequest, handleSaveEdit,
+    handleReplyRequest, handleEditRequest, handleSaveEdit, handleTogglePin,
   }
 }

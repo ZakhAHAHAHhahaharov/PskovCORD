@@ -1673,6 +1673,23 @@ class ChannelMessages(APIView):
         return Response(MessageSerializer(messages, many=True).data)
 
 
+class ChannelPins(APIView):
+    """Закреплённые сообщения канала — отдельной ручкой, а не флагом в общей
+    ленте: закреплённое может быть сколь угодно далеко в истории, до которой
+    постраничная лента (см. _paginate_messages) не доехала."""
+
+    def get(self, request, channel_id):
+        channel = get_object_or_404(Channel, id=channel_id)
+        denied = _require_channel_access(request, channel)
+        if denied:
+            return denied
+        qs = channel.messages.filter(pinned_at__isnull=False).select_related(
+            "author", "reply_to__author"
+        ).prefetch_related("attachments", "reactions").order_by("-pinned_at", "-id")
+        qs = _hide_blocked(request.user, qs)
+        return Response(MessageSerializer(qs, many=True).data)
+
+
 class ChannelVoiceMembers(APIView):
     def get(self, request, channel_id):
         channel = get_object_or_404(Channel, id=channel_id)

@@ -28,6 +28,9 @@ interface GatewayCtx {
   sendMessage: (channelId: number, content: string, opts?: SendMessageOptions) => void
   deleteMessage: (messageId: number) => void
   editMessage: (messageId: number, content: string) => void
+  /** Закрепить/открепить сообщение в текстовом канале — нужно право
+   * "delete_messages" (модерация сообщений), проверяется на сервере. */
+  pinMessage: (messageId: number, pinned: boolean) => void
   /** Поставить/снять свою реакцию на сообщение канала. */
   addReaction: (messageId: number, emoji: string) => void
   removeReaction: (messageId: number, emoji: string) => void
@@ -232,6 +235,8 @@ export function GatewayProvider({ children }: { children: ReactNode }) {
     deleteMessage: (messageId) => raw({ op: 'delete_message', message_id: messageId }),
     editMessage: (messageId, content) =>
       raw({ op: 'edit_message', message_id: messageId, content }),
+    pinMessage: (messageId, pinned) =>
+      raw({ op: 'pin_message', message_id: messageId, pinned }),
     addReaction: (messageId, emoji) =>
       raw({ op: 'add_reaction', message_id: messageId, emoji }),
     removeReaction: (messageId, emoji) =>

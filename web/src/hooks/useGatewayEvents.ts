@@ -6,7 +6,7 @@ import type { VoiceState } from '../components/AppShell'
 import { invalidateAvatarAnimation } from '../avatarAnim'
 import { useGateway } from '../gateway'
 import { outbox } from '../outbox'
-import { playScreenShareRequestSound, playWakeUpSound } from '../sounds'
+import { playLeaveSound, playScreenShareRequestSound, playWakeUpSound } from '../sounds'
 
 interface CallParticipant {
   id: number
@@ -238,6 +238,10 @@ export function useGatewayEvents(params: UseGatewayEventsParams) {
       }
       gateway.voiceLeave()
       setVoice(null)
+      // Свой звук выхода — здесь, единственный раз за кик: диф ростера в
+      // useVoiceCall себя самого намеренно не озвучивает (см. комментарий
+      // там), иначе на кик приходилось два звука подряд.
+      playLeaveSound()
       alert('Вас отключили от голосового канала.')
     })
     // Голос начался на другом устройстве/вкладке того же аккаунта (см.
