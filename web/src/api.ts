@@ -369,6 +369,9 @@ export interface ChatMessageBase {
   server_invite?: ConversationServerInvite | null
   created_at: string
   edited_at: string | null
+  /** Закреплено в канале (см. api.channelPins). Только у сообщений сервера —
+   * в личке/группе закреплений нет. */
+  pinned?: boolean
 }
 
 export interface Message extends ChatMessageBase {
@@ -1096,6 +1099,10 @@ export const api = {
     opts: { before?: number; after?: number; limit?: number } = {},
   ): Promise<Message[]> =>
     req(`/api/channels/${channelId}/messages${buildQuery(opts)}`),
+  /** Закреплённые сообщения канала, последнее закреплённое первым. Отдельно
+   * от ленты: закреплённое может лежать сколь угодно далеко в истории. */
+  channelPins: (channelId: number): Promise<Message[]> =>
+    req(`/api/channels/${channelId}/pins`),
   voiceCredentials: (
     channelId: number,
   ): Promise<{ sfu_url: string; sfu_token: string; ttl: number }> =>

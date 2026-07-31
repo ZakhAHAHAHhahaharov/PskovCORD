@@ -125,6 +125,9 @@ export function useVoiceCall(
       // статус ('connecting'/'failed') считается по факту подключения
       // WebRTC-транспорта к SFU внутри VoiceProvider (onStatus).
       gateway.voiceJoin(ch.id)
+      // Свой собственный звук входа — здесь и только здесь (см. комментарий
+      // у эффекта звуков ростера ниже).
+      playJoinSound()
       setVoice({ room: { id: ch.id, name: ch.name, kind: 'channel' }, sfuUrl: sfu_url, sfuToken: sfu_token })
       // Клик по голосовому каналу — это и вход в него, и выбор того, что
       // показывать в main (как и для текстовых каналов): переключаем main
@@ -136,9 +139,8 @@ export function useVoiceCall(
   }
 
   const handleLeaveVoice = useCallback(() => {
-    // Себе самому звук выхода не прилетит через ростер (isChannelVoice/voice
-    // уже станут false к моменту, когда эффект ниже увидит изменение members),
-    // поэтому играем его явно здесь, в момент собственного выхода.
+    // Свой собственный звук выхода — здесь и только здесь (см. комментарий
+    // у эффекта звуков ростера ниже).
     playLeaveSound()
     gateway.voiceLeave()
     setVoice(null)
@@ -188,6 +190,8 @@ export function useVoiceCall(
         // про то, почему на один сброс при выходе полагаться нельзя).
         setDmCallParticipants({})
         gateway.dmVoiceJoin(conversationId)
+        // Свой звук входа — явно, как и у голосового канала выше.
+        playJoinSound()
         setVoice({
           room: {
             id: conversationId,
@@ -317,21 +321,28 @@ export function useVoiceCall(
     voiceRosterRef.current = isChannelVoice
       ? new Set(
           members
-            .filter((m) => m.voice_channel === String(voice!.room.id))
+            .filter((m) => m.voice_channel === String(voice!.room.id) && m.id !== user?.id)
             .map((m) => m.id),
         )
       : new Set()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isChannelVoice, voice?.room.id])
 
-  // Звук при входе/выходе участников звонка, в котором мы сейчас сами —
-  // играет для ВСЕХ в канале, включая самого вошедшего/вышедшего (каждый
-  // клиент детектит смену ростера у себя локально и проигрывает звук сам).
+  // Звук при входе/выходе ЧУЖИХ участников звонка, в котором мы сейчас сами.
+  //
+  // Себя самого этот диф намеренно не касается (см. фильтр по user.id): свой
+  // вход/выход виден клиенту напрямую (handleJoinVoice/handleLeaveVoice и
+  // "тебя отключили" в useGatewayEvents), и там же играется свой звук — ровно
+  // один раз. Раньше своё исчезновение из ростера тоже считалось "кто-то
+  // вышел", и при кике из канала звук выхода играл дважды: сначала на
+  // voice_state_update с channel_id=null про нас самих, потом ещё раз на
+  // разрыв соединения — гонка двух событий, порядок которых клиент не
+  // контролирует.
   useEffect(() => {
     if (!isChannelVoice || !user) return
     const currentIds = new Set(
       members
-        .filter((m) => m.voice_channel === String(voice!.room.id))
+        .filter((m) => m.voice_channel === String(voice!.room.id) && m.id !== user.id)
         .map((m) => m.id),
     )
     const prevIds = voiceRosterRef.current
@@ -350,7 +361,9 @@ export function useVoiceCall(
   const dmVoiceRosterRef = useRef<Set<number>>(new Set())
   useEffect(() => {
     if (!user) return
-    const currentIds = new Set(Object.keys(dmCallParticipants).map(Number))
+    const currentIds = new Set(
+      Object.keys(dmCallParticipants).map(Number).filter((id) => id !== user.id),
+    )
     const prevIds = dmVoiceRosterRef.current
     for (const id of currentIds) {
       if (!prevIds.has(id)) playJoinSound()

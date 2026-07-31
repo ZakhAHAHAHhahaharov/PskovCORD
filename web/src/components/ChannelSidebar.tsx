@@ -1,5 +1,5 @@
-import { MouseEvent as ReactMouseEvent } from 'react'
-import { Volume2, MicOff, HeadphoneOff, Monitor, Settings, Pin } from 'lucide-react'
+import { MouseEvent as ReactMouseEvent, useCallback, useState } from 'react'
+import { ChevronDown, ChevronRight, Volume2, MicOff, HeadphoneOff, Monitor, Settings, Pin } from 'lucide-react'
 import { Channel, Member, Server, User } from '../api'
 import { styledNameProps } from '../nameStyle'
 import { VoiceRosterMember } from './VoiceStage'
@@ -12,6 +12,86 @@ import { VoiceState } from './AppShell'
 import { VoiceStatus } from './VoiceProvider'
 import { useLongPress } from '../hooks/useLongPress'
 import { maskName, useHiddenNames } from '../hiddenNames'
+
+const COLLAPSED_KEY = 'collapsedChannelCategories'
+
+type ChannelKind = 'text' | 'voice'
+
+/** «Свёрнута ли категория» — личная настройка отображения конкретного
+ * сервера, как «Скрыть имена» (см. hiddenNames.ts): только localStorage,
+ * никакой синхронизации с сервером. Ключ — `<serverId>:<kind>`, чтобы
+ * свёрнутые голосовые на одном сервере не сворачивали их на всех. */
+function loadCollapsed(): string[] {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(COLLAPSED_KEY) || '[]')
+    return Array.isArray(parsed) ? parsed.filter((v) => typeof v === 'string') : []
+  } catch {
+    return []
+  }
+}
+
+function useCollapsedCategories(serverId: number | undefined) {
+  const [keys, setKeys] = useState<string[]>(loadCollapsed)
+
+  const isCollapsed = useCallback(
+    (kind: ChannelKind) => serverId != null && keys.includes(`${serverId}:${kind}`),
+    [keys, serverId],
+  )
+
+  const toggle = useCallback(
+    (kind: ChannelKind) => {
+      if (serverId == null) return
+      setKeys((prev) => {
+        const key = `${serverId}:${kind}`
+        const next = prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]
+        try {
+          localStorage.setItem(COLLAPSED_KEY, JSON.stringify(next))
+        } catch {
+          // localStorage недоступен — просто не персистим.
+        }
+        return next
+      })
+    },
+    [serverId],
+  )
+
+  return { isCollapsed, toggle }
+}
+
+/** Состав голосового канала одной строкой — аватарки внахлёст, как в
+ * Discord. Показывается вместо развёрнутого списка участников, когда
+ * категория «Голосовые каналы» свёрнута, а мы в этом канале сидим: канал
+ * свёрнут, но с кем ты в нём — видно не разворачивая. */
+function VoiceStackedAvatars({
+  members: inChannel,
+  speakingUserIds,
+}: {
+  members: Member[]
+  speakingUserIds: Set<number>
+}) {
+  const MAX = 5
+  const shown = inChannel.slice(0, MAX)
+  const rest = inChannel.length - shown.length
+  return (
+    <span className="voice-stack">
+      {shown.map((m) => (
+        <span className="voice-stack-item" key={m.id} title={m.username}>
+          <Avatar
+            name={m.username}
+            color={m.avatar_color}
+            image={m.avatar_image}
+            size={24}
+            speaking={speakingUserIds.has(m.id)}
+            userId={m.id}
+            animated={m.avatar_animated}
+            playAnimation={speakingUserIds.has(m.id)}
+          />
+        </span>
+      ))}
+      {rest > 0 && <span className="voice-stack-rest">+{rest}</span>}
+    </span>
+  )
+}
 
 function VoiceUserRow({
   member: m,
@@ -171,6 +251,7 @@ export default function ChannelSidebar({
 }) {
   const { speakingUserIds, muted, deafened } = useVoice()
   const { isHidden } = useHiddenNames()
+  const { isCollapsed, toggle: toggleCategory } = useCollapsedCategories(server?.id)
   // Для себя — локальное состояние mesh'а (мгновенный отклик на клик);
   // для остальных — то, что пришло в members (видно всем, даже не
   // подключённым к этому голосовому каналу вообще).
@@ -189,6 +270,9 @@ export default function ChannelSidebar({
     if (bi === -1) return -1
     return ai - bi
   })
+
+  const textCollapsed = isCollapsed('text')
+  const voiceCollapsed = isCollapsed('voice')
 
   const voiceMembersOf = (channelId: number) =>
     members.filter((m) => m.voice_channel === String(channelId))
@@ -221,12 +305,18 @@ export default function ChannelSidebar({
         {server && (
           <>
             <div className="channel-category">
-              <span
+              {/* Клик по названию категории сворачивает/разворачивает её —
+                  создание канала осталось за кнопкой «+» справа (раньше на
+                  названии висело именно оно). */}
+              <button
                 className="cat-label"
-                onClick={canManageChannels ? () => onCreateChannel('text') : undefined}
+                type="button"
+                title={textCollapsed ? 'Развернуть' : 'Свернуть'}
+                onClick={() => toggleCategory('text')}
               >
+                {textCollapsed ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
                 Текстовые каналы
-              </span>
+              </button>
               {canManageChannels && (
                 <button
                   className="cat-add"
@@ -237,7 +327,11 @@ export default function ChannelSidebar({
                 </button>
               )}
             </div>
-            {textChannels.map((c) => (
+            {/* Свёрнутая категория всё равно показывает открытый прямо сейчас
+                канал — иначе, свернув её, теряешь из виду, где находишься. */}
+            {textChannels
+              .filter((c) => !textCollapsed || c.id === activeChannelId)
+              .map((c) => (
               <button
                 key={c.id}
                 className={`channel-item ${activeChannelId === c.id ? 'active' : ''}`}
@@ -249,12 +343,15 @@ export default function ChannelSidebar({
             ))}
 
             <div className="channel-category">
-              <span
+              <button
                 className="cat-label"
-                onClick={canManageChannels ? () => onCreateChannel('voice') : undefined}
+                type="button"
+                title={voiceCollapsed ? 'Развернуть' : 'Свернуть'}
+                onClick={() => toggleCategory('voice')}
               >
+                {voiceCollapsed ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
                 Голосовые каналы
-              </span>
+              </button>
               {canManageChannels && (
                 <button
                   className="cat-add"
@@ -265,11 +362,40 @@ export default function ChannelSidebar({
                 </button>
               )}
             </div>
-            {voiceChannels.map((c) => {
+            {/* Свёрнутая категория оставляет на виду только тот канал, в
+                котором мы сейчас сидим (по той же причине, что и активный
+                текстовый выше) — но без списка участников: вместо него
+                строка аватарок внахлёст, см. VoiceStackedAvatars. */}
+            {voiceChannels
+              .filter((c) => !voiceCollapsed || (voice?.room.kind === 'channel' && voice.room.id === c.id))
+              .map((c) => {
               const inChannel = voiceMembersOf(c.id)
               const isMyVoiceChannel = voice?.room.kind === 'channel' && voice.room.id === c.id
               const isPinned = pinnedIds.includes(c.id)
               const masked = isHidden(c.id)
+              if (voiceCollapsed) {
+                return (
+                  <div key={c.id} className="voice-channel-block">
+                    <button
+                      className="channel-item active"
+                      onClick={() => onJoinVoice(c)}
+                      onContextMenu={
+                        onChannelContextMenu
+                          ? (e) => {
+                              e.preventDefault()
+                              onChannelContextMenu(c, e)
+                            }
+                          : undefined
+                      }
+                    >
+                      <span className="channel-icon in-voice">
+                        <Volume2 size={15} />
+                      </span>
+                      <VoiceStackedAvatars members={inChannel} speakingUserIds={speakingUserIds} />
+                    </button>
+                  </div>
+                )
+              }
               return (
                 <div key={c.id} className="voice-channel-block">
                   <button

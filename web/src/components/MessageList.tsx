@@ -3,7 +3,7 @@ import {
   MouseEvent as ReactMouseEvent,
 } from 'react'
 import {
-  AlertCircle, Check, Clock, Reply, Pencil, RotateCw, SmilePlus, Trash2,
+  AlertCircle, Check, Clock, Pin, PinOff, Reply, Pencil, RotateCw, SmilePlus, Trash2,
 } from 'lucide-react'
 import { ChatMessageBase, MentionCandidate } from '../api'
 import { escapeRegExp, WORD_CHAR } from '../mentions'
@@ -154,6 +154,7 @@ export default function MessageList({
   onAcceptServerInvite,
   onDeclineServerInvite,
   onOpenInvitedServer,
+  onTogglePin,
 }: {
   messages: ListMessage[]
   currentUserId: number
@@ -184,6 +185,10 @@ export default function MessageList({
   onAcceptServerInvite?: (inviteId: number) => void
   onDeclineServerInvite?: (inviteId: number) => void
   onOpenInvitedServer?: (serverId: number) => void
+  /** Закрепить/открепить сообщение канала. Не задан — фича недоступна:
+   * так это выключено и в личке/группе (там закреплений нет вовсе), и у
+   * тех, у кого нет права модерации сообщений (см. canModerate в AppShell). */
+  onTogglePin?: (messageId: number, pinned: boolean) => void
 }) {
   const bottomRef = useRef<HTMLDivElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
@@ -354,6 +359,11 @@ export default function MessageList({
                 </span>
                 <span className="message-time">{formatTime(m.created_at)}</span>
                 {m.edited_at && <span className="message-edited">(изменено)</span>}
+                {m.pinned && (
+                  <span className="message-pinned-mark" title="Закреплено в канале">
+                    <Pin size={11} /> закреплено
+                  </span>
+                )}
                 {status && <DeliveryIndicator status={status} />}
               </div>
               {m.content && (
@@ -470,6 +480,15 @@ export default function MessageList({
                     onClick={() => onEditRequest(m)}
                   >
                     <Pencil size={15} />
+                  </button>
+                )}
+                {onTogglePin && (
+                  <button
+                    className="message-action"
+                    title={m.pinned ? 'Открепить' : 'Закрепить сообщение'}
+                    onClick={() => onTogglePin(m.id, !m.pinned)}
+                  >
+                    {m.pinned ? <PinOff size={15} /> : <Pin size={15} />}
                   </button>
                 )}
                 {(isAuthor || canModerate) && (

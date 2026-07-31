@@ -413,11 +413,16 @@ class MessageSerializer(serializers.ModelSerializer):
     attachments = AttachmentSerializer(many=True, read_only=True)
     reactions = serializers.SerializerMethodField()
 
+    # Наружу отдаём именно булев «закреплено» (Message.pinned) — фронту
+    # незачем знать, что внутри лежит момент закрепления.
+    pinned = serializers.BooleanField(read_only=True)
+
     class Meta:
         model = Message
         fields = ["id", "channel", "author", "content", "reply_to",
-                  "attachments", "reactions", "created_at", "edited_at"]
-        read_only_fields = ["author", "created_at", "edited_at"]
+                  "attachments", "reactions", "created_at", "edited_at",
+                  "pinned"]
+        read_only_fields = ["author", "created_at", "edited_at", "pinned"]
 
     def get_reactions(self, obj):
         return reactions_payload(obj.reactions.all())

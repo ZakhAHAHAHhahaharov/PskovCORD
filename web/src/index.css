@@ -716,7 +716,13 @@ input {
   padding: 16px 8px 4px;
 }
 
+/* Название категории — кнопка «свернуть/развернуть» (см. ChannelSidebar):
+   стрелка + текст в одну строку, фон кнопки не рисуем — визуально это
+   по-прежнему просто подпись. */
 .cat-label {
+  display: flex;
+  align-items: center;
+  gap: 2px;
   font-size: calc(12px * var(--font-scale, 1));
   font-weight: 700;
   text-transform: uppercase;
@@ -826,6 +832,35 @@ input {
 .voice-user span.speaking {
   color: var(--heading-text);
   transition: color 100ms ease-out;
+}
+
+/* Состав свёрнутого голосового канала (VoiceStackedAvatars): аватарки
+   внахлёст одной строкой. Нахлёст — отрицательный margin; каждая следующая
+   аватарка ложится поверх предыдущей просто порядком в потоке. */
+.voice-stack {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.voice-stack-item {
+  display: flex;
+  flex: none;
+  margin-left: -8px;
+  /* Кольцо цвета сайдбара отделяет соседние аватарки друг от друга — без
+     него внахлёст читается как одно слипшееся пятно. */
+  border-radius: 50%;
+  box-shadow: 0 0 0 2px var(--sidebar-bg);
+}
+
+.voice-stack-item:first-child {
+  margin-left: 0;
+}
+
+.voice-stack-rest {
+  margin-left: 10px;
+  font-size: calc(12px * var(--font-scale, 1));
+  color: var(--text-muted);
 }
 
 .voice-user-icons {
@@ -3249,7 +3284,8 @@ textarea.inline-editable-input {
    (margin-left:auto прибивает его к правому краю). Выключен — серая
    иконка, включён — обычный цвет текста; фона на самой кнопке нет, чтобы
    не спорить с #/названием канала слева, только hover-подсветка. */
-.chat-header-members-toggle {
+.chat-header-members-toggle,
+.chat-header-pin-btn {
   margin-left: auto;
   flex-shrink: 0;
   display: flex;
@@ -3261,13 +3297,101 @@ textarea.inline-editable-input {
   color: var(--text-faint);
 }
 
-.chat-header-members-toggle:hover {
+.chat-header-members-toggle:hover,
+.chat-header-pin-btn:hover {
   background: var(--channel-hover);
   color: var(--text-normal);
 }
 
-.chat-header-members-toggle.active {
+.chat-header-members-toggle.active,
+.chat-header-pin-btn.active {
   color: var(--text-normal);
+}
+
+/* Кнопка закреплённых + сама панель под ней. К правому краю шапки прибита
+   обёртка, а не кнопки: два margin-left:auto подряд поделили бы свободное
+   место пополам и увели бы «скрепку» на середину шапки. */
+.chat-header-pins {
+  position: relative;
+  margin-left: auto;
+}
+
+.chat-header-pins + .chat-header-members-toggle {
+  margin-left: 0;
+}
+
+.pinned-panel {
+  position: absolute;
+  z-index: 40;
+  top: calc(100% + 8px);
+  right: 0;
+  width: 320px;
+  max-height: 380px;
+  overflow-y: auto;
+  padding: 8px;
+  background: var(--modal-bg);
+  border-radius: 10px;
+  box-shadow: 0 8px 16px rgba(0, 0, 0, 0.32);
+  cursor: default;
+}
+
+.pinned-panel-title {
+  padding: 4px 6px 8px;
+  font-size: calc(12px * var(--font-scale, 1));
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  color: var(--text-muted);
+}
+
+.pinned-panel-empty {
+  padding: 10px 6px;
+  font-size: calc(13px * var(--font-scale, 1));
+  color: var(--text-muted);
+}
+
+.pinned-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 6px;
+  border-radius: 6px;
+}
+
+.pinned-item:hover {
+  background: var(--channel-hover);
+}
+
+.pinned-item-body {
+  min-width: 0;
+  flex: 1;
+}
+
+.pinned-item-author {
+  font-size: calc(13px * var(--font-scale, 1));
+  font-weight: 600;
+  color: var(--heading-text);
+}
+
+.pinned-item-content {
+  font-size: calc(13px * var(--font-scale, 1));
+  color: var(--text-normal);
+  overflow-wrap: break-word;
+}
+
+.pinned-item-unpin {
+  flex: none;
+  color: var(--text-muted);
+}
+
+/* Значок «закреплено» у сообщения в ленте — рядом со временем, тем же
+   приглушённым цветом, что и «(изменено)». */
+.message-pinned-mark {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: calc(11px * var(--font-scale, 1));
+  color: var(--text-muted);
 }
 
 .chat-empty {
@@ -4270,15 +4394,61 @@ textarea.inline-editable-input {
   font-size: calc(11px * var(--font-scale, 1));
 }
 
-/* Список серверов раскрывается ВНУТРИ того же попапа (см. комментарий в
-   ConversationContextMenu) — отступ слева показывает вложенность, а
-   ограничение высоты не даёт меню уехать за экран при десятке серверов. */
-.conversation-menu-submenu {
-  max-height: 180px;
+/* Список серверов — боковой флаут по наведению (см. комментарий в
+   ConversationContextMenu). Открывается вправо от пункта, а у правого края
+   экрана — влево (.flyout-left). Ограничение высоты не даёт ему уехать за
+   экран при десятке серверов. */
+.conversation-menu-servers {
+  position: relative;
+}
+
+.conversation-menu-flyout {
+  position: absolute;
+  z-index: 1;
+  /* Верх флаута — вровень со строкой-триггером, без зазора по горизонтали:
+     курсор идёт из пункта прямо во флаут, не проваливаясь в "мёртвую зону"
+     (см. useHoverFlyout). */
+  top: -6px;
+  left: 100%;
+  width: 220px;
+  max-height: 260px;
   overflow-y: auto;
-  padding-left: 12px;
-  margin-left: 8px;
-  border-left: 2px solid var(--channel-hover);
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  background: var(--modal-bg);
+  border-radius: 10px;
+  box-shadow: 0 8px 16px rgba(0, 0, 0, 0.32);
+}
+
+.conversation-menu-flyout.flyout-left {
+  left: auto;
+  right: 100%;
+}
+
+.conversation-menu-server-icon {
+  width: 24px;
+  height: 24px;
+  flex: none;
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+.conversation-menu-server-initials {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--input-secondary-bg);
+  color: var(--text-normal);
+  font-size: calc(10px * var(--font-scale, 1));
+  font-weight: 700;
+}
+
+.conversation-menu-server-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .conversation-menu-check {

@@ -404,9 +404,18 @@ class Message(models.Model):
     )
     created_at = models.DateTimeField(auto_now_add=True)
     edited_at = models.DateTimeField(null=True, blank=True)
+    # Закреплено в канале (см. chat.consumers._handle_pin_message). Хранится
+    # МОМЕНТ закрепления, а не просто флаг: список закреплённых сортируется
+    # именно по нему — «последнее закреплённое сверху», как в Discord, а не
+    # по дате написания самого сообщения.
+    pinned_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         ordering = ["created_at", "id"]
+
+    @property
+    def pinned(self) -> bool:
+        return self.pinned_at is not None
 
     def __str__(self) -> str:
         return f"{self.author}: {self.content[:30]}"

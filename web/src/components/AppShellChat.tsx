@@ -1,5 +1,5 @@
-import { MouseEvent as ReactMouseEvent } from 'react'
-import { ChevronLeft, Phone, PhoneOff, Users } from 'lucide-react'
+import { MouseEvent as ReactMouseEvent, useState } from 'react'
+import { ChevronLeft, Phone, PhoneOff, Pin, Users } from 'lucide-react'
 import { Conversation, Me } from '../api'
 import type { useChannelMessages } from '../hooks/useChannelMessages'
 import type { useConversationsData } from '../hooks/useConversationsData'
@@ -12,6 +12,7 @@ import { ComposerDraft } from '../drafts'
 import { outbox, pendingAsMessage, PendingMessage } from '../outbox'
 import MessageList from './MessageList'
 import MessageInput, { MessageInputPrefill } from './MessageInput'
+import PinnedMessages from './PinnedMessages'
 import MembersList from './MembersList'
 import VoiceStage from './VoiceStage'
 import { ProfilePopupUser } from './MiniProfilePopup'
@@ -56,6 +57,8 @@ export default function AppShellChat({
   const { currentServer, channels, currentChannel, serverId, members, rolesForServer } = server
   const visible = <T extends { author: { id: number } }>(list: T[]) =>
     blockedUserIds.size === 0 ? list : list.filter((m) => !blockedUserIds.has(m.author.id))
+  // Панель закреплённых — под кнопкой в шапке текстового канала.
+  const [pinsOpen, setPinsOpen] = useState(false)
 
   return (
     <>
@@ -192,6 +195,24 @@ export default function AppShellChat({
               )}
               <span className="hash">#</span>
               <span className="chat-header-name">{currentChannel.name}</span>
+              <div className="chat-header-pins">
+                <button
+                  type="button"
+                  className={`chat-header-pin-btn ${pinsOpen ? 'active' : ''}`}
+                  title="Закреплённые сообщения"
+                  onClick={() => setPinsOpen((v) => !v)}
+                >
+                  <Pin size={18} />
+                </button>
+                {pinsOpen && (
+                  <PinnedMessages
+                    channelId={currentChannel.id}
+                    canPin={canDeleteMessages}
+                    onUnpin={(messageId) => channelMessages.handleTogglePin(messageId, false)}
+                    onClose={() => setPinsOpen(false)}
+                  />
+                )}
+              </div>
               <button
                 type="button"
                 className={`chat-header-members-toggle ${showMembersList ? 'active' : ''}`}
@@ -218,6 +239,7 @@ export default function AppShellChat({
               mentionCandidates={members}
               onRetry={(nonce) => outbox.retry(nonce)}
               onDiscard={(nonce) => outbox.discard(nonce)}
+              onTogglePin={canDeleteMessages ? channelMessages.handleTogglePin : undefined}
             />
             <MessageInput
               key={`channel-${currentChannel.id}`}

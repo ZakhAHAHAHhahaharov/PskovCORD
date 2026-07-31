@@ -4,6 +4,8 @@ import {
   ServerIcon, User as UserIcon, UserMinus,
 } from 'lucide-react'
 import { api, Conversation, Server, UserRelation } from '../api'
+import { useHoverFlyout } from '../hooks/useHoverFlyout'
+import { serverInitials } from './ServerRail'
 
 /**
  * Правый клик по диалогу/группе в списке «Диалоги» (см. HomeSidebar).
@@ -62,7 +64,10 @@ export default function ConversationContextMenu({
   const isDm = conversation.kind === 'dm'
   const peer = isDm ? conversation.participants[0] : null
   const [relation, setRelation] = useState<UserRelation | null>(null)
-  const [serversOpen, setServersOpen] = useState(false)
+  // Список серверов — боковой флаут по наведению (см. useHoverFlyout): у
+  // строки «Пригласить на сервер» нет собственного действия по клику, только
+  // выбор сервера, поэтому лишний клик на раскрытие тут ни к чему.
+  const serversFlyout = useHoverFlyout()
 
   // Игнор/блокировка — только для лички и только когда меню уже открыли.
   useEffect(() => {
@@ -97,7 +102,7 @@ export default function ConversationContextMenu({
     }
     el.style.left = `${Math.max(margin, left)}px`
     el.style.top = `${Math.max(margin, top)}px`
-  }, [x, y, serversOpen])
+  }, [x, y])
 
   useLayoutEffect(() => {
     const onMouseDown = (e: MouseEvent) => {
@@ -153,13 +158,21 @@ export default function ConversationContextMenu({
     </button>
   )
 
+  // Заголовок — только у группы (её название не очевидно из самой строки
+  // списка, если она безымянная и собрана из ников). В личке его нет вовсе:
+  // ник собеседника и так написан в строке, по которой только что кликнули
+  // правой кнопкой, — дублировать его шапкой меню незачем.
   const title = isDm
-    ? peer?.username ?? 'Диалог'
+    ? null
     : conversation.name || conversation.participants.map((p) => p.username).join(', ')
+
+  // Флаут серверов раскрывается вправо, а у правого края экрана — влево:
+  // 280px самого меню + ~230px флаута легко не помещаются в остаток ширины.
+  const flyoutLeft = x + 280 + 230 > window.innerWidth
 
   return (
     <div ref={ref} className="profile-popup channel-context-menu" style={{ left: x, top: y }}>
-      <div className="profile-popup-label">{title}</div>
+      {title && <div className="profile-popup-label">{title}</div>}
 
       <div className="profile-popup-menu">
         {item(<CheckCheck size={15} />, 'Пометить как прочитанное', onMarkRead)}
@@ -177,34 +190,48 @@ export default function ConversationContextMenu({
         <>
           <div className="profile-popup-divider" />
           <div className="profile-popup-menu">
-            {/* Подменю списком прямо внутри этого же попапа, а не вторым
-                плавающим слоем: у него было бы своё позиционирование и своё
-                закрытие по клику вне — лишняя механика ради одного списка. */}
-            <button
-              type="button"
-              className="profile-popup-item"
-              onClick={() => setServersOpen((v) => !v)}
+            {/* Подменю — боковой флаут по наведению, а не раскрывающийся
+                список внутри меню: список серверов может быть длинным, и
+                внутри он растягивал бы само меню, уводя нижние пункты за
+                край экрана. Зазора между строкой и флаутом нет (флаут
+                перекрывает его собой), поэтому mouseleave обёртки не ловит
+                курсор по дороге — см. useHoverFlyout. */}
+            <div
+              className="conversation-menu-servers"
+              onMouseEnter={serversFlyout.onMouseEnter}
+              onMouseLeave={serversFlyout.onMouseLeave}
             >
-              <ServerIcon size={15} /> Пригласить на сервер
-              <span className="conversation-menu-chevron">{serversOpen ? '▾' : '▸'}</span>
-            </button>
-            {serversOpen && (
-              <div className="conversation-menu-submenu">
-                {servers.map((s) => (
-                  <button
-                    key={s.id}
-                    type="button"
-                    className="profile-popup-item"
-                    onClick={() => {
-                      onInviteToServer(s.id)
-                      onClose()
-                    }}
-                  >
-                    {s.name}
-                  </button>
-                ))}
-              </div>
-            )}
+              <button type="button" className="profile-popup-item">
+                <ServerIcon size={15} /> Пригласить на сервер
+                <span className="conversation-menu-chevron">{flyoutLeft ? '◂' : '▸'}</span>
+              </button>
+              {serversFlyout.open && (
+                <div
+                  className={`conversation-menu-flyout ${flyoutLeft ? 'flyout-left' : ''}`}
+                >
+                  {servers.map((s) => (
+                    <button
+                      key={s.id}
+                      type="button"
+                      className="profile-popup-item conversation-menu-server"
+                      onClick={() => {
+                        onInviteToServer(s.id)
+                        onClose()
+                      }}
+                    >
+                      {s.icon ? (
+                        <img className="conversation-menu-server-icon" src={s.icon} alt="" />
+                      ) : (
+                        <span className="conversation-menu-server-icon conversation-menu-server-initials">
+                          {serverInitials(s.name)}
+                        </span>
+                      )}
+                      <span className="conversation-menu-server-name">{s.name}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         </>
       )}

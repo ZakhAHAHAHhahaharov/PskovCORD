@@ -13,7 +13,9 @@ interface RailHint {
   left: number
 }
 
-function serverInitials(name: string): string {
+/** Заглушка вместо значка сервера — те же инициалы, что и в рейле, где бы
+ * сервер ни рисовался (см. ConversationContextMenu). */
+export function serverInitials(name: string): string {
   return name
     .split(/\s+/)
     .slice(0, 2)

@@ -1539,6 +1539,51 @@ class MessageOpsTests(TransactionTestCase):
         await owner_ws.disconnect()
         await member_ws.disconnect()
 
+    async def test_owner_can_pin_and_unpin_message(self):
+        member_ws = await self._connect(self.member)
+        owner_ws = await self._connect(self.owner)
+
+        sent = await self._send(member_ws, "важное")
+        await self._receive_until(owner_ws, "message_create")
+
+        await owner_ws.send_json_to({
+            "op": "pin_message", "message_id": sent["id"], "pinned": True,
+        })
+        seen = await self._receive_until(member_ws, "message_update")
+        self.assertTrue(seen["message"]["pinned"])
+
+        await owner_ws.send_json_to({
+            "op": "pin_message", "message_id": sent["id"], "pinned": False,
+        })
+        seen = await self._receive_until(member_ws, "message_update")
+        self.assertFalse(seen["message"]["pinned"])
+        pinned_at = await sync_to_async(
+            lambda: Message.objects.get(id=sent["id"]).pinned_at)()
+        self.assertIsNone(pinned_at)
+
+        await member_ws.disconnect()
+        await owner_ws.disconnect()
+
+    async def test_regular_member_cannot_pin_even_own_message(self):
+        """Закрепление — модерация канала, а не право автора на своё
+        сообщение: рядовому участнику (без delete_messages) оно недоступно."""
+        owner_ws = await self._connect(self.owner)
+        member_ws = await self._connect(self.member)
+
+        sent = await self._send(member_ws, "моё сообщение")
+        await self._receive_until(owner_ws, "message_create")
+
+        await member_ws.send_json_to({
+            "op": "pin_message", "message_id": sent["id"], "pinned": True,
+        })
+        self.assertTrue(await owner_ws.receive_nothing(timeout=0.3))
+        pinned_at = await sync_to_async(
+            lambda: Message.objects.get(id=sent["id"]).pinned_at)()
+        self.assertIsNone(pinned_at)
+
+        await owner_ws.disconnect()
+        await member_ws.disconnect()
+
     async def test_reply_to_message_in_other_channel_is_ignored(self):
         other_channel = await sync_to_async(Channel.objects.create)(
             server=self.server, name="other", kind=Channel.TEXT, position=1)
@@ -1829,6 +1874,48 @@ class MessagePaginationTests(APITestCase):
         resp = self.client.get(
             f"/api/channels/{self.channel.id}/messages?before=nonsense")
         self.assertEqual(resp.status_code, 200)
+
+
+class ChannelPinsTests(APITestCase):
+    """Закреплённые отдаются отдельной ручкой: в постраничную ленту старое
+    закреплённое сообщение просто не попадает (см. MessagePaginationTests)."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(username="pin_user", password="pw12345")
+        self.server = Server.objects.create(name="s", owner=self.user)
+        Membership.objects.create(user=self.user, server=self.server)
+        roles.create_default_role(self.server)
+        self.channel = Channel.objects.create(
+            server=self.server, name="general", kind=Channel.TEXT)
+        self.messages = [
+            Message.objects.create(
+                channel=self.channel, author=self.user, content=f"msg {i}")
+            for i in range(3)
+        ]
+        self.client.force_authenticate(self.user)
+
+    def test_empty_by_default(self):
+        resp = self.client.get(f"/api/channels/{self.channel.id}/pins")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data, [])
+
+    def test_latest_pinned_first_regardless_of_message_age(self):
+        # Закрепляем СНАЧАЛА свежее, потом старое — порядок должен быть по
+        # моменту закрепления, а не по дате самих сообщений.
+        self.messages[2].pinned_at = timezone.now()
+        self.messages[2].save(update_fields=["pinned_at"])
+        self.messages[0].pinned_at = timezone.now() + timedelta(seconds=1)
+        self.messages[0].save(update_fields=["pinned_at"])
+
+        resp = self.client.get(f"/api/channels/{self.channel.id}/pins")
+        self.assertEqual([m["content"] for m in resp.data], ["msg 0", "msg 2"])
+        self.assertTrue(all(m["pinned"] for m in resp.data))
+
+    def test_non_member_cannot_read_pins(self):
+        outsider = User.objects.create_user(username="pin_out", password="pw12345")
+        self.client.force_authenticate(outsider)
+        resp = self.client.get(f"/api/channels/{self.channel.id}/pins")
+        self.assertEqual(resp.status_code, 403)
 
 
 class PublicProfileSerializerTests(APITestCase):
