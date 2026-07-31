@@ -11,6 +11,7 @@ urlpatterns = [
     # автоматической подборке типовых админ-урлов.
     path("adminpskordpro/", admin.site.urls),
     path("api/auth/", include("accounts.urls")),
+    path("api/", include("bugs.urls")),
     path("api/", include("chat.urls")),
     # Стабильные пути для <link> в web/index.html — реальный файл (чей именно
     # favicon отдать) резолвится per-request в core.views.favicon_file.

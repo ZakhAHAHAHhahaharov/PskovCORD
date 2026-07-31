@@ -478,7 +478,10 @@ export interface ConversationMessage extends ChatMessageBase {
 }
 
 // Пусто => same-origin (относительные запросы). Для dev задаётся в web/.env.
-const API: string = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
+// Экспортируется, потому что мимо самого api() тоже есть запросы — отправка
+// отчётов об ошибках (errorTransport.ts) шлёт свой fetch, и без общей базы в
+// dev она уходила бы на Vite (5173) вместо бэкенда.
+export const API: string = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
 
 let accessToken: string | null = localStorage.getItem('access')
 // Раньше refresh-токен приходил с логина и молча выбрасывался: механизма

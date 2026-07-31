@@ -1,5 +1,6 @@
 import { Component, createContext, ErrorInfo, ReactNode, useContext, useEffect, useState } from 'react'
 import ErrorModal, { CapturedError } from './components/ErrorModal'
+import { ErrorKind, reportError } from './errorTransport'
 
 function toCaptured(err: unknown): CapturedError {
   if (err instanceof Error) {
@@ -7,6 +8,18 @@ function toCaptured(err: unknown): CapturedError {
   }
   const text = typeof err === 'string' ? err : JSON.stringify(err)
   return { message: text || 'Неизвестная ошибка', stack: text }
+}
+
+/** Показать модал И отправить отчёт. Одно место на оба действия, чтобы
+ * добавленная позже точка перехвата не начала делать только половину. */
+function capture(
+  err: unknown,
+  kind: ErrorKind,
+  setError: (e: CapturedError) => void,
+) {
+  const captured = toCaptured(err)
+  setError(captured)
+  reportError({ kind, message: captured.message, stack: captured.stack })
 }
 
 const ReportErrorCtx = createContext<(err: unknown) => void>(() => {})
@@ -35,10 +48,10 @@ export function ErrorReportingProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     const onError = (e: ErrorEvent) => {
-      setError(toCaptured(e.error ?? e.message))
+      capture(e.error ?? e.message, 'js_runtime', setError)
     }
     const onRejection = (e: PromiseRejectionEvent) => {
-      setError(toCaptured(e.reason))
+      capture(e.reason, 'promise', setError)
     }
     window.addEventListener('error', onError)
     window.addEventListener('unhandledrejection', onRejection)
@@ -49,7 +62,7 @@ export function ErrorReportingProvider({ children }: { children: ReactNode }) {
   }, [])
 
   return (
-    <ReportErrorCtx.Provider value={(err) => setError(toCaptured(err))}>
+    <ReportErrorCtx.Provider value={(err) => capture(err, 'manual', setError)}>
       {children}
       {error && <ErrorModal error={error} onClose={() => setError(null)} />}
     </ReportErrorCtx.Provider>
@@ -72,6 +85,16 @@ export class ErrorBoundary extends Component<
 
   componentDidCatch(err: Error, info: ErrorInfo) {
     console.error(err, info.componentStack)
+    // Отправляем отсюда, а не из getDerivedStateFromError: тот статический и
+    // обязан быть чистым (React зовёт его и в отброшенных попытках рендера).
+    // К стеку подклеиваем дерево компонентов — по обычному стеку минифи-
+    // цированного бандла место поломки не найти, а по нему видно сразу.
+    const captured = toCaptured(err)
+    reportError({
+      kind: 'render',
+      message: captured.message,
+      stack: `${captured.stack}\n--- компоненты ---${info.componentStack}`,
+    })
   }
 
   render() {
