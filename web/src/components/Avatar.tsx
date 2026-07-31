@@ -1,5 +1,6 @@
 import { EffectiveStatus } from '../api'
 import { useAvatarAnimation } from '../avatarAnim'
+import { useUserStatus } from '../presence'
 
 type StatusDot = EffectiveStatus | 'invisible'
 
@@ -25,7 +26,10 @@ export default function Avatar({
   size?: number
   /** Устаревший способ (только online/offline) — используется, если `status` не задан. */
   online?: boolean
-  /** Предпочтительно: точный статус (online/dnd/offline/invisible). */
+  /** Точный статус (online/dnd/offline/invisible). Не задан — при showStatus
+   * берётся из общего стора по userId (см. presence.ts): в списке друзей,
+   * диалогов и пикерах строке взять статус больше неоткуда, а ростер сервера
+   * (MembersList) наоборот передаёт его явно, вместе со своим списком. */
   status?: StatusDot
   showStatus?: boolean
   speaking?: boolean
@@ -41,7 +45,11 @@ export default function Avatar({
   playAnimation?: boolean
 }) {
   const initial = (name || '?').charAt(0).toUpperCase()
-  const dotStatus: StatusDot = status ?? (online ? 'online' : 'offline')
+  // Подписка на стор — всегда (хук нельзя звать условно), но она бесплатна,
+  // когда userId нет, и не участвует в dotStatus, если статус передали явно.
+  const storedStatus = useUserStatus(userId)
+  const dotStatus: StatusDot =
+    status ?? (online !== undefined ? (online ? 'online' : 'offline') : storedStatus)
   // Пока гифка не приехала (или её нет), src — статичный кадр: подмена
   // происходит уже готовой картинкой, без пустого места между ними.
   const animation = useAvatarAnimation(userId, animated, playAnimation)

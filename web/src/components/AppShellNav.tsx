@@ -1,5 +1,5 @@
 import { MouseEvent as ReactMouseEvent } from 'react'
-import { Conversation, Me } from '../api'
+import { Conversation, Me, User } from '../api'
 import type { useConversationsData } from '../hooks/useConversationsData'
 import type { useParticipantContextMenu } from '../hooks/useParticipantContextMenu'
 import type { useServerData } from '../hooks/useServerData'
@@ -20,6 +20,7 @@ interface AppShellNavProps {
   openProfilePopup: (user: ProfilePopupUser, e: ReactMouseEvent) => void
   onOpenProfile: () => void
   onConversationContextMenu: (c: Conversation, e: ReactMouseEvent) => void
+  onFriendContextMenu: (friend: User, e: ReactMouseEvent) => void
 }
 
 /** Единая "nav-панель" — рельса+сайдбар каналов вместе, всегда настоящий
@@ -29,7 +30,7 @@ interface AppShellNavProps {
 export default function AppShellNav({
   server, conv, voice, participant, user,
   navigateToContent, openMobileSettings, openProfilePopup, onOpenProfile,
-  onConversationContextMenu,
+  onConversationContextMenu, onFriendContextMenu,
 }: AppShellNavProps) {
   const handleOpenHome = () => {
     server.setServerId(null)
@@ -76,6 +77,7 @@ export default function AppShellNav({
           onOpenProfile={onOpenProfile}
           onOpenUserProfile={openProfilePopup}
           onConversationContextMenu={onConversationContextMenu}
+          onFriendContextMenu={onFriendContextMenu}
         />
       ) : (
         <ChannelSidebar
