@@ -215,6 +215,9 @@ from channels.generic.websocket import AsyncWebsocketConsumer
 from django.utils import timezone
 
 from django.db import transaction
+from django.db.models import Q
+
+from accounts.models import Friendship
 
 from . import emoji as emoji_keys, mute_vote, presence, roles
 
@@ -992,6 +995,23 @@ class GatewayConsumer(AsyncWebsocketConsumer):
             await self.channel_layer.group_send(
                 group, {"type": "broadcast", "payload": payload})
 
+        # Друзья и собеседники — вне серверов у них раньше не было НИКАКОГО
+        # источника чужого статуса, поэтому точка на аватарке в списке друзей
+        # и диалогов не могла ожить (см. chat.views.PresenceView — она отдаёт
+        # ровно тот же круг людей снимком на старте, а это его живое
+        # продолжение).
+        #
+        # Персонально каждому, а не в conversation_-группы, и с вычетом тех,
+        # до кого presence уже дошёл серверной рассылкой выше (см.
+        # _presence_extra_recipient_ids): иначе друг, с которым мы ещё и на
+        # общем сервере, получал бы одно и то же событие дважды.
+        #
+        # Строго ПОСЛЕ рассылки по серверам: запрос к БД перед ней сдвинул бы
+        # её по времени — ровно то, чего избегает комментарий в connect().
+        for uid in await self._presence_extra_recipient_ids():
+            await self.channel_layer.group_send(
+                f"user_{uid}", {"type": "broadcast", "payload": payload})
+
     async def _broadcast_voice(self, user_id, channel_id, server_id):
         if not server_id:
             return
@@ -1303,6 +1323,41 @@ class GatewayConsumer(AsyncWebsocketConsumer):
             ConversationParticipant.objects.filter(user=self.user).values_list(
                 "conversation_id", flat=True)
         )
+
+    @database_sync_to_async
+    def _presence_extra_recipient_ids(self):
+        """Кому мой presence нужно доставить ПЕРСОНАЛЬНО — друзьям и
+        собеседникам, до которых не дотянулась рассылка по серверным группам
+        (см. _broadcast_presence).
+
+        Сокомандников по серверу вычитаем: они уже получили это событие через
+        server_-группу, и второй экземпляр был бы чистым дублем — клиент
+        обработал бы его повторно, а тесты вида «проверить, что сокет больше
+        ничего не получил» ловили бы лишнее сообщение."""
+        my_server_ids = Membership.objects.filter(user=self.user).values_list(
+            "server_id", flat=True)
+        already_reached = set(
+            Membership.objects.filter(server_id__in=my_server_ids).values_list(
+                "user_id", flat=True)
+        )
+
+        pairs = Friendship.objects.filter(status=Friendship.ACCEPTED).filter(
+            Q(from_user=self.user) | Q(to_user=self.user)
+        ).values_list("from_user_id", "to_user_id")
+        recipients = {
+            to_id if from_id == self.user.id else from_id
+            for from_id, to_id in pairs
+        }
+
+        my_conversation_ids = ConversationParticipant.objects.filter(
+            user=self.user).values_list("conversation_id", flat=True)
+        recipients.update(
+            ConversationParticipant.objects.filter(
+                conversation_id__in=my_conversation_ids
+            ).exclude(user=self.user).values_list("user_id", flat=True)
+        )
+
+        return list(recipients - already_reached - {self.user.id})
 
     @database_sync_to_async
     def _is_conversation_participant(self, conversation_id):

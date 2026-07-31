@@ -8,6 +8,7 @@ import {
 import { ChatMessageBase, MentionCandidate } from '../api'
 import { escapeRegExp, WORD_CHAR } from '../mentions'
 import { styledNameProps } from '../nameStyle'
+import { displayNameOf, useNicknamesVersion } from '../nicknames'
 import { DeliveryStatus, DELIVERY_STATUS_PRESENTATION } from '../outbox'
 import { QUICK_REACTIONS } from '../emoji'
 import Avatar from './Avatar'
@@ -227,6 +228,11 @@ export default function MessageList({
   // сразу зовёт startPendingDelete.
   const [confirmingDelete, setConfirmingDelete] = useState<ChatMessageBase | null>(null)
 
+  // Имена авторов подставляет displayNameOf — чистая функция, читающая стор
+  // никнеймов напрямую (хук на каждое сообщение в цикле не позовёшь).
+  // Подписка на версию стора перерисовывает ленту, когда никнейм поменяли.
+  useNicknamesVersion()
+
   // id сообщений в 10-секундном окне отмены — таймеры реального удаления
   // лежат в ref (не в стейте: сам по себе таймер не должен вызывать
   // перерисовку), а Set в стейте — только чтобы отрисовать затемнение/
@@ -341,7 +347,7 @@ export default function MessageList({
             <div className="message-body">
               {m.reply_to && (
                 <div className="message-reply-quote">
-                  <span className="message-reply-author">{m.reply_to.author.username}</span>
+                  <span className="message-reply-author">{displayNameOf(m.reply_to.author)}</span>
                   <span className="message-reply-content">{m.reply_to.content}</span>
                 </div>
               )}
@@ -355,7 +361,11 @@ export default function MessageList({
                   onMouseEnter={() => setHoveredAuthorRow(rowKey)}
                   onMouseLeave={() => setHoveredAuthorRow((prev) => (prev === rowKey ? null : prev))}
                 >
-                  {m.author.username}
+                  {/* Мой никнейм для автора, если он есть (см. nicknames.ts).
+                      Подписи с настоящим ником тут намеренно нет — в ленте
+                      она повторялась бы у каждого сообщения; её место в
+                      карточке и в списке друзей, где имя одно на человека. */}
+                  {displayNameOf(m.author)}
                 </span>
                 <span className="message-time">{formatTime(m.created_at)}</span>
                 {m.edited_at && <span className="message-edited">(изменено)</span>}

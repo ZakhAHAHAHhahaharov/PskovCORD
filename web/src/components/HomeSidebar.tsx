@@ -1,20 +1,17 @@
 import { useState, MouseEvent as ReactMouseEvent } from 'react'
 import { MessageCircle, Pin, Users, UserPlus, Check, X } from 'lucide-react'
 import { Conversation, FriendsState, User } from '../api'
+import { conversationDisplayName } from '../conversation'
+import { useNicknamesVersion } from '../nicknames'
+import { useUserStatuses } from '../presence'
 
 import Avatar from './Avatar'
 import SidebarBottomBar from './SidebarBottomBar'
+import UserName from './UserName'
 import { VoiceState } from './AppShell'
 import { VoiceRosterMember } from './VoiceStage'
 import { VoiceStatus } from './VoiceProvider'
 import { ProfilePopupUser } from './MiniProfilePopup'
-
-function conversationTitle(c: Conversation): string {
-  if (c.kind === 'group') {
-    return c.name || c.participants.map((p) => p.username).join(', ') || 'Группа'
-  }
-  return c.participants[0]?.username ?? 'Личное сообщение'
-}
 
 function conversationAvatar(c: Conversation): { name: string; color: string; image: string } {
   const first = c.participants[0]
@@ -48,6 +45,7 @@ export default function HomeSidebar({
   onOpenProfile,
   onOpenUserProfile,
   onConversationContextMenu,
+  onFriendContextMenu,
 }: {
   conversations: Conversation[]
   activeConversationId: number | null
@@ -74,9 +72,29 @@ export default function HomeSidebar({
   /** Правый клик по диалогу/группе — меню действий (см.
    * ConversationContextMenu); живёт на уровне AppShell, как и мини-профиль. */
   onConversationContextMenu: (c: Conversation, e: ReactMouseEvent) => void
+  /** Правый клик по строке друга — своё меню (см. FriendContextMenu), тоже с
+   * уровня AppShell. */
+  onFriendContextMenu: (friend: User, e: ReactMouseEvent) => void
 }) {
   const [tab, setTab] = useState<'conversations' | 'friends'>('conversations')
+  // Подвкладка списка друзей — второй ряд кнопок под «Диалоги»/«Друзья».
+  // Раньше на её месте был заголовок-категория «Друзья — N», который ничего
+  // не переключал: показывались сразу все, и найти в длинном списке того, кто
+  // сейчас в сети, было нечем.
+  const [friendsTab, setFriendsTab] = useState<'online' | 'all'>('online')
   const [addUsername, setAddUsername] = useState('')
+  // Заголовки диалогов считает conversationDisplayName — чистая функция,
+  // читающая стор никнеймов напрямую. Подписка на его версию заставляет
+  // список перерисоваться, когда никнейм поменяли: сами по себе
+  // conversations при этом не меняются.
+  useNicknamesVersion()
+
+  // Статусы друзей — по ним и фильтруется подвкладка «В сети» (см. presence.ts).
+  const friendStatuses = useUserStatuses(friends.friends.map((f) => f.id))
+  const onlineFriends = friends.friends.filter(
+    (f) => (friendStatuses.get(f.id) ?? 'offline') !== 'offline',
+  )
+  const shownFriends = friendsTab === 'online' ? onlineFriends : friends.friends
 
   // Закреплённые — всегда вверху, внутри каждой группы порядок остаётся тем,
   // что пришёл с сервера (по времени создания). Сортируем копию: пропсы
@@ -139,9 +157,18 @@ export default function HomeSidebar({
                   onConversationContextMenu(c, e)
                 }}
               >
-                <Avatar name={av.name} color={av.color} image={av.image} size={32} />
+                {/* Точка статуса — только у лички: у группы аватар общий, и
+                    чей статус он бы показывал, непонятно. */}
+                <Avatar
+                  name={av.name}
+                  color={av.color}
+                  image={av.image}
+                  size={32}
+                  userId={c.kind === 'dm' ? c.participants[0]?.id : undefined}
+                  showStatus={c.kind === 'dm' && !!c.participants[0]}
+                />
                 <div className="member-info">
-                  <span className="member-name">{conversationTitle(c)}</span>
+                  <span className="member-name">{conversationDisplayName(c)}</span>
                   {c.last_message && (
                     <span className="member-voice">{c.last_message.content.slice(0, 42)}</span>
                   )}
@@ -185,6 +212,8 @@ export default function HomeSidebar({
                       color={r.user.avatar_color}
                       image={r.user.avatar_image}
                       size={28}
+                      userId={r.user.id}
+                      showStatus
                     />
                     <span className="member-name">{r.user.username}</span>
                   </button>
@@ -226,6 +255,8 @@ export default function HomeSidebar({
                       color={r.user.avatar_color}
                       image={r.user.avatar_image}
                       size={28}
+                      userId={r.user.id}
+                      showStatus
                     />
                     <span className="member-name dim">{r.user.username}</span>
                   </button>
@@ -244,19 +275,46 @@ export default function HomeSidebar({
             </>
           )}
 
-          <div className="member-category">Друзья — {friends.friends.length}</div>
+          <div className="home-subtabs">
+            <button
+              type="button"
+              className={`home-tab ${friendsTab === 'online' ? 'active' : ''}`}
+              onClick={() => setFriendsTab('online')}
+            >
+              В сети <span className="home-tab-count">{onlineFriends.length}</span>
+            </button>
+            <button
+              type="button"
+              className={`home-tab ${friendsTab === 'all' ? 'active' : ''}`}
+              onClick={() => setFriendsTab('all')}
+            >
+              Все <span className="home-tab-count">{friends.friends.length}</span>
+            </button>
+          </div>
+
           {friends.friends.length === 0 && (
             <div className="home-empty">Пока нет друзей — добавь по нику выше.</div>
           )}
-          {friends.friends.map((f) => (
+          {friends.friends.length > 0 && shownFriends.length === 0 && (
+            <div className="home-empty">Сейчас никого нет в сети.</div>
+          )}
+          {shownFriends.map((f) => (
             <div key={f.id} className="friend-row">
               <button
                 type="button"
                 className="member-row"
                 onClick={(e) => onOpenUserProfile(f, e)}
+                onContextMenu={(e) => onFriendContextMenu(f, e)}
               >
-                <Avatar name={f.username} color={f.avatar_color} image={f.avatar_image} size={28} />
-                <span className="member-name">{f.username}</span>
+                <Avatar
+                  name={f.username}
+                  color={f.avatar_color}
+                  image={f.avatar_image}
+                  size={28}
+                  userId={f.id}
+                  showStatus
+                />
+                <UserName user={f} className="member-name" />
               </button>
             </div>
           ))}

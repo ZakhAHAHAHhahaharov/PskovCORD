@@ -98,7 +98,14 @@ export default function ServerInviteModal({
                 disabled={sent || sendingId === p.id}
                 onClick={() => invite(p)}
               >
-                <Avatar name={p.username} color={p.avatar_color} image={p.avatar_image} size={28} />
+                <Avatar
+                  name={p.username}
+                  color={p.avatar_color}
+                  image={p.avatar_image}
+                  size={28}
+                  userId={p.id}
+                  showStatus
+                />
                 <span className="member-name">{p.username}</span>
                 <span className="invite-person-action">
                   {sent ? (

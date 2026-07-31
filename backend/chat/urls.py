@@ -76,7 +76,11 @@ urlpatterns = [
     path("users/<int:user_id>/note", views.UserNote.as_view(), name="user-note"),
     path("users/<int:user_id>/relation",
          views.UserRelation.as_view(), name="user-relation"),
+    path("users/<int:user_id>/nickname",
+         views.UserNickname.as_view(), name="user-nickname"),
     path("relations", views.MyRelations.as_view(), name="my-relations"),
+    path("nicknames", views.MyNicknames.as_view(), name="my-nicknames"),
+    path("presence", views.PresenceView.as_view(), name="presence"),
 
     path("conversations", views.ConversationListCreate.as_view(), name="conversation-list"),
     path("conversations/<int:conversation_id>",

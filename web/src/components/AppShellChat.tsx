@@ -8,6 +8,7 @@ import type { useParticipantContextMenu } from '../hooks/useParticipantContextMe
 import type { useServerData } from '../hooks/useServerData'
 import type { useVoiceCall } from '../hooks/useVoiceCall'
 import { conversationDisplayName } from '../conversation'
+import { useNicknamesVersion } from '../nicknames'
 import { ComposerDraft } from '../drafts'
 import { outbox, pendingAsMessage, PendingMessage } from '../outbox'
 import MessageList from './MessageList'
@@ -59,6 +60,10 @@ export default function AppShellChat({
     blockedUserIds.size === 0 ? list : list.filter((m) => !blockedUserIds.has(m.author.id))
   // Панель закреплённых — под кнопкой в шапке текстового канала.
   const [pinsOpen, setPinsOpen] = useState(false)
+  // Имя собеседника в шапке считает conversationDisplayName из стора
+  // никнеймов — подписка на его версию перерисовывает шапку при смене
+  // никнейма (сам activeConversation при этом не меняется).
+  useNicknamesVersion()
 
   return (
     <>

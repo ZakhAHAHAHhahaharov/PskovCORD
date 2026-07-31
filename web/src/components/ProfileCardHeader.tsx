@@ -4,6 +4,7 @@ import { NameStyleSource, styledNameProps } from '../nameStyle'
 import Avatar from './Avatar'
 import ImageHoverMenu from './ImageHoverMenu'
 import InlineEditableText from './InlineEditableText'
+import ScrollingText from './ScrollingText'
 import StatusBubble from './StatusBubble'
 
 const PRONOUN_SUGGESTIONS = [
@@ -47,6 +48,7 @@ export default function ProfileCardHeader({
   customStatusEmoji,
   pronouns,
   nameStyle,
+  originalName = '',
   edit,
 }: {
   username: string
@@ -75,6 +77,10 @@ export default function ProfileCardHeader({
    * выбранный стиль должен быть виден сразу в поле ввода имени, не только
    * после сохранения/в других местах приложения. */
   nameStyle?: NameStyleSource
+  /** Настоящий ник человека, когда имя над ним — МОЙ никнейм для него (см.
+   * nicknames.ts). Подписывается справа от имени в форме `username*` тем же
+   * шрифтом, что и строка username ниже. Пусто — подписи нет вовсе. */
+  originalName?: string
   edit?: {
     onEditAvatar: () => void
     onRemoveAvatar: () => void
@@ -219,6 +225,20 @@ export default function ProfileCardHeader({
             maxLength={64}
             onSave={edit.onSaveDisplayName}
           />
+        ) : originalName ? (
+          // Имя + подпись с настоящим ником. В карточке они делят одну
+          // строку, и вместе часто не влезают в её ширину — тогда пара едет
+          // бегущей строкой (см. ScrollingText), а не обрезается: обрезка
+          // съела бы ровно подпись, ради которой всё и затевалось.
+          <ScrollingText className="profile-card-name-line" measureKey={`${displayName}|${originalName}`}>
+            <span
+              className={`profile-card-name ${nameStyle ? styledNameProps(nameStyle).className : ''}`}
+              style={nameStyle ? styledNameProps(nameStyle).style : undefined}
+            >
+              {displayName || username}
+            </span>
+            <span className="profile-card-original-name">{originalName}*</span>
+          </ScrollingText>
         ) : (
           <span
             className={`profile-card-name ${nameStyle ? styledNameProps(nameStyle).className : ''}`}

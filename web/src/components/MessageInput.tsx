@@ -483,7 +483,14 @@ export default function MessageInput({
               onMouseEnter={() => setMentionActiveIndex(i)}
               onClick={() => applyMention(c)}
             >
-              <Avatar name={c.username} color={c.avatar_color} image={c.avatar_image} size={22} />
+              <Avatar
+                name={c.username}
+                color={c.avatar_color}
+                image={c.avatar_image}
+                size={22}
+                userId={c.id}
+                showStatus
+              />
               <span className="mention-popup-name">{c.username}</span>
             </button>
           ))}

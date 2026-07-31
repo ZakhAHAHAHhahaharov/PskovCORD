@@ -10,6 +10,7 @@ import { useParticipantContextMenu } from '../hooks/useParticipantContextMenu'
 import { useServerData } from '../hooks/useServerData'
 import { useUserRelations } from '../hooks/useUserRelations'
 import { useConversationContextMenu } from '../hooks/useConversationContextMenu'
+import { useFriendContextMenu } from '../hooks/useFriendContextMenu'
 import { useVoiceCall } from '../hooks/useVoiceCall'
 import { ChatMessageBase } from '../api'
 import { useAuth } from '../auth'
@@ -166,6 +167,14 @@ export default function AppShell() {
     setFriends,
   })
 
+  const friendMenu = useFriendContextMenu({
+    setConversations,
+    setActiveConversationId,
+    setServerId,
+    onStartCall: (conversationId) => voiceCall.handleDmVoiceJoin(conversationId),
+    onOpenProfile: (friend, x, y) => setProfilePopup({ user: friend, x, y }),
+  })
+
   const channelMessages = useChannelMessages(currentChannel, channelId, gateway, pendingEditsRef)
   const { setMessages, messagesRef } = channelMessages
 
@@ -263,6 +272,7 @@ export default function AppShell() {
         openProfilePopup={openProfilePopup}
         onOpenProfile={() => setShowProfile(true)}
         onConversationContextMenu={conversationMenu.openConversationContextMenu}
+        onFriendContextMenu={friendMenu.openFriendContextMenu}
       />
 
       <AppShellChat
@@ -305,6 +315,7 @@ export default function AppShell() {
         profilePopup={profilePopup}
         setProfilePopup={setProfilePopup}
         conversationMenu={conversationMenu}
+        friendMenu={friendMenu}
         servers={servers}
       />
     </div>

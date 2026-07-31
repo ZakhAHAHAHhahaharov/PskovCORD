@@ -12,6 +12,8 @@ import {
 import { api, NameEffect } from '../api'
 import { loadAvatarAnimation } from '../avatarAnim'
 import { useEscToClose } from '../modalStack'
+import { useNickname } from '../nicknames'
+import { useUserStatus } from '../presence'
 import ProfileCardHeader from './ProfileCardHeader'
 import InlineEditableText from './InlineEditableText'
 
@@ -81,6 +83,16 @@ export default function MiniProfilePopup({
   const [copied, setCopied] = useState(false)
   const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const { user } = target
+  // Мой никнейм для этого человека (см. nicknames.ts) — в карточке он встаёт
+  // на место имени, а настоящий ник уходит в подпись справа от него.
+  const nickname = useNickname(user.id)
+  // Точка статуса — из общего стора (см. presence.ts). ProfilePopupUser.status
+  // сюда приезжает из UserSerializer, а там это ВЫБРАННЫЙ статус человека, а
+  // не эффективный: у неподключённого он так и остаётся "online", и карточка
+  // рисовала зелёную точку офлайновому собеседнику. Для своего же профиля
+  // остаётся выбранный — там смысл ровно обратный, показать "невидимку"
+  // самому себе.
+  const peerStatus = useUserStatus(user.id)
 
   const handleAddFriend = async () => {
     if (addStatus !== 'idle') return
@@ -242,7 +254,8 @@ export default function MiniProfilePopup({
     >
       <ProfileCardHeader
         username={user.username}
-        displayName={user.display_name || ''}
+        displayName={nickname || user.display_name || ''}
+        originalName={nickname ? user.username : ''}
         avatarColor={user.avatar_color}
         avatarImage={user.avatar_image}
         userId={user.id}
@@ -250,7 +263,7 @@ export default function MiniProfilePopup({
         bannerGradient={bannerGradient}
         bannerImage={bannerImage}
         bannerColor={bannerColor}
-        status={user.status}
+        status={isSelf ? user.status : peerStatus}
         customStatus={card?.customStatus || ''}
         customStatusEmoji={card?.customStatusEmoji || ''}
         pronouns={card?.pronouns || ''}
