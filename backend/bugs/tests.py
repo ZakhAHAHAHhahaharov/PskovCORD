@@ -59,10 +59,40 @@ class FingerprintTests(TestCase):
 
     def test_bundle_hash_ignored(self):
         """После новой сборки хеш в имени файла другой — группа должна
-        остаться прежней, иначе каждая выкатка обнуляла бы статистику."""
-        a = fingerprint.compute("js_runtime", "Boom", "at f (/assets/index-aaaa1111.js:5:1)")
-        b = fingerprint.compute("js_runtime", "Boom", "at f (/assets/index-bbbb2222.js:5:1)")
+        остаться прежней, иначе каждая выкатка обнуляла бы статистику.
+
+        Хеши здесь — НАСТОЯЩИЕ, из реальной сборки этого проекта. Раньше в
+        тесте стояли выдуманные `index-aaaa1111.js`, они оказались
+        шестнадцатеричными, тест проходил — а Vite клеит base64url
+        (`index-C6BpG4jH.js`), и на нём всё разваливалось.
+        """
+        a = fingerprint.compute("js_runtime", "Boom", "at f (/assets/index-C6BpG4jH.js:5:1)")
+        b = fingerprint.compute("js_runtime", "Boom", "at f (/assets/index-CFU_Kdi6.js:5:1)")
         self.assertEqual(a, b)
+
+    def test_bundle_hash_ignored_in_absolute_url(self):
+        """В проде фреймы приезжают с полным URL, в деве — с относительным
+        путём; хеш должен вычищаться в обоих случаях."""
+        a = fingerprint.compute(
+            "js_runtime", "Boom", "at f (https://pskord.zlgvpn.org/assets/app-B6ZICevU.js:5:1)")
+        b = fingerprint.compute(
+            "js_runtime", "Boom", "at f (https://pskord.zlgvpn.org/assets/app-DTcAKEUL.js:9:4)")
+        self.assertEqual(a, b)
+
+    def test_different_files_still_stay_apart(self):
+        """Вычистка хеша не должна склеивать РАЗНЫЕ файлы — иначе ошибки из
+        несвязанных модулей попадали бы в одну группу."""
+        a = fingerprint.compute("js_runtime", "Boom", "at f (/assets/index-C6BpG4jH.js:5:1)")
+        b = fingerprint.compute("js_runtime", "Boom", "at f (/assets/vendor-C6BpG4jH.js:5:1)")
+        self.assertNotEqual(a, b)
+
+    def test_hyphenated_source_names_not_mistaken_for_hashes(self):
+        """Имя файла из строчных букв длиной 8+ под правило вычистки хеша
+        подходило бы по одной длине — и два несвязанных модуля склеились бы
+        в одну группу. Спасает требование смешанного регистра."""
+        a = fingerprint.compute("js_runtime", "Boom", "at f (/src/bug-reporting.js:5:1)")
+        b = fingerprint.compute("js_runtime", "Boom", "at f (/src/bug-conversation.js:5:1)")
+        self.assertNotEqual(a, b)
 
     def test_top_frame_skips_vendor_frames(self):
         stack = (

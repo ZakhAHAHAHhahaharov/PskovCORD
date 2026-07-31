@@ -24,6 +24,20 @@ _NUM = re.compile(r"\d+")
 _QUOTED = re.compile(r"(['\"])(?:(?!\1).){0,200}\1")
 _LINECOL = re.compile(r":\d+:\d+\)?$")
 _URL = re.compile(r"https?://[^\s)]+")
+# Хеш в имени файла сборки: Vite клеит его как `index-C6BpG4jH.js`. Именно
+# base64url-алфавит, а НЕ hex — на это уже наступили: _HEX ниже такие хеши не
+# ловит, и каждая выкатка заводила бы новый набор групп на те же самые
+# ошибки, обнуляя всю накопленную статистику.
+#
+# Два условия в предпросмотре обязательны. Длины мало: под «8+ символов из
+# [A-Za-z0-9_-]» подходит и обычное имя файла (`my-component.js`), и такие
+# схлопнулись бы в одну группу с любым другим столь же длинным именем.
+# Поэтому требуем СМЕШАННЫЙ регистр — он есть у любого base64url-хеша и не
+# бывает у словарного имени. Хеши из строчных hex-символов ловит _HEX ниже.
+_ASSET_HASH = re.compile(
+    r"-(?=[A-Za-z0-9_-]*[a-z])(?=[A-Za-z0-9_-]*[A-Z])"
+    r"[A-Za-z0-9_-]{8,}(\.(?:js|mjs|cjs|css))"
+)
 
 
 def normalize_message(message: str) -> str:
@@ -31,6 +45,7 @@ def normalize_message(message: str) -> str:
     почти всегда лежит конкретное значение («Cannot read 'avatar_image'»),
     и группировать по нему — значит плодить по группе на каждое поле."""
     text = _QUOTED.sub("'?'", message)
+    text = _ASSET_HASH.sub(r"-<hash>\1", text)
     text = _URL.sub("<url>", text)
     text = _UUID.sub("<uuid>", text)
     text = _HEX.sub("<hex>", text)
@@ -53,6 +68,10 @@ def top_frame(stack: str) -> str:
         if "node_modules" in line or "<anonymous>" in line:
             continue
         line = _LINECOL.sub("", line)
+        # Хеш сборки — ДО _URL: во фрейме путь бывает и абсолютным
+        # (https://…/assets/index-C6BpG4jH.js), и относительным
+        # (/assets/index-C6BpG4jH.js), и второй под _URL не подпадает вовсе.
+        line = _ASSET_HASH.sub(r"-<hash>\1", line)
         line = _URL.sub("<url>", line)
         line = _HEX.sub("<hex>", line)
         return line[:200]
