@@ -478,7 +478,10 @@ export interface ConversationMessage extends ChatMessageBase {
 }
 
 // Пусто => same-origin (относительные запросы). Для dev задаётся в web/.env.
-const API: string = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
+// Экспортируется, потому что мимо самого api() тоже есть запросы — отправка
+// отчётов об ошибках (errorTransport.ts) шлёт свой fetch, и без общей базы в
+// dev она уходила бы на Vite (5173) вместо бэкенда.
+export const API: string = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
 
 let accessToken: string | null = localStorage.getItem('access')
 // Раньше refresh-токен приходил с логина и молча выбрасывался: механизма
@@ -1190,4 +1193,18 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ nickname }),
     }),
+
+  /** Обращение из формы в правом нижнем углу. recent_errors — последние
+   * пойманные у этого человека ошибки (см. errorTransport.recentErrors):
+   * сервер сам сведёт их с известными группами, поэтому уходит сырой текст,
+   * а не идентификаторы. */
+  createBugReport: (data: {
+    description: string
+    steps: string
+    route: string
+    platform: string
+    app_version: string
+    recent_errors: { kind: string; message: string; stack?: string }[]
+  }): Promise<{ id: number }> =>
+    req('/api/bug-reports', { method: 'POST', body: JSON.stringify(data) }),
 }
