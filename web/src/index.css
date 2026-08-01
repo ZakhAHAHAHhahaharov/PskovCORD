@@ -7423,3 +7423,125 @@ button.settings-row-clickable:hover .settings-row-label {
     grid-template-columns: 1fr;
   }
 }
+
+/* ---- кнопка «сообщить о проблеме» и её форма ---- */
+
+/* z-index 80 — НИЖЕ модального оверлея (100) намеренно: открытый диалог
+   накрывает кнопку своим затемнением сам, и не нужно отслеживать каждый
+   попап/лайтбокс по отдельности, чтобы её прятать. */
+.bug-report-fab {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 80;
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border-color);
+  border-radius: 50%;
+  background: var(--surface-2);
+  color: var(--text-muted);
+  cursor: pointer;
+  /* Приглушена, пока на неё не навели: кнопка висит поверх приложения
+     постоянно, и в полную силу она бы всё время перетягивала внимание на
+     себя в интерфейсе, где её ждут раз в месяц. */
+  opacity: 0.45;
+  transition: opacity 0.15s, color 0.15s, background 0.15s;
+}
+
+.bug-report-fab:hover,
+.bug-report-fab:focus-visible {
+  opacity: 1;
+  color: var(--text-normal);
+  background: var(--input-secondary-bg);
+}
+
+.bug-report-modal {
+  width: min(520px, 100%);
+  text-align: left;
+}
+
+.bug-report-label {
+  display: block;
+  margin: 14px 0 6px;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  color: var(--text-muted);
+}
+
+.bug-report-optional {
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--text-faint);
+}
+
+.bug-report-input {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--input-border);
+  border-radius: 6px;
+  background: var(--input-bg);
+  color: var(--text-normal);
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 1.4;
+  resize: vertical;
+}
+
+.bug-report-input:focus {
+  outline: none;
+  border-color: var(--blurple);
+}
+
+.bug-report-hint {
+  margin: 14px 0 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-faint);
+}
+
+.bug-report-error {
+  margin: 12px 0 0;
+  font-size: 13px;
+  color: var(--red);
+}
+
+.bug-report-done {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 0 4px;
+  text-align: center;
+  color: var(--green);
+}
+
+.bug-report-done .modal-title {
+  margin: 0;
+  color: var(--text-normal);
+}
+
+.bug-report-done .bug-report-hint {
+  margin: 0 0 8px;
+}
+
+@media (max-width: 768px) {
+  /* Выше поля ввода сообщения: на мобильной раскладке композер занимает всю
+     нижнюю полосу. Отступ считается от его НАСТОЯЩЕЙ высоты (переменную
+     ведёт BugReportButton), а не фиксированный: композер растёт при наборе,
+     и с постоянным отступом кнопка уезжала под него уже на третьей строке —
+     проверено замером, наезд был 40px. 32px — собственный нижний отступ
+     композера (24, тоже замерен: с 24 кнопка вставала вплотную, зазор 0)
+     плюс 8px просвета. */
+  .bug-report-fab {
+    right: 10px;
+    bottom: calc(var(--composer-height, 0px) + 32px);
+    width: 36px;
+    height: 36px;
+  }
+}

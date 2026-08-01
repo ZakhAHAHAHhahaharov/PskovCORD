@@ -1176,4 +1176,17 @@ export const api = {
     conversationId: number,
   ): Promise<{ sfu_url: string; sfu_token: string; ttl: number }> =>
     req(`/api/conversations/${conversationId}/voice-credentials`, { method: 'POST' }),
+  /** Обращение из формы в правом нижнем углу. recent_errors — последние
+   * пойманные у этого человека ошибки (см. errorTransport.recentErrors):
+   * сервер сам сведёт их с известными группами, поэтому уходит сырой текст,
+   * а не идентификаторы. */
+  createBugReport: (data: {
+    description: string
+    steps: string
+    route: string
+    platform: string
+    app_version: string
+    recent_errors: { kind: string; message: string; stack?: string }[]
+  }): Promise<{ id: number }> =>
+    req('/api/bug-reports', { method: 'POST', body: JSON.stringify(data) }),
 }
