@@ -26,6 +26,7 @@ export function useConversationContextMenu({
   setBlockedUserIds,
   setIgnoredUserIds,
   setFriends,
+  navigateToContent,
 }: {
   conversations: Conversation[]
   setConversations: React.Dispatch<React.SetStateAction<Conversation[]>>
@@ -38,6 +39,9 @@ export function useConversationContextMenu({
   setBlockedUserIds: React.Dispatch<React.SetStateAction<Set<number>>>
   setIgnoredUserIds: React.Dispatch<React.SetStateAction<Set<number>>>
   setFriends: React.Dispatch<React.SetStateAction<FriendsState>>
+  /** Переход в content-экран на мобилке (см. useMobileNav) — как при клике
+   * по строке беседы, так и при «Написать сообщение» из её меню. */
+  navigateToContent: () => void
 }) {
   const [menuTarget, setMenuTarget] = useState<ConversationMenuTarget | null>(null)
   const [error, setError] = useState('')
@@ -52,6 +56,16 @@ export function useConversationContextMenu({
   )
 
   const closeMenu = useCallback(() => setMenuTarget(null), [])
+
+  /** «Написать сообщение» — беседа из этого меню уже существует, поэтому
+   * просто переключаемся на неё, как и при клике по самой строке. */
+  const handleSendMessage = useCallback(
+    (conversation: Conversation) => {
+      setActiveConversationId(conversation.id)
+      navigateToContent()
+    },
+    [setActiveConversationId, navigateToContent],
+  )
 
   /** «Пометить как прочитанное» — непрочитанность живёт только на клиенте
    * (сервер её не хранит, см. useConversationsData), поэтому и снимается
@@ -163,7 +177,7 @@ export function useConversationContextMenu({
   return {
     menuTarget, closeMenu, openConversationContextMenu,
     conversationMenuError: error, clearConversationMenuError: () => setError(''),
-    handleMarkRead, handleTogglePin, handleCloseConversation,
+    handleMarkRead, handleTogglePin, handleCloseConversation, handleSendMessage,
     handleInviteToServer, handleRemoveFriend, handleRelationChange,
     handleStartCall: onStartCall, handleOpenPeerProfile: onOpenProfile,
   }

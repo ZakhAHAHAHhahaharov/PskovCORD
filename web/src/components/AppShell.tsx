@@ -165,12 +165,16 @@ export default function AppShell() {
     setBlockedUserIds,
     setIgnoredUserIds,
     setFriends,
+    navigateToContent,
   })
 
   const friendMenu = useFriendContextMenu({
     setConversations,
     setActiveConversationId,
     setServerId,
+    setFriends,
+    setBlockedUserIds,
+    setIgnoredUserIds,
     onStartCall: (conversationId) => voiceCall.handleDmVoiceJoin(conversationId),
     onOpenProfile: (friend, x, y) => setProfilePopup({ user: friend, x, y }),
   })

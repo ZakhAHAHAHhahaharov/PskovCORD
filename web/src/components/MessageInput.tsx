@@ -10,6 +10,7 @@ import {
 import { ComposerDraft } from '../drafts'
 import Avatar from './Avatar'
 import EmojiPicker, { EmojiPickerAnchor } from './EmojiPicker'
+import { useNickname } from '../nicknames'
 
 export interface MessageInputPrefill {
   /** Меняется при каждом запросе на подстановку, даже если text тот же самый
@@ -121,6 +122,7 @@ export default function MessageInput({
    * диалога/группы, кому принадлежит это конкретное поле ввода. */
   mentionCandidates?: MentionCandidate[]
 }) {
+  const replyAuthorNickname = useNickname(replyTarget?.author.id)
   const restored = draftKey && loadDraft ? loadDraft(draftKey) : undefined
   const [value, setValue] = useState(() => restored?.text ?? '')
   const [staged, setStaged] = useState<StagedFile[]>(() =>
@@ -510,7 +512,7 @@ export default function MessageInput({
         replyTarget && (
           <div className="reply-banner">
             <span className="reply-banner-text">
-              Ответ пользователю <b>{replyTarget.author.username}</b>: {replyTarget.content}
+              Ответ пользователю <b>{replyAuthorNickname || replyTarget.author.username}</b>: {replyTarget.content}
             </span>
             <button className="reply-banner-cancel" title="Отменить ответ" onClick={onCancelReply}>
               <X size={14} />

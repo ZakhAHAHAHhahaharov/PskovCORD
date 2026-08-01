@@ -26,6 +26,7 @@ import { useSettings } from '../settings'
 import { useVoice } from '../voice'
 import { useLongPress } from '../hooks/useLongPress'
 import { maskName, useHiddenNames } from '../hiddenNames'
+import { nicknameStore, useNickname, useNicknamesVersion } from '../nicknames'
 
 /** Document Picture-in-Picture (Chromium 116+) — в lib.dom его ещё нет.
  * Именно он, а не video.requestPictureInPicture, умеет вынести в плавающее
@@ -151,6 +152,7 @@ function ParticipantTile({
   deafened,
   onExpand,
   onContextMenu,
+  allowNickname = true,
 }: {
   member: VoiceRosterMember
   speaking: boolean
@@ -162,6 +164,10 @@ function ParticipantTile({
   onExpand: () => void
   /** Правый клик — контекстное меню участника (см. AppShell), нет у себя самого. */
   onContextMenu?: (e: ReactMouseEvent) => void
+  /** false при «Скрыть имена» (см. namesHidden выше) — мой никнейм тоже
+   * раскрывал бы личность за маскированным именем, а весь смысл маскировки
+   * ровно в том, чтобы её не раскрывать. */
+  allowNickname?: boolean
 }) {
   // Long-press — тач-аналог правого клика выше, тот же колбэк: он читает
   // только .clientX/.clientY (см. AppShell.openParticipantContextMenu), так
@@ -169,6 +175,8 @@ function ParticipantTile({
   const longPress = useLongPress((point) => {
     onContextMenu?.(point as unknown as ReactMouseEvent)
   })
+  const nickname = useNickname(member.id)
+  const displayName = (allowNickname && nickname) || member.username
   return (
     <div
       // Индикатор "говорит" — зелёная рамка ВСЕЙ карточки (а не кольцо
@@ -198,7 +206,7 @@ function ParticipantTile({
           действие, что и у остальной карточки (onExpand), а не отдельное. */}
       <div className="avatar-trigger">
         <Avatar
-          name={member.username}
+          name={displayName}
           color={member.avatar_color}
           image={member.avatar_image}
           size={72}
@@ -218,7 +226,7 @@ function ParticipantTile({
         className={`participant-tile-name ${styledNameProps(member).className}`}
         style={styledNameProps(member).style}
       >
-        {member.username}
+        {displayName}
         {muted && (
           <span title="Микрофон выключен">
             <MicOff size={12} />
@@ -377,6 +385,11 @@ export default function VoiceStage({
     unwatchScreen,
   } = useVoice()
   const { isHidden } = useHiddenNames()
+  // Подписка на ЛЮБОЕ изменение никнеймов (см. nicknames.ts) — ниже они
+  // читаются напрямую из стора (nicknameStore.get), а не через useNickname,
+  // потому что читаются внутри nameOf() для переменного числа участников, а
+  // не в теле компонента на верхнем уровне (хуки так вызывать нельзя).
+  useNicknamesVersion()
   // «Скрыть имена» — только для голосовых каналов сервера (см.
   // ChannelContextMenu), у звонков в личке/группе такого пункта меню нет.
   const namesHidden = roomKind === 'channel' && isHidden(Number(roomId))
@@ -598,8 +611,17 @@ export default function VoiceStage({
   // (виден даже если мы ещё не забрали их producer через SFU).
   const sharingOthers = displayRoster.filter((m) => m.id !== selfUserId && m.sharing_screen)
 
-  const nameOf = (uid: number) =>
-    displayRoster.find((m) => m.id === uid)?.username ?? `Участник ${uid}`
+  const nameOf = (uid: number) => {
+    const member = displayRoster.find((m) => m.id === uid)
+    if (!member) return `Участник ${uid}`
+    // При «Скрыть имена» никнейм тоже раскрывал бы личность за маской —
+    // см. тот же приём в allowNickname у ParticipantTile.
+    if (!namesHidden) {
+      const nickname = nicknameStore.get(uid)
+      if (nickname) return nickname
+    }
+    return member.username
+  }
 
   // Сколько всего тайлов в сетке (участники + свой показ + чужие демки) —
   // от этого и от размера контейнера зависят число колонок и ширина тайлов
@@ -638,6 +660,7 @@ export default function VoiceStage({
         speaking={speakingUserIds.has(m.id)}
         muted={m.id === selfUserId ? selfMuted : m.muted}
         deafened={m.id === selfUserId ? deafened : m.deafened}
+        allowNickname={!namesHidden}
         onExpand={() => setExpanded({ userId: m.id, mode: 'participant' })}
         onContextMenu={
           m.id !== selfUserId && onParticipantContextMenu
@@ -665,7 +688,7 @@ export default function VoiceStage({
       return (
         <ScreenPreviewTile
           key={`s-${m.id}`}
-          username={m.username}
+          username={nameOf(m.id)}
           stream={stream}
           own={false}
           deafened={deafened}
@@ -771,7 +794,7 @@ export default function VoiceStage({
               ) : (
                 <div className="participant-expanded">
                   <Avatar
-                    name={expandedMember?.username ?? nameOf(expanded.userId)}
+                    name={nameOf(expanded.userId)}
                     color={expandedMember?.avatar_color ?? '#5865f2'}
                     image={expandedMember?.avatar_image ?? ''}
                     size={200}
@@ -952,6 +975,9 @@ function VoiceLanding({
   onJoin: () => void
   onOpenProfile: (user: ProfilePopupUser, e: ReactMouseEvent) => void
 }) {
+  // Подписка на изменения никнеймов — читаем их напрямую из стора ниже (см.
+  // тот же приём и объяснение в VoiceStage/nameOf).
+  useNicknamesVersion()
   return (
     <div className="voice-landing">
       <div className="voice-landing-icon">
@@ -960,17 +986,20 @@ function VoiceLanding({
       <h2 className="voice-landing-title">{roomName}</h2>
       {roster.length > 0 ? (
         <div className="voice-landing-members">
-          {roster.map((m) => (
-            <button
-              key={m.id}
-              type="button"
-              className="voice-landing-member"
-              title={m.username}
-              onClick={(e) => onOpenProfile(m, e)}
-            >
-              <Avatar name={m.username} color={m.avatar_color} image={m.avatar_image} size={40} />
-            </button>
-          ))}
+          {roster.map((m) => {
+            const name = nicknameStore.get(m.id) || m.username
+            return (
+              <button
+                key={m.id}
+                type="button"
+                className="voice-landing-member"
+                title={name}
+                onClick={(e) => onOpenProfile(m, e)}
+              >
+                <Avatar name={name} color={m.avatar_color} image={m.avatar_image} size={40} />
+              </button>
+            )
+          })}
         </div>
       ) : (
         <p className="voice-landing-empty">Сейчас в голосовом канале никого нет</p>

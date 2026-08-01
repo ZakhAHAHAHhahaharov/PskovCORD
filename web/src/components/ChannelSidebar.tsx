@@ -12,6 +12,7 @@ import { VoiceState } from './AppShell'
 import { VoiceStatus } from './VoiceProvider'
 import { useLongPress } from '../hooks/useLongPress'
 import { maskName, useHiddenNames } from '../hiddenNames'
+import { nicknameStore, useNickname, useNicknamesVersion } from '../nicknames'
 
 const COLLAPSED_KEY = 'collapsedChannelCategories'
 
@@ -69,25 +70,31 @@ function VoiceStackedAvatars({
   members: Member[]
   speakingUserIds: Set<number>
 }) {
+  // Подписка на изменения никнеймов — читаем их напрямую из стора ниже, т.к.
+  // список участников переменной длины (см. тот же приём в VoiceStage.nameOf).
+  useNicknamesVersion()
   const MAX = 5
   const shown = inChannel.slice(0, MAX)
   const rest = inChannel.length - shown.length
   return (
     <span className="voice-stack">
-      {shown.map((m) => (
-        <span className="voice-stack-item" key={m.id} title={m.username}>
-          <Avatar
-            name={m.username}
-            color={m.avatar_color}
-            image={m.avatar_image}
-            size={24}
-            speaking={speakingUserIds.has(m.id)}
-            userId={m.id}
-            animated={m.avatar_animated}
-            playAnimation={speakingUserIds.has(m.id)}
-          />
-        </span>
-      ))}
+      {shown.map((m) => {
+        const name = nicknameStore.get(m.id) || m.username
+        return (
+          <span className="voice-stack-item" key={m.id} title={name}>
+            <Avatar
+              name={name}
+              color={m.avatar_color}
+              image={m.avatar_image}
+              size={24}
+              speaking={speakingUserIds.has(m.id)}
+              userId={m.id}
+              animated={m.avatar_animated}
+              playAnimation={speakingUserIds.has(m.id)}
+            />
+          </span>
+        )
+      })}
       {rest > 0 && <span className="voice-stack-rest">+{rest}</span>}
     </span>
   )
@@ -128,6 +135,11 @@ function VoiceUserRow({
     if (!canOpenMenu) return
     onParticipantContextMenu!(m, point as unknown as ReactMouseEvent, { kind: 'channel', id: channelId })
   })
+  // При «Скрыть имена» никнейм не подставляем — та же причина, что и у
+  // allowNickname в VoiceStage.ParticipantTile: он раскрывал бы личность за
+  // маской.
+  const nickname = useNickname(m.id)
+  const displayName = (!masked && nickname) || (masked ? maskName(m.username) : m.username)
   return (
     <button
       type="button"
@@ -144,7 +156,7 @@ function VoiceUserRow({
       {...(canOpenMenu ? longPress : {})}
     >
       <Avatar
-        name={m.username}
+        name={displayName}
         color={m.avatar_color}
         image={m.avatar_image}
         size={20}
@@ -159,12 +171,12 @@ function VoiceUserRow({
         className={`${speaking ? 'speaking' : ''} ${styledNameProps(m).className}`}
         style={styledNameProps(m).style}
       >
-        {masked ? maskName(m.username) : m.username}
+        {displayName}
       </span>
       {m.sharing_screen && (
         <span
           className="demo-badge"
-          title={`Смотреть демонстрацию экрана — ${masked ? maskName(m.username) : m.username}`}
+          title={`Смотреть демонстрацию экрана — ${displayName}`}
           onClick={(e) => {
             e.stopPropagation()
             onWatchScreen(m)
