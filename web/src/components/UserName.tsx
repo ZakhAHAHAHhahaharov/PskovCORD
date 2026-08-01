@@ -6,6 +6,9 @@ export interface UserNameSource extends NameStyleSource {
   id: number
   username: string
   display_name?: string
+  /** Никнейм на текущем сервере (см. Membership.nickname) — есть только у
+   * Member из ростера, у остальных источников имени его просто нет. */
+  server_nickname?: string
 }
 
 /**
@@ -33,7 +36,12 @@ export default function UserName({
 }) {
   const nickname = useNickname(user.id)
   const styled = styledNameProps(user)
-  const name = nickname || user.display_name || user.username
+  // Приоритет: мой приватный никнейм для этого человека → его никнейм на
+  // сервере (публичный, см. Membership.nickname) → его display_name → ник.
+  // Мой бьёт серверный по той же причине, по какой бьёт display_name: смысл
+  // приватного никнейма ровно в том, чтобы МОЁ название побеждало.
+  const name =
+    nickname || user.server_nickname || user.display_name || user.username
 
   const content = (
     <>

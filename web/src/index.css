@@ -5696,6 +5696,25 @@ button.settings-row-clickable:hover .settings-row-label {
 .srv-toggle-label {
   font-size: calc(14px * var(--font-scale, 1));
   color: var(--text-normal);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+/* Пометка «скоро» у прав, под которые ещё нет самой фичи (см. backend
+   chat.roles.UPCOMING_PERMISSIONS). Переключатель рабочий и сохраняется —
+   бейдж лишь честно говорит, что пока он ни на что не влияет. */
+.srv-toggle-badge {
+  font-size: calc(10px * var(--font-scale, 1));
+  line-height: 1;
+  padding: 3px 6px;
+  border-radius: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  background: var(--background-modifier-selected, rgba(127, 127, 127, 0.18));
+  white-space: nowrap;
 }
 
 .srv-toggle-hint {
@@ -6796,6 +6815,130 @@ button.settings-row-clickable:hover .settings-row-label {
 
 .channel-menu-status .invite-link-row {
   margin-top: 6px;
+}
+
+/* Пресеты медленного режима — сетка кнопок вместо выпадающего списка:
+   ступеней девять, и попасть в нужную одним кликом быстрее, чем открывать
+   select ради того же выбора. */
+.channel-menu-slowmode {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.channel-menu-slowmode-item {
+  width: 100%;
+  justify-content: center;
+}
+
+.channel-menu-slowmode-item.active {
+  background: var(--brand);
+  color: #fff;
+}
+
+/* Значки медленного режима/приватности в строке текстового канала. Первый
+   отжимается вправо, остальные встают рядом. */
+.channel-badge-icon {
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+
+.channel-badge-icon:first-of-type {
+  margin-left: auto;
+}
+
+.channel-menu-hint {
+  margin-top: 6px;
+  font-size: calc(12px * var(--font-scale, 1));
+  color: var(--text-muted);
+}
+
+.channel-menu-roles {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 4px;
+  max-height: 160px;
+  overflow-y: auto;
+}
+
+/* ---- модалка создания канала ---- */
+.create-channel-name {
+  position: relative;
+}
+
+.create-channel-name .field-input {
+  padding-left: 30px;
+}
+
+.create-channel-name-icon {
+  position: absolute;
+  left: 9px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  color: var(--text-muted);
+  pointer-events: none;
+}
+
+.create-channel-option {
+  margin-top: 16px;
+}
+
+.create-channel-option-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.create-channel-option-label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: calc(14px * var(--font-scale, 1));
+  color: var(--text-normal);
+}
+
+.create-channel-option-hint {
+  margin-top: 4px;
+  font-size: calc(12px * var(--font-scale, 1));
+  color: var(--text-muted);
+}
+
+.create-channel-slider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.create-channel-slider input[type='range'] {
+  flex: 1;
+}
+
+/* Ширина под самое длинное значение («21600» → «6 ч»), чтобы ползунок не
+   дёргался туда-сюда при смене подписи. */
+.create-channel-slider-value {
+  min-width: 52px;
+  text-align: right;
+  font-size: calc(13px * var(--font-scale, 1));
+  color: var(--text-normal);
+  font-variant-numeric: tabular-nums;
+}
+
+/* «Отмена» и «Создать канал» — в один ряд, а не столбиком, как одиночная
+   кнопка в остальных модалках. */
+.create-channel-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 20px;
+}
+
+.create-channel-actions button {
+  flex: 1;
+  margin: 0;
 }
 
 /* ---- настройки конфиденциальности сервера ---- */

@@ -2,28 +2,9 @@ import { useState } from 'react'
 import { X } from 'lucide-react'
 import { api, Server } from '../api'
 import { useEscToClose } from '../modalStack'
-
-function PrivacySwitch({
-  checked,
-  onChange,
-  disabled,
-}: {
-  checked: boolean
-  onChange: (v: boolean) => void
-  disabled?: boolean
-}) {
-  return (
-    <label className={`privacy-switch ${disabled ? 'disabled' : ''}`}>
-      <input
-        type="checkbox"
-        checked={checked}
-        disabled={disabled}
-        onChange={(e) => onChange(e.target.checked)}
-      />
-      <span className="privacy-switch-track" />
-    </label>
-  )
-}
+// Переключатель переехал в общий компонент, когда понадобился второй раз
+// (см. CreateChannelModal) — вид и стили те же.
+import ToggleSwitch from './ToggleSwitch'
 
 /**
  * Настройки приватности ОДНОГО сервера — правый клик по пилюле в ServerRail
@@ -82,7 +63,7 @@ export default function ServerPrivacyModal({
               Разрешить ЛС от других участников этого сервера
             </span>
           </div>
-          <PrivacySwitch
+          <ToggleSwitch
             checked={server.my_settings.allow_dms_from_server}
             disabled={saving}
             onChange={toggleAllowDms}

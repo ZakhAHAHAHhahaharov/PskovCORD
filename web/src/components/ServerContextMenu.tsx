@@ -1,6 +1,6 @@
 import { useLayoutEffect, useRef } from 'react'
 import {
-  BellOff, BellRing, Check, ChevronRight, LogOut, Mail, Settings, ShieldCheck,
+  BellOff, BellRing, Check, ChevronRight, LogOut, Mail, Settings, ShieldCheck, Tag,
 } from 'lucide-react'
 import { NotificationLevel, Server } from '../api'
 import { useHoverFlyout } from '../hooks/useHoverFlyout'
@@ -31,6 +31,7 @@ export default function ServerContextMenu({
   x,
   y,
   canManageServer,
+  canChangeNickname,
   isOwner,
   onClose,
   onMarkRead,
@@ -42,6 +43,7 @@ export default function ServerContextMenu({
   onToggleSuppressRoleMentions,
   onOpenServerSettings,
   onOpenPrivacy,
+  onChangeNickname,
   onLeave,
 }: {
   server: Server
@@ -50,6 +52,8 @@ export default function ServerContextMenu({
   /** Есть хоть одно из manage_server/manage_roles/manage_members — то же
    * условие, что открывает шестерёнку в ChannelSidebar. */
   canManageServer: boolean
+  /** Право change_nickname — сменить СВОЙ никнейм на этом сервере. */
+  canChangeNickname: boolean
   isOwner: boolean
   onClose: () => void
   onMarkRead: () => void
@@ -61,6 +65,7 @@ export default function ServerContextMenu({
   onToggleSuppressRoleMentions: (value: boolean) => void
   onOpenServerSettings: () => void
   onOpenPrivacy: () => void
+  onChangeNickname: () => void
   onLeave: () => void
 }) {
   const ref = useRef<HTMLDivElement>(null)
@@ -255,6 +260,18 @@ export default function ServerContextMenu({
             }}
           >
             <Settings size={15} /> Настройки сервера
+          </button>
+        )}
+        {canChangeNickname && (
+          <button
+            type="button"
+            className="profile-popup-item"
+            onClick={() => {
+              onChangeNickname()
+              onClose()
+            }}
+          >
+            <Tag size={15} /> Изменить никнейм
           </button>
         )}
         <button
