@@ -96,6 +96,8 @@ INSTALLED_APPS = [
     "accounts",
     "chat",
     "core",
+    "bugs",
+    "support",
 ]
 
 MIDDLEWARE = [
@@ -181,12 +183,30 @@ REST_FRAMEWORK = {
         "rest_framework.throttling.AnonRateThrottle",
         "rest_framework.throttling.UserRateThrottle",
     ],
+    # За nginx реальный IP приезжает в X-Forwarded-For, и без этой настройки
+    # DRF брал ключом троттлинга ВСЮ строку заголовка целиком. nginx дописывает
+    # реальный адрес к присланному клиентом ($proxy_add_x_forwarded_for), то
+    # есть клиент, подставляя себе произвольный X-Forwarded-For, получал новое
+    # ведро на каждый запрос — и лимит "auth" (подбор пароля!) обходился
+    # тривиально. С NUM_PROXIES=1 берётся последний адрес в цепочке — тот,
+    # что подставил сам nginx; подделать его клиент не может.
+    # Значение = число своих прокси перед Django (nginx один, см.
+    # deploy/nginx.conf.example). Появится ещё один слой (CDN) — поднять.
+    "NUM_PROXIES": 1,
     "DEFAULT_THROTTLE_RATES": {
         "anon": "60/min",
         "user": "600/min",
         # Отдельная, куда более жёсткая шкала для логина/регистрации/смены
         # пароля — см. throttle_scope в accounts/views.py.
         "auth": "10/min",
+        # Приём отчётов об ошибках (bugs.views.ErrorIngest). Открыт анонимам,
+        # поэтому шкала своя: клиент и так глушит повторы у себя, а сюда
+        # приходит по одному событию на новую поломку.
+        "errors": "30/min",
+        # Форма обращений (support.views.BugReportCreate). Заметно жёстче:
+        # её заполняют руками, и десяток отправок в минуту — это уже не
+        # человек, а чей-то скрипт.
+        "support": "5/min",
     },
 }
 

@@ -7,6 +7,7 @@ import { handleGlobalEscape } from './modalStack'
 import { parseQrLoginToken } from './qrToken'
 import LoginScreen from './components/LoginScreen'
 import AppShell from './components/AppShell'
+import BugReportButton from './components/BugReportButton'
 import QrLoginConfirm from './components/QrLoginConfirm'
 import NotFoundScreen from './components/NotFoundScreen'
 
@@ -63,6 +64,10 @@ export default function App() {
         <SettingsProvider>
           <AuthProvider>
             <Inner />
+            {/* Соседом с Inner, а не внутри него: кнопка должна быть и на
+                экране входа, и на 404, и в самом приложении — то есть во
+                всех ветках Inner разом. */}
+            <BugReportButton />
           </AuthProvider>
         </SettingsProvider>
       </ErrorReportingProvider>
