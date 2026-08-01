@@ -23,6 +23,7 @@ import ServerPrivacyModal from './ServerPrivacyModal'
 import ServerInviteModal from './ServerInviteModal'
 import ChannelContextMenu from './ChannelContextMenu'
 import ChannelInviteModal from './ChannelInviteModal'
+import CreateChannelModal from './CreateChannelModal'
 import ConversationContextMenu from './ConversationContextMenu'
 import FriendContextMenu from './FriendContextMenu'
 import FriendNicknameModal from './FriendNicknameModal'
@@ -364,9 +365,22 @@ export default function AppShellOverlays({
             onSetSlowmode={(seconds) =>
               void server.handleSetChannelSlowmode(menuChannel, seconds)
             }
+            roles={server.rolesForServer(server.currentServer.id)}
+            onSetPrivacy={(isPrivate, allowedRoleIds) =>
+              void server.handleSetChannelPrivacy(menuChannel, isPrivate, allowedRoleIds)
+            }
           />
         )
       })()}
+      {server.createChannelKind && (
+        <CreateChannelModal
+          kind={server.createChannelKind}
+          onCreate={(data) =>
+            server.handleCreateChannelSubmit(server.createChannelKind!, data)
+          }
+          onClose={() => server.setCreateChannelKind(null)}
+        />
+      )}
       {server.showChannelInviteId != null && (() => {
         const inviteChannel = server.currentServer?.channels.find((c) => c.id === server.showChannelInviteId)
         if (!server.currentServer || !inviteChannel) return null

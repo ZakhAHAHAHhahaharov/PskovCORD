@@ -414,6 +414,17 @@ class Channel(models.Model):
     # GatewayConsumer._create_message, где и создаётся сообщение.
     slowmode_seconds = models.PositiveIntegerField(default=0)
 
+    # Приватный канал: виден только тем, у кого есть manage_channels, и
+    # обладателям ролей из allowed_roles. Обычное право view_channels на него
+    # не распространяется — в этом и смысл: «видеть каналы» даёт публичные,
+    # а к приватному нужен явный допуск (см. chat.permissions.can_see_channel).
+    is_private = models.BooleanField(default=False)
+    # Роли, которым открыт приватный канал. Пусто — канал виден только
+    # управляющим каналами (роль «staff-only»), это осмысленное состояние по
+    # умолчанию сразу после создания, а не полуфабрикат.
+    allowed_roles = models.ManyToManyField(
+        Role, blank=True, related_name="allowed_channels")
+
     class Meta:
         ordering = ["position", "id"]
 

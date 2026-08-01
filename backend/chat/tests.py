@@ -3961,3 +3961,115 @@ class InviteAndBanPermissionTests(APITestCase):
             "/api/servers/{}/bans".format(self.server.id),
             {"user_id": self.target.id}, format="json")
         self.assertEqual(resp.status_code, 403)
+
+
+class PrivateChannelTests(APITestCase):
+    """Приватный канал (Channel.is_private): обычное view_channels его не
+    открывает — нужен manage_channels либо роль из allowed_roles."""
+
+    def setUp(self):
+        self.owner = User.objects.create_user(username="pv_owner", password="pw12345")
+        self.member = User.objects.create_user(username="pv_member", password="pw12345")
+        self.server = Server.objects.create(name="s", owner=self.owner)
+        Membership.objects.create(user=self.owner, server=self.server)
+        self.member_ship = Membership.objects.create(
+            user=self.member, server=self.server)
+        self.default_role = roles.create_default_role(self.server)
+        self.channel = Channel.objects.create(
+            server=self.server, name="secret", kind=Channel.TEXT, is_private=True)
+
+    def test_regular_member_cannot_read_private_channel(self):
+        self.client.force_authenticate(self.member)
+        resp = self.client.get(
+            "/api/channels/{}/messages".format(self.channel.id))
+        self.assertEqual(resp.status_code, 403)
+
+    def test_manage_channels_sees_private_channel(self):
+        """Тот, кто заводит каналы, обязан видеть все — иначе мог бы создать
+        приватный канал и тут же потерять к нему доступ."""
+        self.client.force_authenticate(self.owner)
+        resp = self.client.get(
+            "/api/channels/{}/messages".format(self.channel.id))
+        self.assertEqual(resp.status_code, 200)
+
+    def test_allowed_role_opens_private_channel(self):
+        role = Role.objects.create(server=self.server, name="team", position=1)
+        self.member_ship.roles.add(role)
+        self.channel.allowed_roles.add(role)
+        self.client.force_authenticate(self.member)
+        resp = self.client.get(
+            "/api/channels/{}/messages".format(self.channel.id))
+        self.assertEqual(resp.status_code, 200)
+
+    def test_private_channel_hidden_from_server_payload(self):
+        public = Channel.objects.create(
+            server=self.server, name="general", kind=Channel.TEXT)
+        self.client.force_authenticate(self.member)
+        resp = self.client.get("/api/servers")
+        server_row = next(s for s in resp.data if s["id"] == self.server.id)
+        ids = [c["id"] for c in server_row["channels"]]
+        self.assertIn(public.id, ids)
+        self.assertNotIn(self.channel.id, ids)
+
+    def test_private_channel_visible_in_payload_for_allowed_role(self):
+        role = Role.objects.create(server=self.server, name="team", position=1)
+        self.member_ship.roles.add(role)
+        self.channel.allowed_roles.add(role)
+        self.client.force_authenticate(self.member)
+        resp = self.client.get("/api/servers")
+        server_row = next(s for s in resp.data if s["id"] == self.server.id)
+        ids = [c["id"] for c in server_row["channels"]]
+        self.assertIn(self.channel.id, ids)
+
+    def test_voice_credentials_denied_for_private_voice_channel(self):
+        voice = Channel.objects.create(
+            server=self.server, name="Secret", kind=Channel.VOICE, is_private=True)
+        self.client.force_authenticate(self.member)
+        resp = self.client.post(
+            "/api/channels/{}/voice-credentials".format(voice.id))
+        self.assertEqual(resp.status_code, 403)
+
+    def test_create_channel_accepts_privacy_and_slowmode(self):
+        self.client.force_authenticate(self.owner)
+        resp = self.client.post(
+            "/api/servers/{}/channels".format(self.server.id),
+            {"name": "новый", "kind": "text", "slowmode_seconds": 30,
+             "is_private": True},
+            format="json")
+        self.assertEqual(resp.status_code, 201)
+        self.assertEqual(resp.data["slowmode_seconds"], 30)
+        self.assertTrue(resp.data["is_private"])
+
+    def test_create_voice_channel_rejects_slowmode(self):
+        self.client.force_authenticate(self.owner)
+        resp = self.client.post(
+            "/api/servers/{}/channels".format(self.server.id),
+            {"name": "Голос", "kind": "voice", "slowmode_seconds": 30},
+            format="json")
+        self.assertEqual(resp.status_code, 400)
+
+    def test_allowed_roles_must_belong_to_this_server(self):
+        """Иначе допуск можно было бы выдать ссылкой на роль чужого сервера."""
+        other_server = Server.objects.create(name="other", owner=self.owner)
+        alien = Role.objects.create(server=other_server, name="alien", position=1)
+        self.client.force_authenticate(self.owner)
+        resp = self.client.patch(
+            "/api/channels/{}".format(self.channel.id),
+            {"allowed_role_ids": [alien.id]}, format="json")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(list(self.channel.allowed_roles.all()), [])
+
+    def test_patch_toggles_privacy(self):
+        self.client.force_authenticate(self.owner)
+        resp = self.client.patch(
+            "/api/channels/{}".format(self.channel.id),
+            {"is_private": False}, format="json")
+        self.assertEqual(resp.status_code, 200)
+        self.channel.refresh_from_db()
+        self.assertFalse(self.channel.is_private)
+
+    def test_patch_without_any_field_is_rejected(self):
+        self.client.force_authenticate(self.owner)
+        resp = self.client.patch(
+            "/api/channels/{}".format(self.channel.id), {}, format="json")
+        self.assertEqual(resp.status_code, 400)

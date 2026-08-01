@@ -29,11 +29,15 @@ class ChannelSerializer(serializers.ModelSerializer):
     # каналов, живут в presence (Redis), пока в канале кто-то есть.
     call_started_at = serializers.SerializerMethodField()
     topic = serializers.SerializerMethodField()
+    # Кому открыт приватный канал. Плоским списком id, а не вложенными ролями:
+    # сами роли клиент уже держит (api.roles), а тут нужна только связь.
+    allowed_role_ids = serializers.SerializerMethodField()
 
     class Meta:
         model = Channel
         fields = ["id", "server", "name", "kind", "position",
-                  "call_started_at", "topic", "status", "slowmode_seconds"]
+                  "call_started_at", "topic", "status", "slowmode_seconds",
+                  "is_private", "allowed_role_ids"]
         read_only_fields = ["server"]
 
     def _state(self, obj):
@@ -45,6 +49,11 @@ class ChannelSerializer(serializers.ModelSerializer):
         if states is not None:
             return states.get(str(obj.id)) or {"call_started_at": None, "topic": None}
         return presence.call_state(obj.id)
+
+    def get_allowed_role_ids(self, obj):
+        if not obj.is_private:
+            return []
+        return [r.id for r in obj.allowed_roles.all()]
 
     def get_call_started_at(self, obj):
         if obj.kind != Channel.VOICE:
@@ -125,7 +134,12 @@ def _default_membership_settings_payload() -> dict:
 
 
 class ServerSerializer(serializers.ModelSerializer):
-    channels = ChannelSerializer(many=True, read_only=True)
+    # Не ChannelSerializer(many=True) напрямую: приватные каналы (см.
+    # Channel.is_private) видны не всем, и список надо фильтровать под
+    # запрашивающего. Без request в контексте (рассылка через WS) приватных
+    # не отдаём вовсе — получатель там неизвестен, и «показать на всякий
+    # случай» означало бы утечку.
+    channels = serializers.SerializerMethodField()
     # Права ЗАПРАШИВАЮЩЕГО на этом сервере — фронт по ним решает, показывать
     # ли шестерёнку редактора, кнопку «+ канал» и т.п. Без request в
     # контексте (например, при рассылке через WS) прав нет — фронт в таких
@@ -145,6 +159,17 @@ class ServerSerializer(serializers.ModelSerializer):
             "my_permissions", "my_settings", "member_count",
         ]
         read_only_fields = ["owner", "created_at"]
+
+    def get_channels(self, obj):
+        from .permissions import visible_channels
+
+        channels = list(obj.channels.all())
+        request = self.context.get("request")
+        if request is None:
+            channels = [c for c in channels if not c.is_private]
+        else:
+            channels = visible_channels(request.user, obj, channels)
+        return ChannelSerializer(channels, many=True, context=self.context).data
 
     def get_my_permissions(self, obj):
         request = self.context.get("request")

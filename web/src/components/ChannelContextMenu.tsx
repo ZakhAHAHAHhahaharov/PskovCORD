@@ -1,8 +1,9 @@
 import { FormEvent, useLayoutEffect, useRef, useState } from 'react'
 import {
-  Check, Eye, EyeOff, Link as LinkIcon, MessageSquare, Pin, Timer, UserPlus,
+  Check, Eye, EyeOff, Link as LinkIcon, Lock, MessageSquare, Pin, Timer, UserPlus,
 } from 'lucide-react'
 import { useHiddenNames } from '../hiddenNames'
+import ToggleSwitch from './ToggleSwitch'
 
 export interface ChannelContextMenuChannel {
   id: number
@@ -10,6 +11,8 @@ export interface ChannelContextMenuChannel {
   kind: 'text' | 'voice'
   status: string
   slowmode_seconds: number
+  is_private: boolean
+  allowed_role_ids: number[]
 }
 
 /** Пресеты медленного режима — те же ступени, что и в Discord: между 5 с и
@@ -54,6 +57,8 @@ export default function ChannelContextMenu({
   onCopyLink,
   onSetStatus,
   onSetSlowmode,
+  roles,
+  onSetPrivacy,
 }: {
   channel: ChannelContextMenuChannel
   x: number
@@ -66,12 +71,20 @@ export default function ChannelContextMenu({
   onCopyLink: () => void
   onSetStatus: (status: string) => void
   onSetSlowmode: (seconds: number) => void
+  /** Роли сервера — из них выбирается, кому открыт приватный канал. Роль по
+   * умолчанию сюда не попадает: она есть у всех, и «приватный канал для всех»
+   * — это просто публичный канал. */
+  roles: { id: number; name: string; color: string; is_default: boolean }[]
+  onSetPrivacy: (isPrivate: boolean, allowedRoleIds: number[]) => void
 }) {
   const ref = useRef<HTMLDivElement>(null)
   const [statusDraft, setStatusDraft] = useState(channel.status)
   const { isHidden, setHidden } = useHiddenNames()
   const hideNames = isHidden(channel.id)
   const isVoice = channel.kind === 'voice'
+  // Роль по умолчанию есть у всех — «открыть ей приватный канал» означало бы
+  // сделать его публичным окольным путём, поэтому в список не попадает.
+  const assignableRoles = roles.filter((r) => !r.is_default)
 
   useLayoutEffect(() => {
     const el = ref.current
@@ -205,6 +218,62 @@ export default function ChannelContextMenu({
                 </button>
               ))}
             </div>
+          </div>
+        </>
+      )}
+
+      {canManageChannels && (
+        <>
+          <div className="profile-popup-divider" />
+          <div className="settings-field channel-menu-status">
+            <div className="settings-field-header">
+              <span className="settings-field-label">
+                <Lock size={14} /> Приватный канал
+              </span>
+              <ToggleSwitch
+                checked={channel.is_private}
+                onChange={(v) => onSetPrivacy(v, channel.allowed_role_ids)}
+                ariaLabel="Приватный канал"
+              />
+            </div>
+            {channel.is_private && (
+              <>
+                <div className="channel-menu-hint">
+                  Кому открыт канал (помимо тех, кто управляет каналами):
+                </div>
+                <div className="channel-menu-roles">
+                  {assignableRoles.length === 0 && (
+                    <span className="channel-menu-hint">
+                      На сервере пока нет ролей, кроме роли по умолчанию.
+                    </span>
+                  )}
+                  {assignableRoles.map((role) => {
+                    const allowed = channel.allowed_role_ids.includes(role.id)
+                    return (
+                      <label key={role.id} className="server-flyout-checkbox">
+                        <input
+                          type="checkbox"
+                          checked={allowed}
+                          onChange={() =>
+                            onSetPrivacy(
+                              true,
+                              allowed
+                                ? channel.allowed_role_ids.filter((id) => id !== role.id)
+                                : [...channel.allowed_role_ids, role.id],
+                            )
+                          }
+                        />
+                        <span
+                          className="srv-role-dot"
+                          style={{ background: role.color }}
+                        />
+                        {role.name}
+                      </label>
+                    )
+                  })}
+                </div>
+              </>
+            )}
           </div>
         </>
       )}

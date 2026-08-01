@@ -25,7 +25,9 @@ from .models import (
     ServerBan, ServerInvite, ServerJoinRequest, UserRelationState,
     MAX_ATTACHMENT_BYTES, _invite_code, dm_room,
 )
-from .permissions import are_friends, blocked_user_ids, can_dm
+from .permissions import (
+    are_friends, blocked_user_ids, can_dm, can_see_channel, visible_channels,
+)
 from .serializers import (
     AttachmentSerializer, ChannelSerializer, ConversationMessageSerializer,
     ConversationSerializer, MembershipSettingsSerializer, MessageSerializer,
@@ -117,6 +119,10 @@ def _require_channel_access(request, channel, *permissions):
     for name in ("view_channels", *permissions):
         if not perms.get(name):
             return Response({"detail": "Недостаточно прав на сервере."}, status=403)
+    # Приватный канал закрыт даже при view_channels — нужен явный допуск
+    # (см. chat.permissions.can_see_channel).
+    if not can_see_channel(request.user, channel, perms):
+        return Response({"detail": "Нет доступа к каналу."}, status=403)
     return None
 
 
@@ -1763,6 +1769,48 @@ class ConversationVoiceCredentials(APIView):
         })
 
 
+# Потолок медленного режима — как в Discord: 6 часов. Больше — уже не
+# «замедление», а фактическое закрытие канала на запись, для которого есть
+# отдельное право send_messages.
+MAX_SLOWMODE_SECONDS = 6 * 60 * 60
+
+
+def _parse_slowmode(raw, kind):
+    """(секунды|None, Response|None) — общий разбор slowmode_seconds для
+    создания канала и его правки. None в первом элементе значит «поле не
+    передали», а не «ноль»: у PATCH это разные вещи."""
+    if raw is None:
+        return None, None
+    try:
+        seconds = int(raw)
+    except (TypeError, ValueError):
+        return None, Response(
+            {"detail": "slowmode_seconds — целое число секунд."}, status=400)
+    if not 0 <= seconds <= MAX_SLOWMODE_SECONDS:
+        return None, Response(
+            {"detail": f"Медленный режим — от 0 до {MAX_SLOWMODE_SECONDS} секунд."},
+            status=400)
+    # Голосовому каналу медленный режим нечего ограничивать: сообщений в нём
+    # нет, а молча сохранённое значение позже выглядело бы как работающая,
+    # но ничего не делающая настройка.
+    if seconds and kind != Channel.TEXT:
+        return None, Response(
+            {"detail": "Медленный режим — только для текстовых каналов."}, status=400)
+    return seconds, None
+
+
+def _channel_visible_user_ids(channel) -> list:
+    """id участников сервера, которым виден этот (приватный) канал — для
+    адресной рассылки события вместо общей группы сервера."""
+    from .permissions import can_see_channel
+
+    ids = []
+    for membership in channel.server.memberships.select_related("user"):
+        if can_see_channel(membership.user, channel):
+            ids.append(membership.user_id)
+    return ids
+
+
 class ChannelCreate(APIView):
     def post(self, request, server_id):
         server = get_object_or_404(Server, id=server_id)
@@ -1777,32 +1825,45 @@ class ChannelCreate(APIView):
             return Response({"detail": "Нужно имя канала."}, status=400)
         if kind not in (Channel.TEXT, Channel.VOICE):
             return Response({"detail": "kind = text | voice."}, status=400)
+        # Медленный режим и приватность задаются сразу при создании (см.
+        # web/src/components/CreateChannelModal.tsx) — иначе новый канал жил
+        # бы открытым ровно до того момента, как его успеют донастроить.
+        slowmode, error = _parse_slowmode(request.data.get("slowmode_seconds"), kind)
+        if error:
+            return error
         position = server.channels.count()
         channel = Channel.objects.create(
-            server=server, name=name, kind=kind, position=position)
+            server=server, name=name, kind=kind, position=position,
+            slowmode_seconds=slowmode or 0,
+            is_private=bool(request.data.get("is_private")),
+        )
         data = ChannelSerializer(channel).data
         # Живое обновление списка каналов у остальных участников сервера —
         # без этого им приходилось перезагружать страницу, чтобы увидеть
         # новый канал (тот же паттерн, что и voice_state_update).
+        payload = {
+            "op": "channel_create",
+            "server_id": server_id,
+            "channel": data,
+        }
         channel_layer = get_channel_layer()
-        async_to_sync(channel_layer.group_send)(
-            f"server_{server_id}", {"type": "broadcast", "payload": {
-                "op": "channel_create",
-                "server_id": server_id,
-                "channel": data,
-            }})
+        if channel.is_private:
+            # В группе сервера сидят ВСЕ его участники, поэтому приватный
+            # канал рассылаем поимённо — иначе само событие (с названием
+            # канала) утекло бы тем, кому его видеть нельзя.
+            for user_id in _channel_visible_user_ids(channel):
+                async_to_sync(channel_layer.group_send)(
+                    f"user_{user_id}", {"type": "broadcast", "payload": payload})
+        else:
+            async_to_sync(channel_layer.group_send)(
+                f"server_{server_id}", {"type": "broadcast", "payload": payload})
         return Response(data, status=201)
 
 
-# Потолок медленного режима — как в Discord: 6 часов. Больше — уже не
-# «замедление», а фактическое закрытие канала на запись, для которого есть
-# отдельное право send_messages.
-MAX_SLOWMODE_SECONDS = 6 * 60 * 60
-
-
 class ChannelDetail(APIView):
-    """PATCH /api/channels/<id> {"status"?, "slowmode_seconds"?} — правый клик
-    по каналу → "Установить статус канала" / "Медленный режим" (см.
+    """PATCH /api/channels/<id> {"status"?, "slowmode_seconds"?, "is_private"?,
+    "allowed_role_ids"?} — правый клик по каналу → "Установить статус канала" /
+    "Медленный режим" / "Приватный канал" (см.
     web/src/components/ChannelContextMenu.tsx).
 
     Персистентный Channel.status, а НЕ эфемерная тема звонка
@@ -1820,42 +1881,50 @@ class ChannelDetail(APIView):
         if denied:
             return denied
         status_text = request.data.get("status")
-        slowmode = request.data.get("slowmode_seconds")
-        if status_text is None and slowmode is None:
-            return Response(
-                {"detail": "Нужно поле status или slowmode_seconds."}, status=400)
+        slowmode_raw = request.data.get("slowmode_seconds")
+        is_private = request.data.get("is_private")
+        allowed_role_ids = request.data.get("allowed_role_ids")
+        if all(v is None for v in (status_text, slowmode_raw, is_private,
+                                   allowed_role_ids)):
+            return Response({"detail": "Нечего менять."}, status=400)
         updated = []
         if status_text is not None:
             channel.status = str(status_text).strip()[:120]
             updated.append("status")
-        if slowmode is not None:
-            try:
-                seconds = int(slowmode)
-            except (TypeError, ValueError):
-                return Response(
-                    {"detail": "slowmode_seconds — целое число секунд."}, status=400)
-            if not 0 <= seconds <= MAX_SLOWMODE_SECONDS:
-                return Response(
-                    {"detail": f"Медленный режим — от 0 до "
-                               f"{MAX_SLOWMODE_SECONDS} секунд."}, status=400)
-            # Голосовому каналу медленный режим нечего ограничивать: сообщений
-            # в нём нет, а молча сохранённое значение позже выглядело бы как
-            # работающая, но ничего не делающая настройка.
-            if channel.kind != Channel.TEXT:
-                return Response(
-                    {"detail": "Медленный режим — только для текстовых каналов."},
-                    status=400)
+        seconds, error = _parse_slowmode(slowmode_raw, channel.kind)
+        if error:
+            return error
+        if seconds is not None:
             channel.slowmode_seconds = seconds
             updated.append("slowmode_seconds")
-        channel.save(update_fields=updated)
+        if is_private is not None:
+            channel.is_private = bool(is_private)
+            updated.append("is_private")
+        if updated:
+            channel.save(update_fields=updated)
+        if allowed_role_ids is not None:
+            if not isinstance(allowed_role_ids, list):
+                return Response(
+                    {"detail": "allowed_role_ids — список id ролей."}, status=400)
+            # Только роли ЭТОГО сервера — иначе допуск можно было бы выдать
+            # ссылкой на роль чужого (тот же приём, что у mentionable_by).
+            channel.allowed_roles.set(
+                Role.objects.filter(server=server, id__in=allowed_role_ids))
         data = ChannelSerializer(channel).data
+        payload = {
+            "op": "channel_update",
+            "server_id": server.id,
+            "channel": data,
+        }
         channel_layer = get_channel_layer()
-        async_to_sync(channel_layer.group_send)(
-            f"server_{server.id}", {"type": "broadcast", "payload": {
-                "op": "channel_update",
-                "server_id": server.id,
-                "channel": data,
-            }})
+        if channel.is_private:
+            # Приватный канал — поимённо тем, кому он виден (см. ChannelCreate).
+            for user_id in _channel_visible_user_ids(channel):
+                async_to_sync(channel_layer.group_send)(
+                    f"user_{user_id}", {"type": "broadcast", "payload": payload})
+        else:
+            async_to_sync(channel_layer.group_send)(
+                f"server_{server.id}", {"type": "broadcast", "payload": payload})
         return Response(data)
 
 

@@ -1,7 +1,7 @@
 import { MouseEvent as ReactMouseEvent, useCallback, useState } from 'react'
 import {
   ChevronDown, ChevronRight, Volume2, MicOff, HeadphoneOff, Monitor, Settings,
-  Pin, Timer,
+  Pin, Timer, Lock,
 } from 'lucide-react'
 import { Channel, Member, Server, User } from '../api'
 import { styledNameProps } from '../nameStyle'
@@ -362,10 +362,11 @@ export default function ChannelSidebar({
               >
                 <span className="channel-icon">#</span>
                 <span className="channel-name">{c.name}</span>
-                {/* Медленный режим виден прямо в списке — иначе о нём узнаёшь
-                    только упёршись в отказ при отправке. */}
+                {/* Медленный режим и приватность видны прямо в списке — иначе
+                    о них узнаёшь только упёршись в отказ при отправке. */}
+                {c.is_private && <Lock size={12} className="channel-badge-icon" />}
                 {c.slowmode_seconds > 0 && (
-                  <Timer size={12} className="channel-slowmode-icon" />
+                  <Timer size={12} className="channel-badge-icon" />
                 )}
               </button>
             ))}

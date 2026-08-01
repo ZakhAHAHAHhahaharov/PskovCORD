@@ -221,6 +221,7 @@ from django.db.models import Q
 from accounts.models import Friendship
 
 from . import emoji as emoji_keys, mute_vote, presence, roles
+from .permissions import can_see_channel
 
 logger = logging.getLogger(__name__)
 from .models import (
@@ -1193,6 +1194,8 @@ class GatewayConsumer(AsyncWebsocketConsumer):
         perms = roles.permissions_for(self.user, channel.server)
         if not perms.get("view_channels") or not perms.get("send_messages"):
             return {"error": "Нет доступа к каналу."}
+        if not can_see_channel(self.user, channel, perms):
+            return {"error": "Нет доступа к каналу."}
         if attachment_ids and not perms.get("attach_files"):
             return {"error": "Нельзя прикреплять файлы в этом канале."}
         wait = self._slowmode_wait(channel, perms)
@@ -1352,6 +1355,8 @@ class GatewayConsumer(AsyncWebsocketConsumer):
             return None
         perms = roles.permissions_for(self.user, channel.server)
         if not perms.get("view_channels") or not perms.get("connect"):
+            return None
+        if not can_see_channel(self.user, channel, perms):
             return None
         return channel.server_id
 

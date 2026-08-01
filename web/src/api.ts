@@ -154,6 +154,11 @@ export interface Channel {
   /** Медленный режим: сколько секунд участник ждёт между своими сообщениями.
    * 0 — выключен. Обходится правом bypass_slowmode. Только для текстовых. */
   slowmode_seconds: number
+  /** Приватный канал — виден только управляющим каналами и обладателям ролей
+   * из allowed_role_ids; обычное view_channels его не открывает. */
+  is_private: boolean
+  /** Кому открыт приватный канал. Пусто у публичного. */
+  allowed_role_ids: number[]
 }
 
 /** Права роли на сервере — 1:1 с булевыми полями chat.models.Role.
@@ -1061,10 +1066,20 @@ export const api = {
     }),
   unbanMember: (serverId: number, userId: number) =>
     req(`/api/servers/${serverId}/bans/${userId}`, { method: 'DELETE' }),
-  createChannel: (serverId: number, name: string, kind: string): Promise<Channel> =>
+  createChannel: (
+    serverId: number,
+    name: string,
+    kind: string,
+    opts: { slowmodeSeconds?: number; isPrivate?: boolean } = {},
+  ): Promise<Channel> =>
     req(`/api/servers/${serverId}/channels`, {
       method: 'POST',
-      body: JSON.stringify({ name, kind }),
+      body: JSON.stringify({
+        name,
+        kind,
+        slowmode_seconds: opts.slowmodeSeconds ?? 0,
+        is_private: opts.isPrivate ?? false,
+      }),
     }),
 
   /** Выйти самому (без исключения/бана) — владелец так выйти не может. */
@@ -1144,6 +1159,19 @@ export const api = {
     req(`/api/channels/${channelId}`, {
       method: 'PATCH',
       body: JSON.stringify({ slowmode_seconds: seconds }),
+    }),
+  /** Приватность канала и список ролей, которым он открыт. Нужно manage_channels. */
+  setChannelPrivacy: (
+    channelId: number,
+    isPrivate: boolean,
+    allowedRoleIds: number[],
+  ): Promise<Channel> =>
+    req(`/api/channels/${channelId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({
+        is_private: isPrivate,
+        allowed_role_ids: allowedRoleIds,
+      }),
     }),
 
   /** before — страница старше указанного сообщения (скролл вверх),
