@@ -3,6 +3,7 @@ import {
   api, Channel, Me, Member, NotificationLevel, Role, Server, ServerMemberSettings,
 } from '../api'
 import { isMentioned } from '../mentions'
+import { presenceStore } from '../presence'
 
 /** Серверы/каналы/участники/роли — весь "серверный" домен AppShell: список
  * серверов и выбранного сервера/канала, ростер и роли (свои и фоновых
@@ -186,7 +187,13 @@ export function useServerData(userRef: RefObject<Me | null>) {
   const reloadMembers = useCallback(async () => {
     if (serverId == null) return
     try {
-      setMembers(await api.members(serverId))
+      const list = await api.members(serverId)
+      // Ростер — второй (после /api/presence) источник чужих статусов:
+      // сокомандников по серверу видно и вне его — в пикерах «новый
+      // диалог»/«пригласить» и в автокомплите @упоминаний, где своего
+      // статуса у строки нет (см. presence.ts).
+      presenceStore.merge(list.map((m) => ({ user_id: m.id, status: m.status })))
+      setMembers(list)
     } catch {
       setMembers([])
     }
@@ -223,6 +230,7 @@ export function useServerData(userRef: RefObject<Me | null>) {
       for (const s of toFetch) {
         try {
           const [roleList, memberList] = await Promise.all([api.roles(s.id), api.members(s.id)])
+          presenceStore.merge(memberList.map((m) => ({ user_id: m.id, status: m.status })))
           setServerRoles((prev) => ({ ...prev, [s.id]: roleList }))
           setServerMembersCache((prev) => ({ ...prev, [s.id]: memberList }))
         } catch {

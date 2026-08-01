@@ -6,6 +6,7 @@ import type { VoiceState } from '../components/AppShell'
 import { invalidateAvatarAnimation } from '../avatarAnim'
 import { useGateway } from '../gateway'
 import { outbox } from '../outbox'
+import { presenceStore } from '../presence'
 import { playLeaveSound, playScreenShareRequestSound, playWakeUpSound } from '../sounds'
 
 interface CallParticipant {
@@ -142,6 +143,11 @@ export function useGatewayEvents(params: UseGatewayEventsParams) {
       )
     })
     const offPresence = gateway.on('presence_update', (d) => {
+      // Общий стор статусов — им живут все аватарки ВНЕ ростера сервера
+      // (друзья, диалоги, пикеры; см. presence.ts). Сам ростер по-прежнему
+      // держит статус в своём Member ниже: там он приходит уже вместе со
+      // списком и участвует в группировке «в сети/не в сети».
+      presenceStore.set(d.user_id, d.status)
       setMembers((prev) =>
         prev.map((m) =>
           m.id === d.user_id ? { ...m, online: d.online, status: d.status } : m,

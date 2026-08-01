@@ -1176,6 +1176,24 @@ export const api = {
     conversationId: number,
   ): Promise<{ sfu_url: string; sfu_token: string; ttl: number }> =>
     req(`/api/conversations/${conversationId}/voice-credentials`, { method: 'POST' }),
+
+  /** Онлайн-статус друзей и собеседников — снимок на старте, дальше карта
+   * живёт по presence_update из WebSocket (см. presence.ts). Ростер сервера
+   * везёт свой статус сам и сюда не входит. */
+  presence: (): Promise<{ user_id: number; status: EffectiveStatus }[]> =>
+    req('/api/presence'),
+
+  /** Все никнеймы, которые я кому-то дал, — как и myRelations, одним списком
+   * на старте (см. nicknames.ts). */
+  myNicknames: (): Promise<{ user_id: number; nickname: string }[]> =>
+    req('/api/nicknames'),
+  /** Пустая строка снимает никнейм (бэкенд удаляет запись). */
+  setUserNickname: (userId: number, nickname: string): Promise<{ nickname: string }> =>
+    req(`/api/users/${userId}/nickname`, {
+      method: 'PUT',
+      body: JSON.stringify({ nickname }),
+    }),
+
   /** Обращение из формы в правом нижнем углу. recent_errors — последние
    * пойманные у этого человека ошибки (см. errorTransport.recentErrors):
    * сервер сам сведёт их с известными группами, поэтому уходит сырой текст,

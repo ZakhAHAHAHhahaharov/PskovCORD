@@ -4,7 +4,9 @@ import {
 } from '../api'
 import { useGateway } from '../gateway'
 import { OutgoingMessage } from '../components/MessageInput'
+import { nicknameStore } from '../nicknames'
 import { outbox } from '../outbox'
+import { presenceStore } from '../presence'
 
 /** Домашний экран: диалоги/группы, друзья, звонки в них — весь DM-домен
  * AppShell. Ростер звонка в диалоге/группе (dmCallParticipants) и сам звонок
@@ -66,6 +68,21 @@ export function useConversationsData(
         setFriends(await api.friends())
       } catch {
         setFriends({ friends: [], incoming: [], outgoing: [] })
+      }
+      // Онлайн-статус друзей/собеседников и мои никнеймы для них — два
+      // снимка в общие сторы (см. presence.ts и nicknames.ts). Дальше оба
+      // живут сами: presence капает по WS, никнеймы меняю только я сам.
+      // Ошибку глотаем молча — без снимка точки статуса просто будут серыми,
+      // а имена — обычными, приложение работает как раньше.
+      try {
+        presenceStore.merge(await api.presence())
+      } catch {
+        // см. выше
+      }
+      try {
+        nicknameStore.merge(await api.myNicknames())
+      } catch {
+        // см. выше
       }
     })()
   }, [])

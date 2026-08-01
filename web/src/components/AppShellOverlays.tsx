@@ -1,5 +1,6 @@
 import { Me, Server } from '../api'
 import type { useConversationContextMenu } from '../hooks/useConversationContextMenu'
+import type { useFriendContextMenu } from '../hooks/useFriendContextMenu'
 import type { useConversationsData } from '../hooks/useConversationsData'
 import type { useInviteLinks } from '../hooks/useInviteLinks'
 import type { useParticipantContextMenu } from '../hooks/useParticipantContextMenu'
@@ -21,6 +22,8 @@ import ServerInviteModal from './ServerInviteModal'
 import ChannelContextMenu from './ChannelContextMenu'
 import ChannelInviteModal from './ChannelInviteModal'
 import ConversationContextMenu from './ConversationContextMenu'
+import FriendContextMenu from './FriendContextMenu'
+import FriendNicknameModal from './FriendNicknameModal'
 import VoiceInviteJoinModal from './VoiceInviteJoinModal'
 
 interface AppShellOverlaysProps {
@@ -39,6 +42,7 @@ interface AppShellOverlaysProps {
   profilePopup: ProfilePopupTarget | null
   setProfilePopup: (v: ProfilePopupTarget | null) => void
   conversationMenu: ReturnType<typeof useConversationContextMenu>
+  friendMenu: ReturnType<typeof useFriendContextMenu>
   /** Мои серверы — из них выбирается, куда пригласить собеседника. */
   servers: Server[]
 }
@@ -52,7 +56,7 @@ export default function AppShellOverlays({
   user, isMobile, logout,
   showSettings, closeSettings, showProfile, setShowProfile,
   profilePopup, setProfilePopup,
-  conversationMenu, servers,
+  conversationMenu, friendMenu, servers,
 }: AppShellOverlaysProps) {
   const menuTarget = conversationMenu.menuTarget
   // Беседу резолвим из живого списка по id, а не берём снимок момента
@@ -154,6 +158,34 @@ export default function AppShellOverlays({
           onRelationChange={(relation) =>
             conversationMenu.handleRelationChange(menuConversation, relation)
           }
+        />
+      )}
+      {friendMenu.menuTarget && (() => {
+        // Друга резолвим из живого списка (тот же приём, что и у беседы
+        // выше): его могли удалить из друзей прямо пока меню открыто.
+        const target = friendMenu.menuTarget
+        const friend = conv.friends.friends.find((f) => f.id === target.friend.id)
+        if (!friend) return null
+        return (
+          <FriendContextMenu
+            friend={friend}
+            x={target.x}
+            y={target.y}
+            onClose={friendMenu.closeMenu}
+            onOpenProfile={() => friendMenu.handleOpenProfile(friend, target.x, target.y)}
+            onSendMessage={() => friendMenu.handleSendMessage(friend)}
+            onStartCall={() => void friendMenu.handleStartCall(friend)}
+            onSetNickname={() => friendMenu.setNicknameTarget(friend)}
+          />
+        )
+      })()}
+      {friendMenu.nicknameTarget && (
+        <FriendNicknameModal
+          friend={friendMenu.nicknameTarget}
+          onSave={(nickname) =>
+            friendMenu.handleSaveNickname(friendMenu.nicknameTarget!, nickname)
+          }
+          onClose={() => friendMenu.setNicknameTarget(null)}
         />
       )}
       {participant.contextMenuTarget && (

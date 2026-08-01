@@ -7545,3 +7545,121 @@ button.settings-row-clickable:hover .settings-row-label {
     height: 36px;
   }
 }
+
+/* ---- подвкладки списка друзей: «В сети» / «Все» (HomeSidebar) ----
+   Второй ряд под .home-tabs теми же кнопками (.home-tab), только чуть уже:
+   это переключатель ВНУТРИ вкладки, и визуально он должен читаться как
+   подчинённый ей, а не как ещё одна пара равноправных вкладок. */
+.home-subtabs {
+  display: flex;
+  gap: 4px;
+  padding: 4px 0 8px;
+  flex-shrink: 0;
+}
+
+.home-subtabs .home-tab {
+  padding: 5px 8px;
+  font-size: calc(12px * var(--font-scale, 1));
+}
+
+.home-tab-count {
+  padding: 0 5px;
+  border-radius: 8px;
+  background: var(--channel-hover);
+  font-size: calc(11px * var(--font-scale, 1));
+  font-weight: 700;
+}
+
+.home-tab.active .home-tab-count {
+  background: rgba(0, 0, 0, 0.2);
+}
+
+/* ---- имя человека с моим никнеймом (UserName) ----
+   Подпись с настоящим ником — обычным шрифтом и приглушённо: она служебная,
+   стиль ника (градиенты/неон) на неё намеренно не распространяется, иначе
+   читалась бы как второе имя, а не как пометка. */
+.user-name {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  /* Ужимается вместе со строкой — иначе длинная пара «никнейм + подпись»
+     распирала бы .member-row и выдавливала иконки справа от неё. */
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.user-name-original {
+  font-size: calc(12px * var(--font-scale, 1));
+  font-weight: 400;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+/* ---- бегущая строка (ScrollingText) ----
+   Класс -run вешается ТОЛЬКО когда содержимое реально не влезло (замер в
+   компоненте) — иначе анимации нет вовсе, а не «есть, но с нулевым сдвигом»:
+   вечно крутящийся keyframes на каждой строке списка стоил бы кадров даром. */
+.scrolling-text {
+  display: block;
+  overflow: hidden;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.scrolling-text-inner {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+}
+
+.scrolling-text-run .scrolling-text-inner {
+  animation: scrolling-text-run var(--scroll-duration, 6s) ease-in-out infinite alternate;
+}
+
+/* Паузы на обоих краях — чтобы имя успевало прочитаться и в начале, и в
+   конце пробега, а не разворачивалось сразу же. */
+@keyframes scrolling-text-run {
+  0%, 20% {
+    transform: translateX(0);
+  }
+  80%, 100% {
+    transform: translateX(var(--scroll-shift, 0));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .scrolling-text-run .scrolling-text-inner {
+    animation: none;
+  }
+}
+
+/* ---- модалка никнейма друга (FriendNicknameModal) ---- */
+.modal-hint {
+  font-size: calc(12px * var(--font-scale, 1));
+  color: var(--text-muted);
+}
+
+/* ---- имя в карточке профиля, когда оно подменено моим никнеймом ----
+   Пара «никнейм + настоящий ник» делит одну строку карточки (см.
+   ProfileCardHeader): .profile-card-name внутри теряет свой блочный
+   display и margin — их берёт на себя строка-обёртка, иначе имя и подпись
+   встали бы друг под другом. Подпись — тем же шрифтом, что и username
+   ниже (.profile-card-username), намеренно: она такая же служебная. */
+.profile-card-name-line {
+  margin-top: 10px;
+}
+
+.profile-card-name-line .profile-card-name {
+  display: inline;
+  margin-top: 0;
+  overflow: visible;
+  text-overflow: clip;
+}
+
+.profile-card-original-name {
+  font-size: calc(13px * var(--font-scale, 1));
+  font-weight: 500;
+  color: var(--text-muted);
+  white-space: nowrap;
+}

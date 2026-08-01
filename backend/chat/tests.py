@@ -30,11 +30,13 @@ from rest_framework_simplejwt.tokens import AccessToken
 
 from . import emoji as emoji_keys, mute_vote, presence, roles, sfu, turn
 from .consumers import GatewayConsumer
+from accounts.models import Friendship
+
 from .middleware import JWTAuthMiddleware
 from .models import (
     Attachment, Channel, Conversation, ConversationMessage,
     ConversationParticipant, MAX_ATTACHMENT_BYTES, MAX_REACTIONS_PER_MESSAGE,
-    Membership, Message, ProfileNote, Reaction, Role, Server, ServerBan,
+    FriendNickname, Membership, Message, ProfileNote, Reaction, Role, Server, ServerBan,
     ServerInvite, ServerJoinRequest, dm_room,
 )
 from .permissions import can_dm
@@ -2165,6 +2167,209 @@ class ProfileNoteTests(APITestCase):
         self.assertEqual(resp.status_code, 403)
         resp = self.client.put(f"/api/users/{self.about.id}/note", {"text": "x"}, format="json")
         self.assertEqual(resp.status_code, 403)
+
+
+class FriendNicknameTests(APITestCase):
+    """Приватный никнейм для другого человека (см. chat.models.FriendNickname)
+    — как и заметка, односторонний и виден только тому, кто его поставил."""
+
+    def setUp(self):
+        self.owner = User.objects.create_user(username="nick_owner", password="pw12345")
+        self.about = User.objects.create_user(username="nick_about", password="pw12345")
+        # Общий сервер — тот же барьер видимости, что и у заметки/карточки
+        # профиля (_can_see_profile), и заводится проще, чем дружба.
+        self.server = Server.objects.create(name="s", owner=self.owner)
+        Membership.objects.create(user=self.owner, server=self.server)
+        Membership.objects.create(user=self.about, server=self.server)
+        self.client.force_authenticate(self.owner)
+
+    def test_empty_by_default(self):
+        resp = self.client.get(f"/api/users/{self.about.id}/nickname")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data["nickname"], "")
+
+    def test_set_and_read(self):
+        put_resp = self.client.put(
+            f"/api/users/{self.about.id}/nickname", {"nickname": "Колян"}, format="json")
+        self.assertEqual(put_resp.status_code, 200)
+        self.assertEqual(put_resp.data["nickname"], "Колян")
+        self.assertEqual(
+            self.client.get(f"/api/users/{self.about.id}/nickname").data["nickname"], "Колян")
+
+    def test_empty_value_removes_row_not_stores_blank(self):
+        """Пустая строка снимает никнейм и НЕ оставляет за собой запись —
+        иначе каждая пара, которую кто-то однажды тронул, копила бы мусор."""
+        self.client.put(
+            f"/api/users/{self.about.id}/nickname", {"nickname": "Колян"}, format="json")
+        resp = self.client.put(
+            f"/api/users/{self.about.id}/nickname", {"nickname": "  "}, format="json")
+        self.assertEqual(resp.data["nickname"], "")
+        self.assertFalse(
+            FriendNickname.objects.filter(owner=self.owner, about=self.about).exists())
+
+    def test_overwrites_not_duplicates(self):
+        for value in ("a", "b"):
+            self.client.put(
+                f"/api/users/{self.about.id}/nickname", {"nickname": value}, format="json")
+        self.assertEqual(
+            FriendNickname.objects.filter(owner=self.owner, about=self.about).count(), 1)
+
+    def test_private_to_owner(self):
+        FriendNickname.objects.create(owner=self.owner, about=self.about, nickname="Колян")
+        other = User.objects.create_user(username="nick_other", password="pw12345")
+        Membership.objects.create(user=other, server=self.server)
+        self.client.force_authenticate(other)
+        self.assertEqual(
+            self.client.get(f"/api/users/{self.about.id}/nickname").data["nickname"], "")
+
+    def test_my_nicknames_lists_only_mine(self):
+        FriendNickname.objects.create(owner=self.owner, about=self.about, nickname="Колян")
+        stranger = User.objects.create_user(username="nick_stranger", password="pw12345")
+        FriendNickname.objects.create(owner=stranger, about=self.about, nickname="Чужое")
+        resp = self.client.get("/api/nicknames")
+        self.assertEqual(resp.data, [{"user_id": self.about.id, "nickname": "Колян"}])
+
+    def test_denied_to_stranger_and_to_self(self):
+        stranger = User.objects.create_user(username="nick_stranger2", password="pw12345")
+        self.client.force_authenticate(stranger)
+        self.assertEqual(
+            self.client.get(f"/api/users/{self.about.id}/nickname").status_code, 403)
+        self.client.force_authenticate(self.owner)
+        self.assertEqual(
+            self.client.get(f"/api/users/{self.owner.id}/nickname").status_code, 400)
+
+
+class PresenceEndpointTests(APITestCase):
+    """GET /api/presence — статус друзей и собеседников (тех, у кого своего
+    источника статуса нет: ростер сервера везёт его сам)."""
+
+    def setUp(self):
+        presence._r.flushdb()
+        self.me = User.objects.create_user(username="pres_me", password="pw12345")
+        self.friend = User.objects.create_user(username="pres_friend", password="pw12345")
+        self.stranger = User.objects.create_user(username="pres_stranger", password="pw12345")
+        Friendship.objects.create(
+            from_user=self.me, to_user=self.friend, status=Friendship.ACCEPTED,
+            responded_at=timezone.now())
+        self.client.force_authenticate(self.me)
+
+    def tearDown(self):
+        presence._r.flushdb()
+
+    def test_offline_friend_listed_as_offline(self):
+        resp = self.client.get("/api/presence")
+        self.assertEqual(resp.data, [{"user_id": self.friend.id, "status": "offline"}])
+
+    def test_online_friend_and_no_strangers(self):
+        presence.user_connected(self.friend.id)
+        presence.user_connected(self.stranger.id)
+        resp = self.client.get("/api/presence")
+        self.assertEqual(resp.data, [{"user_id": self.friend.id, "status": "online"}])
+
+    def test_invisible_friend_masked_as_offline(self):
+        presence.user_connected(self.friend.id)
+        self.friend.status = self.friend.INVISIBLE
+        self.friend.save(update_fields=["status"])
+        resp = self.client.get("/api/presence")
+        self.assertEqual(resp.data, [{"user_id": self.friend.id, "status": "offline"}])
+
+    def test_conversation_peer_without_friendship_included(self):
+        peer = User.objects.create_user(username="pres_peer", password="pw12345")
+        conversation = Conversation.objects.create(kind=Conversation.DM)
+        for u in (self.me, peer):
+            ConversationParticipant.objects.create(conversation=conversation, user=u)
+        presence.user_connected(peer.id)
+        ids = {row["user_id"] for row in self.client.get("/api/presence").data}
+        self.assertEqual(ids, {self.friend.id, peer.id})
+
+
+class FriendPresenceBroadcastTests(TransactionTestCase):
+    """Presence друга долетает до него ЛИЧНО, даже когда общего сервера нет —
+    иначе точке статуса в списке друзей неоткуда взяться (см.
+    GatewayConsumer._broadcast_presence).
+
+    TransactionTestCase по той же причине, что и GatewayVoiceSignalingTests.
+    """
+
+    def setUp(self):
+        presence._r.flushdb()
+        self.me = User.objects.create_user(username="bcast_me", password="pw12345")
+        self.friend = User.objects.create_user(username="bcast_friend", password="pw12345")
+        self.stranger = User.objects.create_user(username="bcast_stranger", password="pw12345")
+        Friendship.objects.create(
+            from_user=self.me, to_user=self.friend, status=Friendship.ACCEPTED,
+            responded_at=timezone.now())
+
+    def tearDown(self):
+        presence._r.flushdb()
+
+    async def _connect(self, user):
+        token = str(AccessToken.for_user(user))
+        comm = WebsocketCommunicator(
+            JWTAuthMiddleware(GatewayConsumer.as_asgi()), f"/ws/gateway?token={token}")
+        connected, _ = await comm.connect()
+        self.assertTrue(connected)
+        return comm
+
+    @staticmethod
+    async def _assert_no_presence(comm, timeout=0.3):
+        """Читает очередь НАПРЯМУЮ, без receive_json_from: тот при таймауте
+        отменяет таск consumer'а, и следующий disconnect() падает на чужом
+        event loop (тот же приём и по той же причине, что в
+        GatewayVoiceSignalingTests._assert_op_not_received)."""
+        start = time.monotonic()
+        while time.monotonic() - start < timeout:
+            while not comm.output_queue.empty():
+                raw = comm.output_queue.get_nowait()
+                if "text" in raw:
+                    msg = json.loads(raw["text"])
+                    assert msg.get("op") != "presence_update", f"пришёл лишний {msg}"
+            await asyncio.sleep(0.01)
+
+    async def test_friend_receives_presence_without_shared_server(self):
+        friend_ws = await self._connect(self.friend)
+        stranger_ws = await self._connect(self.stranger)
+        # "ready" своего же подключения — иначе оно "протечёт" в проверки ниже.
+        # Своего presence ни тот, ни другой не получают: общих серверов у них
+        # нет, а самому себе presence не адресуется.
+        await friend_ws.receive_json_from(timeout=2)
+        await stranger_ws.receive_json_from(timeout=2)
+
+        me_ws = await self._connect(self.me)
+
+        msg = await friend_ws.receive_json_from(timeout=2)
+        self.assertEqual(msg["op"], "presence_update")
+        self.assertEqual(msg["user_id"], self.me.id)
+        self.assertEqual(msg["status"], "online")
+
+        # Чужому — ничего: он мне не друг и не собеседник.
+        await self._assert_no_presence(stranger_ws)
+
+        await me_ws.disconnect()
+        await friend_ws.disconnect()
+        await stranger_ws.disconnect()
+
+    async def test_presence_not_duplicated_for_friend_on_shared_server(self):
+        """Друг, с которым мы ещё и на общем сервере, получает событие ОДИН
+        раз: серверная рассылка и персональная не должны накладываться."""
+        server = await database_sync_to_async(Server.objects.create)(
+            name="s", owner=self.me)
+        for user in (self.me, self.friend):
+            await database_sync_to_async(Membership.objects.create)(
+                user=user, server=server)
+
+        friend_ws = await self._connect(self.friend)
+        await friend_ws.receive_json_from(timeout=2)  # "ready"
+        await friend_ws.receive_json_from(timeout=2)  # свой собственный presence
+
+        me_ws = await self._connect(self.me)
+        msg = await friend_ws.receive_json_from(timeout=2)
+        self.assertEqual(msg["op"], "presence_update")
+        self.assertEqual(msg["user_id"], self.me.id)
+        await self._assert_no_presence(friend_ws)
+
+        await me_ws.disconnect()
+        await friend_ws.disconnect()
 
 
 class HeartbeatSweepTests(TestCase):

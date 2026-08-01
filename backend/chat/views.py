@@ -21,7 +21,7 @@ from accounts.serializers import UserSerializer
 from . import presence, roles, sfu, uploads
 from .models import (
     Attachment, Channel, Conversation, ConversationMessage,
-    ConversationParticipant, Membership, Message, ProfileNote, Role, Server,
+    ConversationParticipant, FriendNickname, Membership, Message, ProfileNote, Role, Server,
     ServerBan, ServerInvite, ServerJoinRequest, UserRelationState,
     MAX_ATTACHMENT_BYTES, _invite_code, dm_room,
 )
@@ -1317,6 +1317,109 @@ class UserNote(APIView):
         note, _ = ProfileNote.objects.update_or_create(
             author=request.user, about=target, defaults={"text": text})
         return Response({"text": note.text})
+
+
+class MyNicknames(APIView):
+    """GET /api/nicknames — все никнеймы, которые Я кому-то дал.
+
+    Отдаётся одним списком на старте (как /api/relations), а не полем в
+    каждом User: подменённое имя нужно КАЖДОМУ месту, где рисуется ник
+    (список друзей, диалоги, шапка чата, лента), а UserSerializer едет в
+    каждом сообщении — таскать в нём поле, которое почти всегда пустое,
+    незачем. Клиент держит эту карту в сторе и подставляет сам (см.
+    web/src/nicknames.ts).
+    """
+
+    def get(self, request):
+        rows = FriendNickname.objects.filter(owner=request.user)
+        return Response([
+            {"user_id": r.about_id, "nickname": r.nickname} for r in rows
+        ])
+
+
+class UserNickname(APIView):
+    """GET/PUT/DELETE /api/users/<id>/nickname — приватный никнейм для
+    конкретного человека (см. chat.models.FriendNickname).
+
+    Барьер видимости тот же, что у заметки и карточки профиля
+    (_can_see_profile). Пустая строка в PUT равнозначна DELETE — так
+    «стереть поле и сохранить» в диалоге ввода не создаёт пустую строку в
+    базе.
+    """
+
+    def _target(self, request, user_id):
+        target = get_object_or_404(User, id=user_id)
+        if target.id == request.user.id:
+            return None, Response({"detail": "Себе никнейм не ставят."}, status=400)
+        if not _can_see_profile(request.user, target):
+            return None, Response({"detail": "Нет доступа."}, status=403)
+        return target, None
+
+    def get(self, request, user_id):
+        target, error = self._target(request, user_id)
+        if error:
+            return error
+        row = FriendNickname.objects.filter(owner=request.user, about=target).first()
+        return Response({"nickname": row.nickname if row else ""})
+
+    def put(self, request, user_id):
+        target, error = self._target(request, user_id)
+        if error:
+            return error
+        nickname = (request.data.get("nickname") or "").strip()[:64]
+        if not nickname:
+            FriendNickname.objects.filter(owner=request.user, about=target).delete()
+            return Response({"nickname": ""})
+        FriendNickname.objects.update_or_create(
+            owner=request.user, about=target, defaults={"nickname": nickname})
+        return Response({"nickname": nickname})
+
+    def delete(self, request, user_id):
+        target, error = self._target(request, user_id)
+        if error:
+            return error
+        FriendNickname.objects.filter(owner=request.user, about=target).delete()
+        return Response({"nickname": ""})
+
+
+class PresenceView(APIView):
+    """GET /api/presence — онлайн-статус всех, кого я вижу вне серверов:
+    друзей и участников моих диалогов/групп.
+
+    Ростер сервера везёт свой статус сам (см. ServerMembers), а вот список
+    друзей и диалогов раньше не знал про онлайн вообще — точке статуса на
+    аватарке там было неоткуда взяться. Отдельная ручка, а не поле в
+    /api/friends и /api/conversations: статус живёт в Redis и меняется
+    независимо от них, клиенту он нужен ОДНОЙ картой user_id -> статус, в
+    которую потом капают presence_update по WS (см. web/src/presence.ts).
+    """
+
+    def get(self, request):
+        friend_ids = set(
+            Friendship.objects.filter(status=Friendship.ACCEPTED).filter(
+                Q(from_user=request.user) | Q(to_user=request.user)
+            ).values_list("from_user_id", "to_user_id")
+        )
+        user_ids = {uid for pair in friend_ids for uid in pair}
+        my_conversation_ids = ConversationParticipant.objects.filter(
+            user=request.user).values_list("conversation_id", flat=True)
+        user_ids.update(ConversationParticipant.objects.filter(
+            conversation_id__in=my_conversation_ids
+        ).values_list("user_id", flat=True))
+        user_ids.discard(request.user.id)
+        if not user_ids:
+            return Response([])
+
+        snapshot = presence.members_snapshot(user_ids)
+        users = User.objects.filter(id__in=user_ids).only("id", "status")
+        return Response([
+            {
+                "user_id": u.id,
+                "status": presence.effective_status(
+                    u, (snapshot.get(str(u.id)) or {}).get("online", False)),
+            }
+            for u in users
+        ])
 
 
 class ConversationListCreate(APIView):

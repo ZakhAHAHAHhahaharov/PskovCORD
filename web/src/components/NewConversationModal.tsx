@@ -74,7 +74,14 @@ export default function NewConversationModal({
               className={`new-conversation-row ${selected.has(p.id) ? 'active' : ''}`}
               onClick={() => toggle(p.id)}
             >
-              <Avatar name={p.username} color={p.avatar_color} image={p.avatar_image} size={28} />
+              <Avatar
+                name={p.username}
+                color={p.avatar_color}
+                image={p.avatar_image}
+                size={28}
+                userId={p.id}
+                showStatus
+              />
               <span className="member-name">{p.username}</span>
               <span className="member-voice">друг</span>
             </button>

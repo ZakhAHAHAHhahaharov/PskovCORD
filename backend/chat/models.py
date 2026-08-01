@@ -769,3 +769,31 @@ class ProfileNote(models.Model):
 
     def __str__(self) -> str:
         return f"{self.author_id} note about {self.about_id}"
+
+
+class FriendNickname(models.Model):
+    """Никнейм, который ОДИН пользователь дал другому — как «дружеские
+    прозвища» в Discord. Односторонний и приватный: его видит только тот, кто
+    поставил, объекту никакого сигнала не уходит (тот же принцип, что у
+    ProfileNote и UserRelationState выше).
+
+    Одна запись на пару (owner, about); пустой никнейм не хранится вовсе —
+    вместо записи с "" ручка удаляет строку (см. chat.views.UserNickname),
+    иначе «убрал никнейм» оставлял бы за собой мусорную строку на каждую
+    пару, которую кто-то когда-то трогал.
+    """
+
+    owner = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+        related_name="nicknames_given")
+    about = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+        related_name="nicknames_received")
+    nickname = models.CharField(max_length=64)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ("owner", "about")
+
+    def __str__(self) -> str:
+        return f"{self.owner_id} calls {self.about_id} {self.nickname!r}"
