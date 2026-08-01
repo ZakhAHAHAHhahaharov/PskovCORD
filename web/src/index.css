@@ -7429,33 +7429,74 @@ button.settings-row-clickable:hover .settings-row-label {
 /* z-index 80 — НИЖЕ модального оверлея (100) намеренно: открытый диалог
    накрывает кнопку своим затемнением сам, и не нужно отслеживать каждый
    попап/лайтбокс по отдельности, чтобы её прятать. */
+/* Виджет обращения в поддержку, как в магазинах: сплошной акцентный круг с
+   тенью, видимый всегда. Прошлый вариант — приглушённый серый кружок на
+   45% непрозрачности — прятался на сером фоне настолько, что кнопку
+   приходилось искать. Заметность здесь важнее сдержанности: кнопкой,
+   которую не нашли, не воспользуются вовсе.
+
+   Тень, а не рамка: она отрывает кнопку от полотна приложения и на любом
+   фоне читается одинаково, тогда как рамка тонет в тёмной теме. */
 .bug-report-fab {
   position: fixed;
-  right: 16px;
-  bottom: 16px;
+  right: 20px;
+  bottom: 20px;
   z-index: 80;
-  width: 40px;
-  height: 40px;
+  height: 52px;
   display: flex;
   align-items: center;
-  justify-content: center;
-  border: 1px solid var(--border-color);
-  border-radius: 50%;
-  background: var(--surface-2);
-  color: var(--text-muted);
+  gap: 0;
+  padding: 0 16px;
+  border: none;
+  border-radius: 26px;
+  background: var(--blurple);
+  color: #fff;
   cursor: pointer;
-  /* Приглушена, пока на неё не навели: кнопка висит поверх приложения
-     постоянно, и в полную силу она бы всё время перетягивала внимание на
-     себя в интерфейсе, где её ждут раз в месяц. */
-  opacity: 0.45;
-  transition: opacity 0.15s, color 0.15s, background 0.15s;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35), 0 1px 3px rgba(0, 0, 0, 0.25);
+  transition: background 0.15s, box-shadow 0.15s, transform 0.15s, gap 0.18s;
 }
 
 .bug-report-fab:hover,
 .bug-report-fab:focus-visible {
-  opacity: 1;
-  color: var(--text-normal);
-  background: var(--input-secondary-bg);
+  background: var(--blurple-hover);
+  transform: translateY(-2px);
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.4), 0 2px 5px rgba(0, 0, 0, 0.3);
+  gap: 10px;
+}
+
+/* Подпись раскрывается по наведению. Круг в покое занимает ровно столько,
+   сколько нужно иконке, — постоянная плашка «Сообщить о проблеме» висела бы
+   поперёк интерфейса всё время. Схлопнута шириной, а не display:none, чтобы
+   текст оставался в разметке для программ чтения с экрана. */
+.bug-report-fab-label {
+  max-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1;
+  transition: max-width 0.18s ease;
+}
+
+.bug-report-fab:hover .bug-report-fab-label,
+.bug-report-fab:focus-visible .bug-report-fab-label {
+  max-width: 220px;
+}
+
+/* Просьба убрать анимации — про движение, а не про раскладку: подпись
+   по-прежнему свёрнута и раскрывается по наведению, просто мгновенно.
+   Раньше здесь она разворачивалась НАСОВСЕМ, и на узком экране кнопка
+   превращалась в плашку поперёк переписки — мобильное правило ниже гасит
+   только :hover и такую растяжку не поймало бы. */
+@media (prefers-reduced-motion: reduce) {
+  .bug-report-fab,
+  .bug-report-fab-label {
+    transition: none;
+  }
+
+  .bug-report-fab:hover {
+    transform: none;
+  }
 }
 
 .bug-report-modal {
@@ -7539,10 +7580,23 @@ button.settings-row-clickable:hover .settings-row-label {
      композера (24, тоже замерен: с 24 кнопка вставала вплотную, зазор 0)
      плюс 8px просвета. */
   .bug-report-fab {
-    right: 10px;
+    right: 14px;
     bottom: calc(var(--composer-height, 0px) + 32px);
-    width: 36px;
-    height: 36px;
+    height: 46px;
+    padding: 0 13px;
+  }
+
+  /* На тач-экране подпись не раскрываем вовсе: :hover там «залипает» после
+     тапа, и кнопка осталась бы растянутой поперёк переписки. Иконки на
+     сплошном акцентном круге достаточно — смысл несёт aria-label. */
+  .bug-report-fab:hover .bug-report-fab-label,
+  .bug-report-fab:focus-visible .bug-report-fab-label {
+    max-width: 0;
+  }
+
+  .bug-report-fab:hover {
+    gap: 0;
+    transform: none;
   }
 }
 

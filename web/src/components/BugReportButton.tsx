@@ -74,11 +74,14 @@ export default function BugReportButton() {
       <button
         type="button"
         className="bug-report-fab"
-        title="Сообщить о проблеме"
         aria-label="Сообщить о проблеме"
         onClick={() => setOpen(true)}
       >
-        <Bug size={18} />
+        <Bug size={20} aria-hidden="true" />
+        {/* Подпись лежит в разметке всегда (её читает озвучка и видно при
+            наведении), а не появляется по JS: подставлять её на hover значит
+            менять ширину кнопки уже после того, как курсор в неё целился. */}
+        <span className="bug-report-fab-label">Сообщить о проблеме</span>
       </button>
       {open && <BugReportModal onClose={() => setOpen(false)} />}
     </>
