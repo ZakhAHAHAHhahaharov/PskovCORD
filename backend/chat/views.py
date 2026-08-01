@@ -41,6 +41,16 @@ def is_member(user, server) -> bool:
     return Membership.objects.filter(user=user, server=server).exists()
 
 
+def _require_any_permission(request, server, *permissions):
+    """То же, что _require_permission, но достаточно ЛЮБОГО из прав. Нужно
+    там, где широкое право включает в себя узкое: «Выгонять/одобрять/банить»
+    (manage_members) само по себе даёт и бан, а ban_members — только его."""
+    perms = roles.permissions_for(request.user, server)
+    if any(perms.get(name) for name in permissions):
+        return None
+    return Response({"detail": "Недостаточно прав на сервере."}, status=403)
+
+
 def _require_permission(request, server, permission):
     """Общая проверка доступа к «управляющим» ручкам сервера: возвращает
     готовый 403-Response, если права нет, иначе None. Не участник сервера
@@ -563,6 +573,9 @@ class ServerMembers(APIView):
                 "sharing_screen": state.get("sharing_screen", False),
                 "role_ids": [r.id for r in m.roles.all()],
                 "is_owner": u.id == server.owner_id,
+                # Никнейм НА ЭТОМ СЕРВЕРЕ — виден всем участникам (в отличие
+                # от приватного FriendNickname, см. chat.models.Membership).
+                "server_nickname": m.nickname,
             })
         # Онлайн сверху, затем по имени.
         data.sort(key=lambda x: (not x["online"], x["username"].lower()))
@@ -618,6 +631,49 @@ class ServerMemberDetail(APIView):
         Membership.objects.filter(server=server, user_id=user_id).delete()
         _revoke_server_membership(server, user_id)
         return Response(status=204)
+
+
+class ServerMemberNickname(APIView):
+    """PATCH /api/servers/<id>/members/<user_id>/nickname {"nickname"} —
+    никнейм участника НА ЭТОМ СЕРВЕРЕ (Membership.nickname).
+
+    Своё имя меняет право change_nickname, чужое — manage_nicknames. Оба
+    отдельные: «могу переименовать себя» и «могу переименовать кого угодно» —
+    разные полномочия, и второе не подразумевает первое (роль-модератор может
+    иметь право чинить чужие ники, но сама сидеть под настоящим).
+
+    Не путать с приватным FriendNickname (см. UserNickname): тот односторонний
+    и виден только тому, кто его поставил, этот — всему серверу."""
+
+    def patch(self, request, server_id, user_id):
+        server = get_object_or_404(Server, id=server_id)
+        if not is_member(request.user, server):
+            return Response({"detail": "Вы не участник сервера."}, status=403)
+        own = user_id == request.user.id
+        denied = _require_permission(
+            request, server, "change_nickname" if own else "manage_nicknames")
+        if denied:
+            return denied
+        # Иерархия ролей: переименовать чужого можно только строго ниже себя —
+        # иначе manage_nicknames давало бы переименовать администратора.
+        if not own and not roles.can_act_on_member(request.user, server, user_id):
+            return Response(
+                {"detail": "Нельзя менять никнейм участника не ниже вас."}, status=403)
+        membership = get_object_or_404(Membership, server=server, user_id=user_id)
+        nickname = str(request.data.get("nickname") or "").strip()[:100]
+        membership.nickname = nickname
+        membership.save(update_fields=["nickname"])
+        # Ростер сервера у всех открыт прямо сейчас — без рассылки чужое имя
+        # сменилось бы только у того, кто его правил, до перезахода остальных.
+        channel_layer = get_channel_layer()
+        async_to_sync(channel_layer.group_send)(
+            f"server_{server.id}", {"type": "broadcast", "payload": {
+                "op": "server_member_nickname",
+                "server_id": server.id,
+                "user_id": user_id,
+                "nickname": nickname,
+            }})
+        return Response({"user_id": user_id, "nickname": nickname})
 
 
 class ServerRoles(APIView):
@@ -757,7 +813,8 @@ class ServerBans(APIView):
 
     def get(self, request, server_id):
         server = get_object_or_404(Server, id=server_id)
-        denied = _require_permission(request, server, "manage_members")
+        denied = _require_any_permission(
+            request, server, "manage_members", "ban_members")
         if denied:
             return denied
         qs = server.bans.select_related("user", "banned_by")
@@ -766,7 +823,8 @@ class ServerBans(APIView):
     @transaction.atomic
     def post(self, request, server_id):
         server = get_object_or_404(Server, id=server_id)
-        denied = _require_permission(request, server, "manage_members")
+        denied = _require_any_permission(
+            request, server, "manage_members", "ban_members")
         if denied:
             return denied
         target = get_object_or_404(User, id=request.data.get("user_id"))
@@ -791,7 +849,8 @@ class ServerBans(APIView):
 class ServerBanDetail(APIView):
     def delete(self, request, server_id, user_id):
         server = get_object_or_404(Server, id=server_id)
-        denied = _require_permission(request, server, "manage_members")
+        denied = _require_any_permission(
+            request, server, "manage_members", "ban_members")
         if denied:
             return denied
         ServerBan.objects.filter(server=server, user_id=user_id).delete()
@@ -880,11 +939,12 @@ class ServerInvites(APIView):
     """POST /api/servers/<id>/invites {"user_id", "channel_id"?} —
     пригласить конкретного человека напрямую, на сервер целиком или (если
     передан channel_id, см. правый клик по голосовому каналу →
-    "Пригласить в голосовой чат") в конкретный канал. Может любой участник
-    сервера — приглашать друзей на свой сервер не требует прав модерации,
-    это не изменение самого сервера. Байпасит access_mode ЦЕЛИКОМ (в т.ч.
-    «только по приглашению») — в этом и смысл приглашения; бан по-прежнему
-    блокирует.
+    "Пригласить в голосовой чат") в конкретный канал. Нужно право
+    create_invites — по умолчанию оно есть у всех (см.
+    chat.roles.BASE_MEMBER_PERMISSIONS), так что поведение то же, что и
+    раньше, но закрытый сервер теперь может его снять. Байпасит access_mode
+    ЦЕЛИКОМ (в т.ч. «только по приглашению») — в этом и смысл приглашения;
+    бан по-прежнему блокирует.
 
     Само приглашение адресат видит не отдельным списком, а карточкой сервера
     прямо в переписке с пригласившим — см. _send_invite_message."""
@@ -893,6 +953,9 @@ class ServerInvites(APIView):
         server = get_object_or_404(Server, id=server_id)
         if not is_member(request.user, server):
             return Response({"detail": "Вы не участник сервера."}, status=403)
+        denied = _require_permission(request, server, "create_invites")
+        if denied:
+            return denied
         target = get_object_or_404(User, id=request.data.get("user_id"))
         if target.id == request.user.id:
             return Response({"detail": "Нельзя пригласить самого себя."}, status=400)
@@ -990,6 +1053,9 @@ class ServerInviteLink(APIView):
         server = get_object_or_404(Server, id=server_id)
         if not is_member(request.user, server):
             return Response({"detail": "Вы не участник сервера."}, status=403)
+        denied = _require_permission(request, server, "create_invites")
+        if denied:
+            return denied
         channel = None
         channel_id = request.query_params.get("channel_id")
         if channel_id is not None:
@@ -1728,9 +1794,16 @@ class ChannelCreate(APIView):
         return Response(data, status=201)
 
 
+# Потолок медленного режима — как в Discord: 6 часов. Больше — уже не
+# «замедление», а фактическое закрытие канала на запись, для которого есть
+# отдельное право send_messages.
+MAX_SLOWMODE_SECONDS = 6 * 60 * 60
+
+
 class ChannelDetail(APIView):
-    """PATCH /api/channels/<id> {"status"} — правый клик по каналу →
-    "Установить статус канала" (см. web/src/components/ChannelContextMenu.tsx).
+    """PATCH /api/channels/<id> {"status"?, "slowmode_seconds"?} — правый клик
+    по каналу → "Установить статус канала" / "Медленный режим" (см.
+    web/src/components/ChannelContextMenu.tsx).
 
     Персистентный Channel.status, а НЕ эфемерная тема звонка
     (presence.call_topic/voice_topic_update, chat.consumers
@@ -1747,10 +1820,34 @@ class ChannelDetail(APIView):
         if denied:
             return denied
         status_text = request.data.get("status")
-        if status_text is None:
-            return Response({"detail": "Нужно поле status."}, status=400)
-        channel.status = str(status_text).strip()[:120]
-        channel.save(update_fields=["status"])
+        slowmode = request.data.get("slowmode_seconds")
+        if status_text is None and slowmode is None:
+            return Response(
+                {"detail": "Нужно поле status или slowmode_seconds."}, status=400)
+        updated = []
+        if status_text is not None:
+            channel.status = str(status_text).strip()[:120]
+            updated.append("status")
+        if slowmode is not None:
+            try:
+                seconds = int(slowmode)
+            except (TypeError, ValueError):
+                return Response(
+                    {"detail": "slowmode_seconds — целое число секунд."}, status=400)
+            if not 0 <= seconds <= MAX_SLOWMODE_SECONDS:
+                return Response(
+                    {"detail": f"Медленный режим — от 0 до "
+                               f"{MAX_SLOWMODE_SECONDS} секунд."}, status=400)
+            # Голосовому каналу медленный режим нечего ограничивать: сообщений
+            # в нём нет, а молча сохранённое значение позже выглядело бы как
+            # работающая, но ничего не делающая настройка.
+            if channel.kind != Channel.TEXT:
+                return Response(
+                    {"detail": "Медленный режим — только для текстовых каналов."},
+                    status=400)
+            channel.slowmode_seconds = seconds
+            updated.append("slowmode_seconds")
+        channel.save(update_fields=updated)
         data = ChannelSerializer(channel).data
         channel_layer = get_channel_layer()
         async_to_sync(channel_layer.group_send)(
@@ -1760,6 +1857,26 @@ class ChannelDetail(APIView):
                 "channel": data,
             }})
         return Response(data)
+
+
+def _hide_old_history(request, server, qs):
+    """Режет выборку по праву read_message_history: без него участник видит
+    только то, что пришло с момента ТЕКУЩЕГО входа в сеть (см.
+    chat.presence.online_since) — ровно как в Discord.
+
+    Пользователь офлайн (граница неизвестна — REST-запрос успел уйти раньше,
+    чем поднялся WS) — отсчитываем от «сейчас»: показать лишнее хуже, чем
+    показать пусто, а через мгновение WS всё равно донесёт живые сообщения.
+    """
+    if roles.has_permission(request.user, server, "read_message_history"):
+        return qs
+    since = presence.online_since(request.user.id)
+    cutoff = (
+        timezone.datetime.fromtimestamp(since, tz=timezone.get_current_timezone())
+        if since is not None
+        else timezone.now()
+    )
+    return qs.filter(created_at__gte=cutoff)
 
 
 class ChannelMessages(APIView):
@@ -1772,6 +1889,7 @@ class ChannelMessages(APIView):
             "author", "reply_to__author"
         ).prefetch_related("attachments", "reactions")
         qs = _hide_blocked(request.user, qs)
+        qs = _hide_old_history(request, channel.server, qs)
         messages = _paginate_messages(request, qs)
         return Response(MessageSerializer(messages, many=True).data)
 
@@ -1790,6 +1908,9 @@ class ChannelPins(APIView):
             "author", "reply_to__author"
         ).prefetch_related("attachments", "reactions").order_by("-pinned_at", "-id")
         qs = _hide_blocked(request.user, qs)
+        # Закреп — та же история: без read_message_history старое закреплённое
+        # сообщение осталось бы видно через эту ручку в обход основной ленты.
+        qs = _hide_old_history(request, channel.server, qs)
         return Response(MessageSerializer(qs, many=True).data)
 
 
@@ -1807,9 +1928,12 @@ class VoiceCredentials(APIView):
         channel = get_object_or_404(Channel, id=channel_id)
         if channel.kind != Channel.VOICE:
             return Response({"detail": "Не голосовой канал."}, status=400)
-        # speak проверяем именно здесь: без токена до SFU не дойти, так что
-        # это и есть точка, где право «Говорить» становится настоящим.
-        denied = _require_channel_access(request, channel, "speak")
+        # connect проверяем именно здесь: без токена до SFU не дойти, так что
+        # это и есть точка, где право «Подключаться» становится настоящим.
+        # speak тут НЕ требуется — он уезжает отдельным claim'ом ниже:
+        # connect без speak это законный «слушатель», которого раньше просто
+        # не пускали в канал вовсе.
+        denied = _require_channel_access(request, channel, "connect")
         if denied:
             return denied
         # Медиа идёт через собственный SFU (mediasoup). Клиенту нужен адрес
@@ -1901,3 +2025,30 @@ class AttachmentUpload(APIView):
 @permission_classes([IsAuthenticated])
 def config_view(request):
     return Response({"app_name": settings.APP_NAME})
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def permissions_catalog_view(request):
+    """Каталог прав для редактора ролей: название, пояснение, группа и флаг
+    «ещё не работает». Отдаётся с бэка, а не хардкодится на клиенте, чтобы
+    список прав жил ровно в одном месте (chat.roles.PERMISSION_FIELDS) —
+    раньше подписи и порядок дублировались в ServerSettingsModal и разъезжались
+    с бэком при каждом изменении."""
+    return Response({
+        "groups": [
+            {"id": group_id, "title": title}
+            for group_id, title in roles.PERMISSION_GROUPS
+        ],
+        "permissions": [
+            {
+                "name": name,
+                "label": label,
+                "group": group,
+                "hint": hint,
+                "upcoming": name in roles.UPCOMING_PERMISSIONS,
+                "owner_locked": name in roles.OWNER_LOCKED_PERMISSIONS,
+            }
+            for name, label, group, hint in roles.PERMISSION_FIELDS
+        ],
+    })

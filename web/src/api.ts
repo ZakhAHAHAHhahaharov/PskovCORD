@@ -151,27 +151,67 @@ export interface Channel {
   /** Персистентный статус канала (правый клик → «Установить статус канала»),
    * в отличие от эфемерного topic выше — переживает опустение канала. */
   status: string
+  /** Медленный режим: сколько секунд участник ждёт между своими сообщениями.
+   * 0 — выключен. Обходится правом bypass_slowmode. Только для текстовых. */
+  slowmode_seconds: number
 }
 
-/** Права роли на сервере — 1:1 с булевыми полями chat.models.Role
- * (список и порядок для UI — chat/roles.py PERMISSION_FIELDS). */
-// manage_invites / manage_nicknames / mention_everyone отсюда убраны: они
-// охраняли фичи, которых в проекте нет (модели Invite, никнеймов на сервере
-// и разбора @all/@online/@here не существует), и были переключателями,
-// которые не делали ничего. Колонки в БД остались — вернутся сюда вместе с
-// самими фичами (см. chat/roles.py RESERVED_PERMISSION_FIELDS).
+/** Права роли на сервере — 1:1 с булевыми полями chat.models.Role.
+ *
+ * Сам СПИСОК для редактора (подписи, пояснения, группы, пометка «скоро») сюда
+ * больше не копируется — он приезжает с бэка ручкой /api/permissions (см.
+ * api.permissionsCatalog и chat/roles.py PERMISSION_FIELDS). Здесь остаётся
+ * только тип-объединение: он нужен статически, чтобы `perms.manage_server`
+ * в коде проверялся компилятором, а не угадывался строкой. */
 export type ServerPermission =
   | 'view_channels'
   | 'manage_channels'
   | 'manage_roles'
   | 'manage_server'
   | 'manage_members'
+  | 'ban_members'
+  | 'create_invites'
+  | 'change_nickname'
+  | 'manage_nicknames'
+  | 'create_expressions'
+  | 'manage_expressions'
   | 'send_messages'
+  | 'attach_files'
+  | 'add_reactions'
+  | 'use_external_emojis'
+  | 'use_external_stickers'
+  | 'mention_everyone'
   | 'delete_messages'
+  | 'pin_messages'
+  | 'bypass_slowmode'
+  | 'read_message_history'
+  | 'connect'
   | 'speak'
   | 'video'
+  | 'start_mute_vote'
+  | 'request_screen_share'
 
 export type ServerPermissions = Record<ServerPermission, boolean>
+
+/** Одно право в каталоге для редактора ролей — приезжает с /api/permissions,
+ * чтобы подписи и порядок жили ровно в одном месте (chat/roles.py). */
+export interface PermissionInfo {
+  name: ServerPermission
+  label: string
+  group: string
+  /** Пояснение под названием; "" — название говорит само за себя. */
+  hint: string
+  /** Фича ещё не сделана — переключатель сохраняется, но ни на что не влияет
+   * (в редакторе показывается с пометкой «скоро»). */
+  upcoming: boolean
+  /** Нельзя снять с роли «Владелец» — бэк всё равно форсит его в True. */
+  owner_locked: boolean
+}
+
+export interface PermissionsCatalog {
+  groups: { id: string; title: string }[]
+  permissions: PermissionInfo[]
+}
 
 /** Кто может пинговать роль (@ИмяРоли) — см. backend chat.models.Role. Не
  * путать с manage_roles (управление самой ролью): это про то, чьё
@@ -390,6 +430,10 @@ export interface Member extends Omit<User, 'status' | 'dm_privacy'> {
   deafened: boolean
   /** Демонстрирует ли сейчас экран — тоже видно всем, не только в канале. */
   sharing_screen: boolean
+  /** Никнейм НА ЭТОМ СЕРВЕРЕ — виден всем участникам, "" если не задан.
+   * Не путать с приватным никнеймом друга (см. nicknames.ts): тот вижу
+   * только я, этот — весь сервер. */
+  server_nickname: string
 }
 
 /** Минимум, нужный автокомплиту @упоминаний (MessageInput) и рендеру
@@ -944,6 +988,10 @@ export const api = {
 
   config: () => req('/api/config'),
 
+  /** Каталог прав для редактора ролей (подписи/пояснения/группы/«скоро») —
+   * единственный источник правды живёт на бэке, см. chat/roles.py. */
+  permissionsCatalog: (): Promise<PermissionsCatalog> => req('/api/permissions'),
+
   servers: (): Promise<Server[]> => req('/api/servers'),
   createServer: (name: string): Promise<Server> =>
     req('/api/servers', { method: 'POST', body: JSON.stringify({ name }) }),
@@ -1091,6 +1139,12 @@ export const api = {
       method: 'PATCH',
       body: JSON.stringify({ status }),
     }),
+  /** Медленный режим канала в секундах (0 — выключить). Нужно manage_channels. */
+  setChannelSlowmode: (channelId: number, seconds: number): Promise<Channel> =>
+    req(`/api/channels/${channelId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ slowmode_seconds: seconds }),
+    }),
 
   /** before — страница старше указанного сообщения (скролл вверх),
    *  after — то, что появилось после (добор пропущенного, когда WS лежал). */
@@ -1188,6 +1242,19 @@ export const api = {
   setUserNickname: (userId: number, nickname: string): Promise<{ nickname: string }> =>
     req(`/api/users/${userId}/nickname`, {
       method: 'PUT',
+      body: JSON.stringify({ nickname }),
+    }),
+
+  /** Никнейм участника НА СЕРВЕРЕ — виден всем (в отличие от приватного
+   * setUserNickname выше). Своё имя требует change_nickname, чужое —
+   * manage_nicknames (см. backend ServerMemberNickname). */
+  setServerNickname: (
+    serverId: number,
+    userId: number,
+    nickname: string,
+  ): Promise<{ user_id: number; nickname: string }> =>
+    req(`/api/servers/${serverId}/members/${userId}/nickname`, {
+      method: 'PATCH',
       body: JSON.stringify({ nickname }),
     }),
 }

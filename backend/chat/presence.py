@@ -70,12 +70,21 @@ def _heartbeat_key(uid) -> str:
     return f"presence:hb:{uid}"
 
 
+def _online_since_key(uid) -> str:
+    return f"presence:online_since:{uid}"
+
+
 # --- online -----------------------------------------------------------------
 def user_connected(uid) -> int:
     uid = str(uid)
     n = _r.incr(_conn_key(uid))
     if n == 1:
         _r.sadd(ONLINE_SET, uid)
+        # Момент ВХОДА, а не каждого коннекта: вторая вкладка того же
+        # пользователя не должна двигать границу видимой истории (см.
+        # online_since ниже) — иначе открытие второго окна прятало бы часть
+        # только что прочитанного.
+        _r.set(_online_since_key(uid), time.time())
     return n
 
 
@@ -87,8 +96,27 @@ def user_disconnected(uid) -> int:
         _r.srem(ONLINE_SET, uid)
         clear_voice(uid)
         clear_heartbeat(uid)
+        _r.delete(_online_since_key(uid))
         return 0
     return n
+
+
+def online_since(uid) -> float | None:
+    """Unix-время, когда пользователь вошёл в сеть (первый WS-коннект), или
+    None, если он сейчас офлайн.
+
+    Нужно ровно одному потребителю — праву read_message_history: без него
+    участник видит только те сообщения, что пришли с момента ТЕКУЩЕГО входа
+    (см. chat.views.ChannelMessages). Живёт в Redis рядом с самим presence, а
+    не в БД: это свойство сессии, оно исчезает вместе с ней и переживать
+    перезапуск не должно."""
+    raw = _r.get(_online_since_key(str(uid)))
+    if raw is None:
+        return None
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return None
 
 
 def is_online(uid) -> bool:
@@ -128,6 +156,9 @@ def heartbeat(uid) -> bool:
     # их на самом деле было несколько, лишние узнают о себе на своём же
     # следующем пинге (не позже минуты) — самовосстанавливается.
     _r.setnx(_conn_key(uid), 1)
+    # setnx, а не set: если запись пережила sweep, это тот же самый вход, и
+    # двигать границу видимой истории (см. online_since) не за что.
+    _r.setnx(_online_since_key(uid), time.time())
     return True
 
 
@@ -148,6 +179,7 @@ def force_offline(uid):
     _r.srem(ONLINE_SET, uid)
     prev = clear_voice(uid)
     clear_heartbeat(uid)
+    _r.delete(_online_since_key(uid))
     return prev
 
 

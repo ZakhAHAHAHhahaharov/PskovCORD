@@ -1,4 +1,5 @@
-import { Me, Server } from '../api'
+import { useState } from 'react'
+import { api, Me, Server } from '../api'
 import type { useConversationContextMenu } from '../hooks/useConversationContextMenu'
 import type { useFriendContextMenu } from '../hooks/useFriendContextMenu'
 import type { useConversationsData } from '../hooks/useConversationsData'
@@ -25,6 +26,7 @@ import ChannelInviteModal from './ChannelInviteModal'
 import ConversationContextMenu from './ConversationContextMenu'
 import FriendContextMenu from './FriendContextMenu'
 import FriendNicknameModal from './FriendNicknameModal'
+import ServerNicknameModal from './ServerNicknameModal'
 import VoiceInviteJoinModal from './VoiceInviteJoinModal'
 
 interface AppShellOverlaysProps {
@@ -69,6 +71,9 @@ export default function AppShellOverlays({
   const menuPeerId = menuConversation?.participants[0]?.id
   const muteVoteNickname = useNickname(voice.muteVote?.targetUserId)
   const incomingCallerNickname = useNickname(voice.incomingCall?.caller.id)
+  // Кому сейчас правим никнейм НА СЕРВЕРЕ (см. ServerNicknameModal) — держим
+  // id, а не самого участника: ростер живой, объект успел бы протухнуть.
+  const [serverNicknameUserId, setServerNicknameUserId] = useState<number | null>(null)
   return (
     <>
       {conv.showNewConversation && (
@@ -207,6 +212,11 @@ export default function AppShellOverlays({
             participant.contextMenuTarget.room.kind === 'channel' &&
             !!server.currentServer?.my_permissions?.manage_members
           }
+          canManageNicknames={!!server.currentServer?.my_permissions?.manage_nicknames}
+          canStartMuteVote={!!server.currentServer?.my_permissions?.start_mute_vote}
+          canRequestScreenShare={
+            !!server.currentServer?.my_permissions?.request_screen_share
+          }
           voteDisabled={
             voice.activeMuteVoteChannelId != null &&
             voice.voice?.room.kind === 'channel' &&
@@ -229,8 +239,34 @@ export default function AppShellOverlays({
           onStartMuteVote={voice.handleStartMuteVote}
           onRequestScreenShare={voice.handleRequestScreenShare}
           onWakeUser={voice.handleWakeUser}
+          onSetServerNickname={(userId) => setServerNicknameUserId(userId)}
         />
       )}
+      {serverNicknameUserId != null && (() => {
+        // Участника резолвим из живого ростера (тот же приём, что у беседы и
+        // друга выше) — его могли выгнать, пока модалка открыта.
+        const target = server.members.find((m) => m.id === serverNicknameUserId)
+        if (!target) return null
+        return (
+          <ServerNicknameModal
+            member={target}
+            isSelf={target.id === user.id}
+            onSave={async (nickname) => {
+              if (!server.currentServer) return
+              await api.setServerNickname(server.currentServer.id, target.id, nickname)
+              // Ростер обновит и WS-событие server_member_nickname, но у
+              // самого инициатора ответ ручки уже на руках — не ждём круга
+              // через сервер, чтобы имя сменилось сразу.
+              server.setMembers((prev) =>
+                prev.map((m) =>
+                  m.id === target.id ? { ...m, server_nickname: nickname } : m,
+                ),
+              )
+            }}
+            onClose={() => setServerNicknameUserId(null)}
+          />
+        )
+      })()}
       {voice.muteVote && voice.voice?.room.kind === 'channel' && voice.voice.room.id === voice.muteVote.channelId && (
         <MuteVoteModal
           vote={{
@@ -261,6 +297,7 @@ export default function AppShellOverlays({
                 menuServer.my_permissions.manage_roles ||
                 menuServer.my_permissions.manage_members)
             }
+            canChangeNickname={!!menuServer.my_permissions?.change_nickname}
             isOwner={menuServer.owner === user.id}
             onClose={() => server.setServerContextMenuServerId(null)}
             onMarkRead={() => server.handleMarkServerRead(menuServer)}
@@ -275,6 +312,12 @@ export default function AppShellOverlays({
               server.setShowServerSettings(true)
             }}
             onOpenPrivacy={() => server.setShowServerPrivacyId(menuServer.id)}
+            // Свой никнейм на сервере — та же модалка, что и для чужого
+            // (см. ServerNicknameModal), просто цель — я сам.
+            onChangeNickname={() => {
+              server.selectServer(menuServer)
+              setServerNicknameUserId(user.id)
+            }}
             onLeave={() => server.handleLeaveServer(menuServer)}
           />
         )
@@ -318,6 +361,9 @@ export default function AppShellOverlays({
             onTogglePin={() => server.handleTogglePinChannel(server.currentServer!, menuChannel)}
             onCopyLink={() => server.handleCopyChannelLink(server.currentServer!, menuChannel)}
             onSetStatus={(status) => server.handleSetChannelStatus(menuChannel, status)}
+            onSetSlowmode={(seconds) =>
+              void server.handleSetChannelSlowmode(menuChannel, seconds)
+            }
           />
         )
       })()}

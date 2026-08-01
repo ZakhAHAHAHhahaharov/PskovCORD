@@ -1,5 +1,7 @@
 import { useLayoutEffect, useRef } from 'react'
-import { AlarmClock, AtSign, BellRing, Eye, EyeOff, Gavel, UserX, Volume2 } from 'lucide-react'
+import {
+  AlarmClock, AtSign, BellRing, Eye, EyeOff, Gavel, Tag, UserX, Volume2,
+} from 'lucide-react'
 import { useNickname } from '../nicknames'
 import { useUserVolume } from '../userVolume'
 import { useVoice } from '../voice'
@@ -35,6 +37,9 @@ export interface ParticipantContextMenuTarget {
 export default function ParticipantContextMenu({
   target,
   canManageMembers,
+  canManageNicknames,
+  canStartMuteVote,
+  canRequestScreenShare,
   voteDisabled,
   voiceActionsEnabled,
   onClose,
@@ -43,10 +48,18 @@ export default function ParticipantContextMenu({
   onStartMuteVote,
   onRequestScreenShare,
   onWakeUser,
+  onSetServerNickname,
 }: {
   target: ParticipantContextMenuTarget
   /** Право "manage_members" на сервере — от него зависит пункт «Отключить от канала». */
   canManageMembers: boolean
+  /** "manage_nicknames" — менять никнейм ДРУГИХ участников на этом сервере. */
+  canManageNicknames: boolean
+  /** "start_mute_vote" / "request_screen_share" — соответствующие пункты
+   * прячем целиком, а не дизейблим: их отсутствие — решение роли, а не
+   * временное состояние вроде «ты не подключён к каналу». */
+  canStartMuteVote: boolean
+  canRequestScreenShare: boolean
   /** В этом канале уже идёт какое-то голосование — новое начинать нельзя. */
   voteDisabled: boolean
   /** Мы сами сейчас ПОЛНОСТЬЮ подключены именно к этой голосовой комнате —
@@ -60,6 +73,9 @@ export default function ParticipantContextMenu({
   onStartMuteVote: (userId: number) => void
   onRequestScreenShare: (userId: number) => void
   onWakeUser: (userId: number) => void
+  /** Никнейм участника НА СЕРВЕРЕ — виден всем (в отличие от приватного
+   * никнейма друга, см. nicknames.ts). */
+  onSetServerNickname: (userId: number) => void
 }) {
   const ref = useRef<HTMLDivElement>(null)
   const { getUserVolume, setUserVolume } = useUserVolume()
@@ -145,7 +161,7 @@ export default function ParticipantContextMenu({
           {isBlocked ? 'Разрешить смотреть демонстрацию' : 'Запретить смотреть демонстрацию'}
         </button>
 
-        {isServerChannel && !member.sharing_screen && (
+        {isServerChannel && canRequestScreenShare && !member.sharing_screen && (
           <button
             type="button"
             className="profile-popup-item"
@@ -157,7 +173,7 @@ export default function ParticipantContextMenu({
           </button>
         )}
 
-        {isServerChannel && (
+        {isServerChannel && canStartMuteVote && (
           <button
             type="button"
             className="profile-popup-item"
@@ -190,6 +206,19 @@ export default function ParticipantContextMenu({
             onClick={() => onWakeUser(member.id)}
           >
             <AlarmClock size={15} /> Разбудить мальчика
+          </button>
+        )}
+
+        {isServerChannel && canManageNicknames && (
+          <button
+            type="button"
+            className="profile-popup-item"
+            onClick={() => {
+              onSetServerNickname(member.id)
+              onClose()
+            }}
+          >
+            <Tag size={15} /> Никнейм на сервере
           </button>
         )}
 

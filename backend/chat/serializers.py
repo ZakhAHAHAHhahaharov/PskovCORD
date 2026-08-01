@@ -33,7 +33,7 @@ class ChannelSerializer(serializers.ModelSerializer):
     class Meta:
         model = Channel
         fields = ["id", "server", "name", "kind", "position",
-                  "call_started_at", "topic", "status"]
+                  "call_started_at", "topic", "status", "slowmode_seconds"]
         read_only_fields = ["server"]
 
     def _state(self, obj):

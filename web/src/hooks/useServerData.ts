@@ -448,17 +448,29 @@ export function useServerData(userRef: RefObject<Me | null>) {
     }
   }
 
+  /** Общая часть «поправили канал на сервере» — обе ручки ниже отдают уже
+   * обновлённый канал, и его надо положить в тот сервер, где он лежит. */
+  const applyChannelUpdate = (updated: Channel) =>
+    setServers((prev) =>
+      prev.map((s) => ({
+        ...s,
+        channels: s.channels.map((c) => (c.id === updated.id ? updated : c)),
+      })),
+    )
+
   const handleSetChannelStatus = async (channel: Channel, status: string) => {
     try {
-      const updated = await api.setChannelStatus(channel.id, status)
-      setServers((prev) =>
-        prev.map((s) => ({
-          ...s,
-          channels: s.channels.map((c) => (c.id === updated.id ? updated : c)),
-        })),
-      )
+      applyChannelUpdate(await api.setChannelStatus(channel.id, status))
     } catch (e) {
       alert('Не удалось установить статус канала: ' + (e as Error).message)
+    }
+  }
+
+  const handleSetChannelSlowmode = async (channel: Channel, seconds: number) => {
+    try {
+      applyChannelUpdate(await api.setChannelSlowmode(channel.id, seconds))
+    } catch (e) {
+      alert('Не удалось изменить медленный режим: ' + (e as Error).message)
     }
   }
 
@@ -489,5 +501,6 @@ export function useServerData(userRef: RefObject<Me | null>) {
     handleMuteServer, handleUnmuteServer, handleSetNotificationLevel,
     handleToggleIgnoreAtHere, handleToggleSuppressRoleMentions, handleLeaveServer,
     handleCreateChannel, handleTogglePinChannel, handleCopyChannelLink, handleSetChannelStatus,
+    handleSetChannelSlowmode,
   }
 }

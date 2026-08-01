@@ -1,5 +1,8 @@
 import { MouseEvent as ReactMouseEvent, useCallback, useState } from 'react'
-import { ChevronDown, ChevronRight, Volume2, MicOff, HeadphoneOff, Monitor, Settings, Pin } from 'lucide-react'
+import {
+  ChevronDown, ChevronRight, Volume2, MicOff, HeadphoneOff, Monitor, Settings,
+  Pin, Timer,
+} from 'lucide-react'
 import { Channel, Member, Server, User } from '../api'
 import { styledNameProps } from '../nameStyle'
 import { VoiceRosterMember } from './VoiceStage'
@@ -348,9 +351,22 @@ export default function ChannelSidebar({
                 key={c.id}
                 className={`channel-item ${activeChannelId === c.id ? 'active' : ''}`}
                 onClick={() => onSelectText(c)}
+                onContextMenu={
+                  onChannelContextMenu
+                    ? (e) => {
+                        e.preventDefault()
+                        onChannelContextMenu(c, e)
+                      }
+                    : undefined
+                }
               >
                 <span className="channel-icon">#</span>
                 <span className="channel-name">{c.name}</span>
+                {/* Медленный режим виден прямо в списке — иначе о нём узнаёшь
+                    только упёршись в отказ при отправке. */}
+                {c.slowmode_seconds > 0 && (
+                  <Timer size={12} className="channel-slowmode-icon" />
+                )}
               </button>
             ))}
 

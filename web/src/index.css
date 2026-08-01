@@ -5696,6 +5696,25 @@ button.settings-row-clickable:hover .settings-row-label {
 .srv-toggle-label {
   font-size: calc(14px * var(--font-scale, 1));
   color: var(--text-normal);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+/* Пометка «скоро» у прав, под которые ещё нет самой фичи (см. backend
+   chat.roles.UPCOMING_PERMISSIONS). Переключатель рабочий и сохраняется —
+   бейдж лишь честно говорит, что пока он ни на что не влияет. */
+.srv-toggle-badge {
+  font-size: calc(10px * var(--font-scale, 1));
+  line-height: 1;
+  padding: 3px 6px;
+  border-radius: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  background: var(--background-modifier-selected, rgba(127, 127, 127, 0.18));
+  white-space: nowrap;
 }
 
 .srv-toggle-hint {
@@ -6796,6 +6815,33 @@ button.settings-row-clickable:hover .settings-row-label {
 
 .channel-menu-status .invite-link-row {
   margin-top: 6px;
+}
+
+/* Пресеты медленного режима — сетка кнопок вместо выпадающего списка:
+   ступеней девять, и попасть в нужную одним кликом быстрее, чем открывать
+   select ради того же выбора. */
+.channel-menu-slowmode {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.channel-menu-slowmode-item {
+  width: 100%;
+  justify-content: center;
+}
+
+.channel-menu-slowmode-item.active {
+  background: var(--brand);
+  color: #fff;
+}
+
+/* Значок медленного режима в строке текстового канала. */
+.channel-slowmode-icon {
+  margin-left: auto;
+  flex-shrink: 0;
+  color: var(--text-muted);
 }
 
 /* ---- настройки конфиденциальности сервера ---- */
