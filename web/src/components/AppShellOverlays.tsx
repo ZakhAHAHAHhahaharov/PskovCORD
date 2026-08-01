@@ -7,6 +7,7 @@ import type { useParticipantContextMenu } from '../hooks/useParticipantContextMe
 import type { useServerData } from '../hooks/useServerData'
 import type { useVoiceCall } from '../hooks/useVoiceCall'
 import { conversationDisplayName } from '../conversation'
+import { useNickname } from '../nicknames'
 import NewConversationModal from './NewConversationModal'
 import IncomingCallBanner from './IncomingCallBanner'
 import DiscoverModal from './DiscoverModal'
@@ -66,6 +67,8 @@ export default function AppShellOverlays({
     ? conv.conversations.find((c) => c.id === menuTarget.conversation.id) ?? menuTarget.conversation
     : null
   const menuPeerId = menuConversation?.participants[0]?.id
+  const muteVoteNickname = useNickname(voice.muteVote?.targetUserId)
+  const incomingCallerNickname = useNickname(voice.incomingCall?.caller.id)
   return (
     <>
       {conv.showNewConversation && (
@@ -79,6 +82,7 @@ export default function AppShellOverlays({
       )}
       {voice.incomingCall && (
         <IncomingCallBanner
+          callerId={voice.incomingCall.caller.id}
           callerUsername={voice.incomingCall.caller.username}
           callerAvatarColor={voice.incomingCall.caller.avatar_color}
           callerAvatarImage={voice.incomingCall.caller.avatar_image}
@@ -87,7 +91,7 @@ export default function AppShellOverlays({
               ? conversationDisplayName(
                   conv.conversations.find((c) => c.id === voice.incomingCall!.conversationId)!,
                 )
-              : voice.incomingCall.caller.username
+              : incomingCallerNickname || voice.incomingCall.caller.username
           }
           onAccept={voice.handleAcceptIncomingCall}
           onDecline={voice.handleDeclineIncomingCall}
@@ -141,6 +145,7 @@ export default function AppShellOverlays({
           onOpenProfile={() =>
             conversationMenu.handleOpenPeerProfile(menuConversation, menuTarget.x, menuTarget.y)
           }
+          onSendMessage={() => conversationMenu.handleSendMessage(menuConversation)}
           onStartCall={() => conversationMenu.handleStartCall(menuConversation.id)}
           // «Добавить заметку» — та же карточка профиля: поле заметки живёт
           // прямо в ней (см. MiniProfilePopup), отдельной модалки для одного
@@ -171,11 +176,18 @@ export default function AppShellOverlays({
             friend={friend}
             x={target.x}
             y={target.y}
+            servers={servers}
             onClose={friendMenu.closeMenu}
             onOpenProfile={() => friendMenu.handleOpenProfile(friend, target.x, target.y)}
             onSendMessage={() => friendMenu.handleSendMessage(friend)}
             onStartCall={() => void friendMenu.handleStartCall(friend)}
+            // «Добавить заметку» — та же карточка профиля, что и у «Профиль»
+            // (см. комментарий в ConversationContextMenu про onAddNote).
+            onAddNote={() => friendMenu.handleOpenProfile(friend, target.x, target.y)}
             onSetNickname={() => friendMenu.setNicknameTarget(friend)}
+            onInviteToServer={(serverId) => void friendMenu.handleInviteToServer(friend, serverId)}
+            onRemoveFriend={() => void friendMenu.handleRemoveFriend(friend)}
+            onRelationChange={(relation) => friendMenu.handleRelationChange(friend, relation)}
           />
         )
       })()}
@@ -225,7 +237,8 @@ export default function AppShellOverlays({
             channelId: voice.muteVote.channelId,
             targetUserId: voice.muteVote.targetUserId,
             targetUsername:
-              server.members.find((m) => m.id === voice.muteVote!.targetUserId)?.username ??
+              muteVoteNickname ||
+              server.members.find((m) => m.id === voice.muteVote!.targetUserId)?.username ||
               `Участник ${voice.muteVote.targetUserId}`,
             endsAt: voice.muteVote.endsAt,
           }}

@@ -1,5 +1,6 @@
 import { useLayoutEffect, useRef } from 'react'
 import { AlarmClock, AtSign, BellRing, Eye, EyeOff, Gavel, UserX, Volume2 } from 'lucide-react'
+import { useNickname } from '../nicknames'
 import { useUserVolume } from '../userVolume'
 import { useVoice } from '../voice'
 
@@ -64,6 +65,7 @@ export default function ParticipantContextMenu({
   const { getUserVolume, setUserVolume } = useUserVolume()
   const { blockedScreenViewerIds, blockScreenViewer } = useVoice()
   const { member } = target
+  const nickname = useNickname(member.id)
   const isServerChannel = target.room.kind === 'channel'
   const volume = getUserVolume(member.id)
   const isBlocked = blockedScreenViewerIds.has(member.id)
@@ -104,7 +106,7 @@ export default function ParticipantContextMenu({
       className="profile-popup participant-context-menu"
       style={{ left: target.x, top: target.y }}
     >
-      <div className="profile-popup-label">{member.username}</div>
+      <div className="profile-popup-label">{nickname || member.username}</div>
 
       <div className="settings-field participant-menu-volume">
         <div className="settings-field-header">

@@ -1,38 +1,79 @@
-import { useLayoutEffect, useRef } from 'react'
-import { MessageSquare, Phone, Tag, User as UserIcon } from 'lucide-react'
-import { User } from '../api'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import {
+  Ban, BellOff, Check, MessageSquare, NotebookPen, Phone, ServerIcon, Tag,
+  User as UserIcon, UserMinus,
+} from 'lucide-react'
+import { api, Server, User, UserRelation } from '../api'
+import { useHoverFlyout } from '../hooks/useHoverFlyout'
 import { useNickname } from '../nicknames'
+import { serverInitials } from './ServerRail'
 
 /**
  * Правый клик по строке друга в списке «Друзья» (см. HomeSidebar).
  *
  * Позиционирование и закрытие по клику вне себя/Escape — тот же приём, что в
- * ConversationContextMenu/ChannelContextMenu. Пунктов намеренно четыре: это
- * меню про КОНКРЕТНОГО человека из списка друзей, а не про беседу с ним, —
- * всё, что относится к беседе (закрепить, пометить прочитанным, закрыть ЛС),
- * живёт в меню диалога и здесь было бы не к месту.
+ * ConversationContextMenu/ChannelContextMenu. Пункты про беседу с другом
+ * (закрепить, пометить прочитанным, закрыть ЛС) сюда намеренно не попадают —
+ * они живут в меню диалога; здесь только то, что про самого человека.
+ *
+ * Игнор/блокировка устроены так же, как в ConversationContextMenu: приезжают
+ * с сервера лениво, уже после открытия меню, а не тащатся в списке друзей
+ * заранее ради двух флажков, которые нужны ровно здесь.
  */
 export default function FriendContextMenu({
   friend,
   x,
   y,
+  servers,
   onClose,
   onOpenProfile,
   onSendMessage,
   onStartCall,
+  onAddNote,
   onSetNickname,
+  onInviteToServer,
+  onRemoveFriend,
+  onRelationChange,
 }: {
   friend: User
   x: number
   y: number
+  /** Мои серверы — из них выбирается, куда пригласить друга. */
+  servers: Server[]
   onClose: () => void
   onOpenProfile: () => void
   onSendMessage: () => void
   onStartCall: () => void
+  /** Открыть карточку профиля — заметка редактируется прямо в ней (см.
+   * MiniProfilePopup), отдельной модалки под одно поле не заводим. */
+  onAddNote: () => void
   onSetNickname: () => void
+  onInviteToServer: (serverId: number) => void
+  onRemoveFriend: () => void
+  /** Игнор/блокировка изменились — обновить состояние снаружи (лента,
+   * уведомления). */
+  onRelationChange: (relation: UserRelation) => void
 }) {
   const ref = useRef<HTMLDivElement>(null)
   const nickname = useNickname(friend.id)
+  const [relation, setRelation] = useState<UserRelation | null>(null)
+  const serversFlyout = useHoverFlyout()
+
+  useEffect(() => {
+    let cancelled = false
+    void (async () => {
+      try {
+        const data = await api.getUserRelation(friend.id)
+        if (!cancelled) setRelation(data)
+      } catch {
+        // Не смогли узнать — пункты просто останутся в состоянии «выкл»,
+        // нажатие всё равно отправит нужное значение.
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [friend.id])
 
   useLayoutEffect(() => {
     const el = ref.current
@@ -66,6 +107,25 @@ export default function FriendContextMenu({
     }
   }, [onClose])
 
+  /** Переключить игнор/блокировку — тот же приём, что и в ConversationContextMenu:
+   * сервер отдаёт ровно то же, что мы и попросили, ждать ответа незачем. */
+  const toggleRelation = async (field: keyof UserRelation) => {
+    const next: UserRelation = {
+      ignored: relation?.ignored ?? false,
+      blocked: relation?.blocked ?? false,
+      [field]: !(relation?.[field] ?? false),
+    }
+    setRelation(next)
+    onRelationChange(next)
+    onClose()
+    try {
+      await api.setUserRelation(friend.id, { [field]: next[field] })
+    } catch {
+      // Откатывать нечего: меню уже закрыто, а следующее открытие
+      // перечитает настоящее состояние с сервера.
+    }
+  }
+
   const item = (icon: React.ReactNode, label: string, onClick: () => void) => (
     <button
       type="button"
@@ -79,17 +139,84 @@ export default function FriendContextMenu({
     </button>
   )
 
+  // Флаут серверов раскрывается вправо, а у правого края экрана — влево
+  // (см. тот же расчёт в ConversationContextMenu).
+  const flyoutLeft = x + 280 + 230 > window.innerWidth
+
   return (
     <div ref={ref} className="profile-popup channel-context-menu" style={{ left: x, top: y }}>
       <div className="profile-popup-menu">
         {item(<UserIcon size={15} />, 'Профиль', onOpenProfile)}
         {item(<MessageSquare size={15} />, 'Написать сообщение', onSendMessage)}
         {item(<Phone size={15} />, 'Начать звонок', onStartCall)}
+        {item(<NotebookPen size={15} />, 'Добавить заметку', onAddNote)}
         {item(
           <Tag size={15} />,
           nickname ? 'Изменить никнейм друга' : 'Добавить никнейм друга',
           onSetNickname,
         )}
+      </div>
+
+      {servers.length > 0 && (
+        <>
+          <div className="profile-popup-divider" />
+          <div className="profile-popup-menu">
+            <div
+              className="conversation-menu-servers"
+              onMouseEnter={serversFlyout.onMouseEnter}
+              onMouseLeave={serversFlyout.onMouseLeave}
+            >
+              <button type="button" className="profile-popup-item">
+                <ServerIcon size={15} /> Пригласить на сервер
+                <span className="conversation-menu-chevron">{flyoutLeft ? '◂' : '▸'}</span>
+              </button>
+              {serversFlyout.open && (
+                <div className={`conversation-menu-flyout ${flyoutLeft ? 'flyout-left' : ''}`}>
+                  {servers.map((s) => (
+                    <button
+                      key={s.id}
+                      type="button"
+                      className="profile-popup-item conversation-menu-server"
+                      onClick={() => {
+                        onInviteToServer(s.id)
+                        onClose()
+                      }}
+                    >
+                      {s.icon ? (
+                        <img className="conversation-menu-server-icon" src={s.icon} alt="" />
+                      ) : (
+                        <span className="conversation-menu-server-icon conversation-menu-server-initials">
+                          {serverInitials(s.name)}
+                        </span>
+                      )}
+                      <span className="conversation-menu-server-name">{s.name}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </>
+      )}
+
+      <div className="profile-popup-divider" />
+      <div className="profile-popup-menu">
+        {item(<UserMinus size={15} />, 'Удалить из друзей', onRemoveFriend)}
+        <button
+          type="button"
+          className="profile-popup-item"
+          onClick={() => void toggleRelation('ignored')}
+        >
+          <BellOff size={15} /> Игнорировать
+          {relation?.ignored && <Check size={14} className="conversation-menu-check" />}
+        </button>
+        <button
+          type="button"
+          className="profile-popup-item profile-popup-item-danger"
+          onClick={() => void toggleRelation('blocked')}
+        >
+          <Ban size={15} /> {relation?.blocked ? 'Разблокировать' : 'Заблокировать'}
+        </button>
       </div>
     </div>
   )

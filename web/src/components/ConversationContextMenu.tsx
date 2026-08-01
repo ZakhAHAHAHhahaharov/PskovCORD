@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import {
-  Ban, BellOff, Check, CheckCheck, MessageSquareOff, NotebookPen, Phone, Pin,
+  Ban, BellOff, Check, CheckCheck, MessageSquare, MessageSquareOff, NotebookPen, Phone, Pin,
   ServerIcon, User as UserIcon, UserMinus,
 } from 'lucide-react'
 import { api, Conversation, Server, UserRelation } from '../api'
@@ -32,6 +32,7 @@ export default function ConversationContextMenu({
   onMarkRead,
   onTogglePin,
   onOpenProfile,
+  onSendMessage,
   onStartCall,
   onAddNote,
   onCloseConversation,
@@ -50,6 +51,9 @@ export default function ConversationContextMenu({
   onMarkRead: () => void
   onTogglePin: () => void
   onOpenProfile: () => void
+  /** Переключиться на эту же беседу (тот же эффект, что клик по строке в
+   * списке) — пункт для тех, кто открыл меню правым кликом, а не левым. */
+  onSendMessage: () => void
   onStartCall: () => void
   /** Открыть карточку профиля — заметка редактируется прямо в ней. */
   onAddNote: () => void
@@ -182,6 +186,7 @@ export default function ConversationContextMenu({
           onTogglePin,
         )}
         {isDm && item(<UserIcon size={15} />, 'Профиль', onOpenProfile)}
+        {isDm && item(<MessageSquare size={15} />, 'Написать сообщение', onSendMessage)}
         {item(<Phone size={15} />, 'Начать звонок', onStartCall)}
         {isDm && item(<NotebookPen size={15} />, 'Добавить заметку', onAddNote)}
       </div>

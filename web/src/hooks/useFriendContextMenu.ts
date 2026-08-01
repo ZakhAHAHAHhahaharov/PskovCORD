@@ -1,5 +1,5 @@
 import { MouseEvent as ReactMouseEvent, useCallback, useState } from 'react'
-import { api, Conversation, User } from '../api'
+import { api, Conversation, FriendsState, User, UserRelation } from '../api'
 import { nicknameStore } from '../nicknames'
 
 export interface FriendMenuTarget {
@@ -26,12 +26,18 @@ export function useFriendContextMenu({
   setConversations,
   setActiveConversationId,
   setServerId,
+  setFriends,
+  setBlockedUserIds,
+  setIgnoredUserIds,
   onStartCall,
   onOpenProfile,
 }: {
   setConversations: React.Dispatch<React.SetStateAction<Conversation[]>>
   setActiveConversationId: (id: number | null) => void
   setServerId: (id: number | null) => void
+  setFriends: React.Dispatch<React.SetStateAction<FriendsState>>
+  setBlockedUserIds: React.Dispatch<React.SetStateAction<Set<number>>>
+  setIgnoredUserIds: React.Dispatch<React.SetStateAction<Set<number>>>
   onStartCall: (conversationId: number) => void
   onOpenProfile: (friend: User, x: number, y: number) => void
 }) {
@@ -90,6 +96,50 @@ export function useFriendContextMenu({
     [],
   )
 
+  /** «Удалить из друзей» — та же ручка, что и у одноимённого пункта в меню
+   * диалога (см. ConversationContextMenu) и в мини-профиле. */
+  const handleRemoveFriend = useCallback(
+    async (friend: User) => {
+      try {
+        await api.removeFriend(friend.id)
+        setFriends(await api.friends())
+      } catch (e) {
+        alert((e as Error).message)
+      }
+    },
+    [setFriends],
+  )
+
+  const handleInviteToServer = useCallback(async (friend: User, serverId: number) => {
+    try {
+      await api.inviteToServer(serverId, friend.id)
+    } catch (e) {
+      alert((e as Error).message)
+    }
+  }, [])
+
+  /** Игнор/блокировка уже отправлены самим меню (см. FriendContextMenu) —
+   * здесь только приводим в соответствие локальные множества, по которым
+   * фильтруются лента и уведомления (тот же приём, что и в меню диалога). */
+  const handleRelationChange = useCallback(
+    (friend: User, relation: UserRelation) => {
+      const apply = (
+        setter: React.Dispatch<React.SetStateAction<Set<number>>>,
+        on: boolean,
+      ) =>
+        setter((prev) => {
+          if (prev.has(friend.id) === on) return prev
+          const next = new Set(prev)
+          if (on) next.add(friend.id)
+          else next.delete(friend.id)
+          return next
+        })
+      apply(setIgnoredUserIds, relation.ignored)
+      apply(setBlockedUserIds, relation.blocked)
+    },
+    [setIgnoredUserIds, setBlockedUserIds],
+  )
+
   return {
     menuTarget,
     closeMenu,
@@ -99,6 +149,9 @@ export function useFriendContextMenu({
     handleSendMessage,
     handleStartCall,
     handleSaveNickname,
+    handleRemoveFriend,
+    handleInviteToServer,
+    handleRelationChange,
     handleOpenProfile: onOpenProfile,
   }
 }
