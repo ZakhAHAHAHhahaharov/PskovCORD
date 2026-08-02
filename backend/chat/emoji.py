@@ -6,28 +6,46 @@ Reaction.emoji — обычный CharField, то есть на уровне Б�
 превращает аккуратную ленту реакций в второй чат. Поэтому ключ реакции
 проверяется здесь, в одном месте, и одинаково для каналов и личек.
 
-Формат ключа сознательно строковый, а не «код эмодзи»: это даёт место для
-кастомных эмодзи сервера потом, без миграции и без смены протокола — см.
-CUSTOM_PREFIX ниже.
+Формат ключа сознательно строковый, а не «код эмодзи»: благодаря этому
+кастомные эмодзи сервера (ServerEmoji) поехали в то же поле и тот же протокол,
+что и unicode, — «custom:<id>», см. CUSTOM_PREFIX ниже.
+
+Здесь же живёт и вторая половина вопроса — КОМУ такой эмодзи разрешён (can_use
+/ usable_ids / sanitize_content). Она в этом же модуле, а не во вьюхах, потому
+что правило одно и то же для реакции и для токена внутри текста, а мест,
+откуда его спрашивают, четыре (реакции каналов и личек, отправка и правка
+сообщения).
 """
 import re
 
-from .models import MAX_EMOJI_LEN
+from .models import MAX_EMOJI_LEN, MAX_EMOJI_NAME_LEN, MIN_EMOJI_NAME_LEN
 
-# --- placeholder под кастомные эмодзи сервера -------------------------------
-# Задел, а не реализация: моделей ServerEmoji и загрузки картинок пока нет.
-# Ключ такой реакции будет выглядеть как "custom:42" — то есть попадёт в то же
-# поле Reaction.emoji и в тот же payload, что и unicode-эмодзи, а фронт,
-# увидев префикс, отрисует <img> вместо символа (см. web/src/emoji.ts,
-# parseEmojiKey — там симметричный разбор).
+# --- кастомные эмодзи сервера -----------------------------------------------
+# Ключ такой реакции выглядит как "custom:42" — то есть попадает в то же поле
+# Reaction.emoji и в тот же payload, что и unicode-эмодзи, а фронт, увидев
+# префикс, рисует <img> вместо символа (см. web/src/emoji.ts, parseEmojiKey —
+# там симметричный разбор).
 #
-# Пока такие ключи ОТКЛОНЯЮТСЯ: пропускать ссылки на несуществующие эмодзи
-# значило бы копить в БД реакции, которые никто не сможет отрисовать. Чтобы
-# включить, останется снять этот флаг и добавить проверку существования
-# ServerEmoji с таким id и доступности его отправителю.
+# normalize() проверяет только ФОРМУ ключа: существует ли такой эмодзи и
+# вправе ли его ставить именно этот человек именно здесь — вопрос с контекстом
+# (см. can_use ниже), а normalize вызывается и там, где контекста ещё нет.
 CUSTOM_PREFIX = "custom:"
-CUSTOM_EMOJI_ENABLED = False
 _CUSTOM_RE = re.compile(rf"^{re.escape(CUSTOM_PREFIX)}\d{{1,18}}$")
+
+# Токен кастомного эмодзи внутри ТЕКСТА сообщения: <:имя:id> у статичного,
+# <a:имя:id> у анимированного. Форма разделяемая с Discord — не ради
+# совместимости, а потому что она уже решает главную задачу: id внутри токена
+# делает текст самодостаточным (переименовали эмодзи — старые сообщения не
+# ломаются), а буква "a" позволяет клиенту понять, нужен ли статичный кадр,
+# ещё до того, как он опознает id.
+EMOJI_TOKEN_RE = re.compile(
+    rf"<(a?):([A-Za-z0-9_]{{{MIN_EMOJI_NAME_LEN},{MAX_EMOJI_NAME_LEN}}}):(\d{{1,18}})>")
+
+# Допустимое имя эмодзи — тот же алфавит, что и внутри токена. Узкий он
+# намеренно: имя уезжает в текст сообщения между двоеточиями, и любая
+# пунктуация в нём сделала бы разбор двусмысленным.
+NAME_RE = re.compile(
+    rf"^[A-Za-z0-9_]{{{MIN_EMOJI_NAME_LEN},{MAX_EMOJI_NAME_LEN}}}$")
 
 # Диапазоны, по которым отличаем настоящий символ эмодзи от обычного текста.
 # Полной таблицы Unicode здесь нет намеренно: задача — отсечь буквы и цифры,
@@ -131,8 +149,8 @@ def normalize(raw) -> str | None:
         return None
 
     if key.startswith(CUSTOM_PREFIX):
-        if not CUSTOM_EMOJI_ENABLED:
-            return None
+        # Только форма. Существование и доступность — can_use, ей нужен
+        # контекст (кто и где), которого у normalize нет.
         return key if _CUSTOM_RE.match(key) else None
 
     # Внутри ключа пробелов быть не может: это ровно один эмодзи, а не фраза.
@@ -151,3 +169,91 @@ def normalize(raw) -> str | None:
     if not _is_single_emoji(key):
         return None
     return key
+
+
+# --- доступность кастомного эмодзи ------------------------------------------
+# Одно правило на всё: и на реакцию, и на токен внутри текста. Оно же описано
+# в UI прав (см. chat/roles.py PERMISSION_FIELDS):
+#
+#   * эмодзи сервера, где ты состоишь, — можно всегда и везде, включая лички;
+#     это то, ради чего его и загружали;
+#   * эмодзи ЧУЖОГО сервера (ты в нём не состоишь) — нельзя нигде: у тебя
+#     просто нет к нему доступа;
+#   * внутри канала сервера X эмодзи любого ДРУГОГО сервера — только с правом
+#     use_external_emoji на X. Это единственное, что ограничивает
+#     использование, ровно как в Discord.
+#
+# Функция принимает сразу набор id, а не один: и текст сообщения, и проверка
+# ленты реакций разбирают пачку, а поштучные проверки означали бы по два
+# запроса в БД на каждый эмодзи в сообщении.
+
+
+def usable_ids(emoji_ids, user, server=None) -> set:
+    """Из переданных id — те, что этому пользователю здесь разрешены.
+
+    server=None означает личку или групповой диалог: там нет ролей, а значит
+    и нечему ограничивать — доступны все эмодзи всех твоих серверов.
+    """
+    from .models import Membership, ServerEmoji
+
+    ids = {int(i) for i in emoji_ids}
+    if not ids or not user or not user.is_authenticated:
+        return set()
+
+    # Один запрос на всё: сразу и существование, и «на каком сервере лежит».
+    owners = dict(
+        ServerEmoji.objects.filter(id__in=ids).values_list("id", "server_id"))
+    if not owners:
+        return set()
+
+    my_servers = set(
+        Membership.objects.filter(user=user).values_list("server_id", flat=True))
+    allowed = {
+        emoji_id for emoji_id, server_id in owners.items()
+        if server_id in my_servers
+    }
+    if server is None:
+        return allowed
+
+    from . import roles
+
+    # «Свои» эмодзи этого сервера проходят всегда — правом режется только
+    # принесённое со стороны.
+    external = {
+        emoji_id for emoji_id in allowed if owners[emoji_id] != server.id}
+    if external and not roles.permissions_for(user, server).get(
+        "use_external_emoji"
+    ):
+        allowed -= external
+    return allowed
+
+
+def can_use(key: str, user, server=None) -> bool:
+    """Можно ли поставить такой ключ реакции. Unicode — всегда; кастомный — по
+    usable_ids. Ключ должен быть уже пропущен через normalize()."""
+    if not key.startswith(CUSTOM_PREFIX):
+        return True
+    emoji_id = int(key[len(CUSTOM_PREFIX):])
+    return emoji_id in usable_ids([emoji_id], user, server)
+
+
+def sanitize_content(content: str, user, server=None) -> str:
+    """Убирает из текста сообщения токены эмодзи, которых автору здесь нельзя.
+
+    Не отклоняет сообщение целиком: «нельзя» тут — обычное дело (эмодзи удалили
+    с сервера, пока висел черновик; роль сняли право на внешние), и терять
+    из-за этого весь текст несоразмерно. Недоступный токен превращается в
+    ":имя:" — читатель видит, что имелось в виду, но картинки не будет ни у
+    кого. Именно это и есть точка контроля: без неё право «использовать внешние
+    эмодзи» ничего бы не значило для текста, только для реакций.
+    """
+    if not content or "<" not in content:
+        return content
+    matches = list(EMOJI_TOKEN_RE.finditer(content))
+    if not matches:
+        return content
+    allowed = usable_ids([m.group(3) for m in matches], user, server)
+    return EMOJI_TOKEN_RE.sub(
+        lambda m: m.group(0) if int(m.group(3)) in allowed else f":{m.group(2)}:",
+        content,
+    )

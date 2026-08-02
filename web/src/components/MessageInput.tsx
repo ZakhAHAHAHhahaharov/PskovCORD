@@ -8,6 +8,7 @@ import {
   uploadAttachment,
 } from '../api'
 import { ComposerDraft } from '../drafts'
+import { emojiToken } from '../emoji'
 import Avatar from './Avatar'
 import EmojiPicker, { EmojiPickerAnchor } from './EmojiPicker'
 import { useNickname } from '../nicknames'
@@ -635,6 +636,11 @@ export default function MessageInput({
         <EmojiPicker
           anchor={emojiAnchor}
           onPick={insertEmoji}
+          // Кастомный эмодзи живёт в тексте токеном <:имя:id> — он же уедет
+          // на сервер и там будет проверен правами (см. backend
+          // chat/emoji.py sanitize_content), а в ленте превратится обратно в
+          // картинку (см. MessageList.renderContent).
+          onPickCustom={(emoji) => insertEmoji(emojiToken(emoji))}
           onClose={() => setEmojiAnchor(null)}
         />
       )}

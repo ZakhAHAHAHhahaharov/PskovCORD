@@ -1173,6 +1173,9 @@ class GatewayConsumer(AsyncWebsocketConsumer):
         perms = roles.permissions_for(self.user, channel.server)
         if not perms.get("view_channels") or not perms.get("send_messages"):
             return None
+        # Токены кастомных эмодзи, которых автору здесь нельзя, схлопываются в
+        # ":имя:" — см. chat.emoji.sanitize_content, там же почему не отказом.
+        content = emoji_keys.sanitize_content(content, self.user, channel.server)
         reply_to = None
         if reply_to_id:
             # Разрешаем отвечать только на сообщение из ЭТОГО ЖЕ канала —
@@ -1240,7 +1243,8 @@ class GatewayConsumer(AsyncWebsocketConsumer):
         # Редактировать может ТОЛЬКО автор — владелец сервера не исключение.
         if msg.author_id != self.user.id:
             return None
-        msg.content = content
+        msg.content = emoji_keys.sanitize_content(
+            content, self.user, msg.channel.server)
         msg.edited_at = timezone.now()
         msg.save(update_fields=["content", "edited_at"])
         return {
@@ -1378,6 +1382,9 @@ class GatewayConsumer(AsyncWebsocketConsumer):
             user=self.user, conversation_id=conversation_id
         ).exists():
             return None
+        # server=None: в личке ролей нет, ограничивать нечем — доступны эмодзи
+        # всех моих серверов, но только их (см. chat.emoji.sanitize_content).
+        content = emoji_keys.sanitize_content(content, self.user)
         reply_to = None
         if reply_to_id:
             # Только сообщение из ЭТОГО ЖЕ диалога — как и в _create_message.
@@ -1435,6 +1442,15 @@ class GatewayConsumer(AsyncWebsocketConsumer):
             owner = {"message": msg}
 
         if add:
+            # Кастомный эмодзи — ещё и вопрос доступа: существует ли он и
+            # можно ли ставить именно его именно здесь (см. chat.emoji.can_use;
+            # server=None для лички — там ролей нет и ограничивать нечем).
+            # Только на «поставить»: СНЯТЬ свою старую реакцию нужно уметь
+            # всегда, даже если эмодзи с тех пор удалили с сервера или роль
+            # потеряла право на внешние — иначе она осталась бы навечно.
+            if not emoji_keys.can_use(emoji, self.user,
+                                      None if dm else msg.channel.server):
+                return None
             # Лимит считаем по РАЗНЫМ эмодзи и только когда добавляется новый:
             # 21-й человек, ставящий уже существующую реакцию, ни во что не
             # упирается — ограничение на ширину ленты, а не на число людей.
@@ -1482,7 +1498,7 @@ class GatewayConsumer(AsyncWebsocketConsumer):
             return None
         if msg.author_id != self.user.id:
             return None
-        msg.content = content
+        msg.content = emoji_keys.sanitize_content(content, self.user)
         msg.edited_at = timezone.now()
         msg.save(update_fields=["content", "edited_at"])
         return {

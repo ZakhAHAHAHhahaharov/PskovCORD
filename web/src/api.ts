@@ -166,8 +166,10 @@ export type ServerPermission =
   | 'manage_roles'
   | 'manage_server'
   | 'manage_members'
+  | 'create_expressions'
   | 'send_messages'
   | 'delete_messages'
+  | 'use_external_emoji'
   | 'speak'
   | 'video'
 
@@ -331,6 +333,28 @@ export interface Attachment {
   /** Только у картинок — чтобы зарезервировать место под превью. */
   width: number | null
   height: number | null
+}
+
+/** Кастомный эмодзи сервера (backend chat.models.ServerEmoji).
+ *
+ * Два URL, а не один: static_url — то, что показывается ВСЕГДА, а url
+ * подставляется только на время наведения/нажатия. У статичного эмодзи они
+ * совпадают, чтобы у отрисовки был один вход — см. CustomEmojiImage. */
+export interface CustomEmoji {
+  id: number
+  /** Латиница/цифры/«_», 2..32 — то, что стоит между двоеточиями в токене. */
+  name: string
+  server: number
+  server_name: string
+  /** Анимированный файл целиком (`/media/...`) — домен подставляет mediaUrl(). */
+  url: string
+  /** Первый кадр анимированного; у статичного — тот же файл, что и url. */
+  static_url: string
+  animated: boolean
+  /** Вес файла в байтах — показывается в управлении эмодзи сервера. */
+  size: number
+  created_by: number | null
+  created_at: string
 }
 
 /** Одна реакция-эмодзи в агрегированном виде.
@@ -774,22 +798,23 @@ export function mediaUrl(path: string): string {
   return `${API}${path}`
 }
 
-/** Загрузка вложения. XHR, а не fetch, ради upload.onprogress: файл до 25 МБ
- * на медленном канале идёт секунды, и полоса прогресса здесь не украшение —
- * без неё непонятно, висит загрузка или нет.
+interface UploadOptions {
+  onProgress?: (fraction: number) => void
+  signal?: AbortSignal
+}
+
+/** POST multipart-формы. XHR, а не fetch, ради upload.onprogress: файл до
+ * 25 МБ на медленном канале идёт секунды, и полоса прогресса здесь не
+ * украшение — без неё непонятно, висит загрузка или нет.
  *
- * onProgress получает долю 0..1. Возвращённый объект — уже сохранённое
- * вложение; привязывается к сообщению позже, при отправке (см. outbox.ts). */
-export function uploadAttachment(
-  file: File,
-  opts: { onProgress?: (fraction: number) => void; signal?: AbortSignal } = {},
-): Promise<Attachment> {
-  const send = (token: string | null, allowRetry: boolean): Promise<Attachment> =>
+ * onProgress получает долю 0..1. Обновление протухшего токена и повтор — тот
+ * же путь, что у обычных запросов (см. req), просто вручную: fetch-обёртка
+ * сюда не годится именно из-за прогресса. */
+function postForm<T>(path: string, form: FormData, opts: UploadOptions = {}): Promise<T> {
+  const send = (token: string | null, allowRetry: boolean): Promise<T> =>
     new Promise((resolve, reject) => {
-      const form = new FormData()
-      form.append('file', file)
       const xhr = new XMLHttpRequest()
-      xhr.open('POST', `${API}/api/attachments`)
+      xhr.open('POST', `${API}${path}`)
       xhr.withCredentials = true
       if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`)
 
@@ -841,6 +866,41 @@ export function uploadAttachment(
     return Promise.reject(new DOMException('Загрузка отменена', 'AbortError'))
   }
   return send(accessToken, true)
+}
+
+/** Загрузка вложения. Возвращённый объект — уже сохранённое вложение;
+ * привязывается к сообщению позже, при отправке (см. outbox.ts). */
+export function uploadAttachment(file: File, opts: UploadOptions = {}): Promise<Attachment> {
+  const form = new FormData()
+  form.append('file', file)
+  return postForm<Attachment>('/api/attachments', form, opts)
+}
+
+/** Загрузка кастомного эмодзи на сервер (нужно право create_expressions).
+ *
+ * static — первый кадр анимированного эмодзи, вырезанный КЛИЕНТОМ (см.
+ * gif.ts): именно он показывается, пока на эмодзи не навели. Необязателен —
+ * без него бэкенд сохранит эмодзи, просто анимация будет играть всегда. */
+export function uploadEmoji(
+  serverId: number,
+  name: string,
+  file: Blob,
+  staticFrame?: Blob | null,
+  opts: UploadOptions = {},
+): Promise<CustomEmoji> {
+  const form = new FormData()
+  form.append('name', name)
+  form.append('file', file, `${name}.${blobExt(file)}`)
+  if (staticFrame) form.append('static', staticFrame, `${name}-static.png`)
+  return postForm<CustomEmoji>(`/api/servers/${serverId}/emoji`, form, opts)
+}
+
+/** Расширение по MIME — только для имени файла: настоящий тип бэкенд всё
+ * равно определяет по содержимому (см. backend chat/uploads.py sniff_emoji). */
+function blobExt(blob: Blob): string {
+  if (blob.type === 'image/gif') return 'gif'
+  if (blob.type === 'image/webp') return 'webp'
+  return 'png'
 }
 
 export const api = {
@@ -989,6 +1049,25 @@ export const api = {
     }),
   deleteRole: (serverId: number, roleId: number) =>
     req(`/api/servers/${serverId}/roles/${roleId}`, { method: 'DELETE' }),
+
+  // --- кастомные эмодзи ---------------------------------------------------
+  /** Все эмодзи всех моих серверов разом — из этого строится и лента наборов
+   * в пикере, и отрисовка токенов в уже пришедших сообщениях. Ходить сюда
+   * напрямую не нужно: есть кэш с подпиской, см. customEmoji.ts. */
+  myEmoji: (): Promise<CustomEmoji[]> => req('/api/emoji'),
+  /** Метаданные конкретных эмодзи, в том числе с серверов, где меня нет —
+   * иначе присланный в личку чужой эмодзи остался бы квадратом-заглушкой. */
+  resolveEmoji: (ids: number[]): Promise<CustomEmoji[]> =>
+    req(`/api/emoji?ids=${ids.join(',')}`),
+  serverEmoji: (serverId: number): Promise<CustomEmoji[]> =>
+    req(`/api/servers/${serverId}/emoji`),
+  renameEmoji: (serverId: number, emojiId: number, name: string): Promise<CustomEmoji> =>
+    req(`/api/servers/${serverId}/emoji/${emojiId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ name }),
+    }),
+  deleteEmoji: (serverId: number, emojiId: number) =>
+    req(`/api/servers/${serverId}/emoji/${emojiId}`, { method: 'DELETE' }),
   setMemberRoles: (serverId: number, userId: number, roleIds: number[]) =>
     req(`/api/servers/${serverId}/members/${userId}`, {
       method: 'PATCH',

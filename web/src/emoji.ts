@@ -488,8 +488,7 @@ export function searchEmoji(query: string): EmojiEntry[] {
 }
 
 // --- ключ реакции -----------------------------------------------------------
-// Симметрия с backend chat/emoji.py: там такой же разбор и там же живёт
-// заготовка под кастомные эмодзи сервера.
+// Симметрия с backend chat/emoji.py: там такой же разбор.
 
 export const CUSTOM_EMOJI_PREFIX = 'custom:'
 
@@ -499,14 +498,7 @@ export interface ParsedEmojiKey {
   value: string
 }
 
-/** Разбирает ключ реакции, каким он приходит с сервера.
- *
- * PLACEHOLDER: ветка 'custom' сейчас недостижима — backend такие ключи
- * отклоняет (chat/emoji.py, CUSTOM_EMOJI_ENABLED=false), потому что моделей
- * кастомных эмодзи ещё нет. Она здесь, чтобы у отрисовки реакций уже был
- * ровно один вход: когда кастомные эмодзи появятся, менять придётся только
- * customEmojiUrl ниже, а не каждое место, где реакция рисуется.
- */
+/** Разбирает ключ реакции, каким он приходит с сервера. */
 export function parseEmojiKey(key: string): ParsedEmojiKey {
   if (key.startsWith(CUSTOM_EMOJI_PREFIX)) {
     return { kind: 'custom', value: key.slice(CUSTOM_EMOJI_PREFIX.length) }
@@ -514,8 +506,29 @@ export function parseEmojiKey(key: string): ParsedEmojiKey {
   return { kind: 'unicode', value: key }
 }
 
-/** PLACEHOLDER: URL картинки кастомного эмодзи сервера.
- * Вернёт настоящий путь, когда появится модель ServerEmoji. */
-export function customEmojiUrl(_id: string): string | null {
-  return null
+/** Ключ реакции для кастомного эмодзи — обратная сторона parseEmojiKey. */
+export function customEmojiKey(id: number): string {
+  return `${CUSTOM_EMOJI_PREFIX}${id}`
+}
+
+// --- токен внутри текста сообщения ------------------------------------------
+// <:имя:id> у статичного, <a:имя:id> у анимированного. Форма и регулярка
+// повторяют backend chat/emoji.py EMOJI_TOKEN_RE — она же там и охраняется
+// правами (sanitize_content). id внутри токена делает текст самодостаточным:
+// эмодзи переименовали — старые сообщения не сломались.
+
+export const EMOJI_TOKEN_RE = /<(a?):([A-Za-z0-9_]{2,32}):(\d{1,18})>/g
+
+/** Токен для вставки в текст сообщения. */
+export function emojiToken(emoji: { id: number; name: string; animated: boolean }): string {
+  return `<${emoji.animated ? 'a' : ''}:${emoji.name}:${emoji.id}>`
+}
+
+/** id всех кастомных эмодзи, упомянутых в тексте, — чтобы дозагрузить
+ * метаданные тех, которых нет в реестре (см. customEmoji.ts). */
+export function emojiIdsInText(content: string): number[] {
+  if (!content.includes('<')) return []
+  const ids: number[] = []
+  for (const match of content.matchAll(EMOJI_TOKEN_RE)) ids.push(Number(match[3]))
+  return ids
 }

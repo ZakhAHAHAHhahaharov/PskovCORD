@@ -79,6 +79,46 @@ def _sniff_image(uploaded_file) -> tuple[str | None, int | None, int | None]:
     return mime, width, height
 
 
+# Форматы, которые годятся в кастомный эмодзи. Уже подмножество
+# SAFE_IMAGE_FORMATS: JPEG и BMP отброшены не из-за безопасности, а потому что
+# у эмодзи не бывает фона — без альфа-канала он станет белым квадратом.
+EMOJI_IMAGE_FORMATS = {
+    "PNG": "image/png",
+    "GIF": "image/gif",
+    "WEBP": "image/webp",
+}
+
+
+def sniff_emoji(uploaded_file) -> tuple[str, bool] | None:
+    """(content_type, animated) для загружаемого эмодзи; None — не годится.
+
+    Всё та же логика, что у sniff(): тип определяется по СОДЕРЖИМОМУ, а не по
+    заголовку запроса. Разница в том, что здесь неопознанное не превращается в
+    «файл на скачивание» — эмодзи, который нельзя нарисовать, бессмыслен,
+    поэтому отказ честнее подмены типа.
+
+    animated читаем у Pillow (is_animated есть у GIF и WEBP), а не считаем
+    кадры сами: нам нужен ответ «одна картинка или несколько», а не их число.
+    """
+    try:
+        uploaded_file.seek(0)
+        with Image.open(uploaded_file) as img:
+            image_format = img.format
+            # У одиночного PNG атрибута нет вовсе — отсюда getattr с False.
+            animated = bool(getattr(img, "is_animated", False))
+    except (UnidentifiedImageError, OSError, ValueError):
+        return None
+    finally:
+        # FileField читает файл после нас — курсор обязан вернуться в начало
+        # независимо от того, опознали мы формат или свалились на битом.
+        uploaded_file.seek(0)
+
+    mime = EMOJI_IMAGE_FORMATS.get(image_format or "")
+    if not mime:
+        return None
+    return mime, animated
+
+
 def _guess_media_type(filename: str) -> str:
     guessed, _encoding = mimetypes.guess_type(filename or "")
     if guessed and guessed.startswith(EMBEDDABLE_MEDIA_PREFIXES):

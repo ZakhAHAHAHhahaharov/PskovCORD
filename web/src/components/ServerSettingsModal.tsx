@@ -3,12 +3,13 @@ import {
 } from 'react'
 import {
   Camera, Check, ChevronLeft, ChevronRight, Copy, Crown, Loader2, Plus,
-  Shield, ShieldBan, SlidersHorizontal, Trash2, UserRoundCheck, X,
+  Shield, ShieldBan, SlidersHorizontal, Smile, Trash2, UserRoundCheck, X,
 } from 'lucide-react'
 import {
-  api, Member, Role, Server, ServerAccessMode, ServerBanEntry,
+  api, CustomEmoji, Member, Role, Server, ServerAccessMode, ServerBanEntry,
   ServerInviteLinkEntry, ServerJoinRequestEntry, ServerPermission, ServerRule,
 } from '../api'
+import { customEmojiStore, useCustomEmojiPacks } from '../customEmoji'
 import {
   BANNER_MAX_H, BANNER_MAX_W, GRADIENT_PRESETS, SERVER_ICON_SIZE,
   SOURCE_IMAGE_MAX_BYTES, buildGradient, fileToBannerDataUrl,
@@ -17,6 +18,7 @@ import {
 import { useEscToClose } from '../modalStack'
 import { useUnsavedChangesGuard } from '../hooks/useUnsavedChangesGuard'
 import Avatar from './Avatar'
+import CustomEmojiImage from './CustomEmojiImage'
 import UnsavedChangesNudge from './UnsavedChangesNudge'
 
 /** Общий контракт вкладки с черновиком + кнопкой "Сохранить" (Профиль/Роли/
@@ -30,7 +32,7 @@ interface TabHandle {
   discard: () => void
 }
 
-type TabId = 'profile' | 'roles' | 'requests' | 'access' | 'bans'
+type TabId = 'profile' | 'roles' | 'emoji' | 'requests' | 'access' | 'bans'
 
 interface TabDef {
   id: TabId
@@ -43,6 +45,7 @@ interface TabDef {
 const TABS: TabDef[] = [
   { id: 'profile', label: 'Профиль', icon: <SlidersHorizontal size={15} />, permission: 'manage_server' },
   { id: 'roles', label: 'Роли', icon: <Shield size={15} />, permission: 'manage_roles' },
+  { id: 'emoji', label: 'Эмодзи', icon: <Smile size={15} />, permission: 'create_expressions' },
   { id: 'requests', label: 'Запросы', icon: <UserRoundCheck size={15} />, permission: 'manage_members' },
   { id: 'access', label: 'Доступ', icon: <Check size={15} />, permission: 'manage_server' },
   { id: 'bans', label: 'ЧС списочек xD', icon: <ShieldBan size={15} />, permission: 'manage_members' },
@@ -62,6 +65,7 @@ const PERMISSION_GROUPS: { title: string; items: [ServerPermission, string][] }[
       // которых в проекте нет, и были переключателями, не делавшими ничего.
       // Вернутся вместе с самими фичами — см. chat/roles.py.
       ['manage_members', 'Выгонять / одобрять / банить участников'],
+      ['create_expressions', 'Создавать средства выражения эмоций'],
     ],
   },
   {
@@ -69,6 +73,10 @@ const PERMISSION_GROUPS: { title: string; items: [ServerPermission, string][] }[
     items: [
       ['send_messages', 'Отправка сообщений'],
       ['delete_messages', 'Удаление сообщений'],
+      // Эмодзи САМОГО сервера доступны всем его участникам всегда — этим
+      // правом режется только принесённое с других серверов (см. backend
+      // chat/emoji.py usable_ids).
+      ['use_external_emoji', 'Использовать внешние эмодзи'],
       // mention_everyone — там же: разбора @all/@online/@here нет нигде.
     ],
   },
@@ -291,6 +299,7 @@ export default function ServerSettingsModal({
                 onRolesChanged={onRolesChanged}
               />
             )}
+            {tab === 'emoji' && <EmojiTab server={server} />}
             {tab === 'requests' && (
               <RequestsTab server={server} onMembersChanged={onMembersChanged} />
             )}
@@ -1005,6 +1014,113 @@ const RolesTab = forwardRef<
 })
 
 // --- 3. Запросы на вступление ---------------------------------------------
+
+/** Вкладка «Эмодзи» — переименовать и удалить уже загруженные.
+ *
+ * Загрузки здесь нет намеренно: она живёт в пикере (кнопка «+» рядом с
+ * наборами), то есть ровно там, где эмодзи и выбирают. Открывать настройки
+ * сервера ради того, чтобы добавить один смайлик, — лишний путь; сюда
+ * приходят, когда надо навести порядок.
+ *
+ * Источник правды — общий реестр (customEmoji.ts), а не своё состояние: тогда
+ * удаление здесь сразу видно и в пикере, и в редакторе, без перезагрузки. */
+function EmojiTab({ server }: { server: Server }) {
+  const packs = useCustomEmojiPacks()
+  const emoji = packs.find((p) => p.server.id === server.id)?.emoji ?? []
+  const [error, setError] = useState('')
+  const [renamingId, setRenamingId] = useState<number | null>(null)
+  const [draftName, setDraftName] = useState('')
+
+  /** Убрать/заменить эмодзи в реестре, не дожидаясь события server_emoji:
+   * оно придёт, но до него список выглядел бы «ничего не произошло». */
+  const replaceInStore = (next: CustomEmoji[]) => {
+    customEmojiStore.setServerEmoji(server.id, next)
+  }
+
+  const remove = async (entry: CustomEmoji) => {
+    if (!window.confirm(`Удалить :${entry.name}:? Он пропадёт из пикера у всех.`)) return
+    try {
+      await api.deleteEmoji(server.id, entry.id)
+      replaceInStore(emoji.filter((e) => e.id !== entry.id))
+    } catch (err) {
+      setError((err as Error).message)
+    }
+  }
+
+  const commitRename = async (entry: CustomEmoji) => {
+    const name = draftName.trim()
+    setRenamingId(null)
+    if (!name || name === entry.name) return
+    try {
+      const updated = await api.renameEmoji(server.id, entry.id, name)
+      replaceInStore(emoji.map((e) => (e.id === entry.id ? updated : e)))
+    } catch (err) {
+      setError((err as Error).message)
+    }
+  }
+
+  return (
+    <div className="srv-tab">
+      {error && <div className="login-error">{error}</div>}
+      <p className="srv-hint">
+        Добавляются эмодзи кнопкой «+» в пикере — рядом с наборами серверов.
+        Максимум 256 КБ на штуку.
+      </p>
+      {emoji.length === 0 ? (
+        <div className="modal-empty">На этом сервере пока нет своих эмодзи.</div>
+      ) : (
+        emoji.map((entry) => (
+          <div key={entry.id} className="srv-list-row">
+            <CustomEmojiImage id={entry.id} emoji={entry} size={28} />
+            <div className="srv-list-info">
+              {renamingId === entry.id ? (
+                <input
+                  className="srv-emoji-name-input"
+                  value={draftName}
+                  autoFocus
+                  maxLength={32}
+                  onChange={(e) => setDraftName(e.target.value)}
+                  onBlur={() => void commitRename(entry)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') e.currentTarget.blur()
+                    if (e.key === 'Escape') setRenamingId(null)
+                  }}
+                />
+              ) : (
+                <button
+                  type="button"
+                  className="member-name srv-emoji-name"
+                  title="Переименовать"
+                  onClick={() => {
+                    setRenamingId(entry.id)
+                    setDraftName(entry.name)
+                  }}
+                >
+                  :{entry.name}:
+                </button>
+              )}
+              <span className="srv-hint">
+                {entry.animated ? 'Анимированный' : 'Статичный'}
+                {' · '}
+                {Math.max(1, Math.round(entry.size / 1024))} КБ
+              </span>
+            </div>
+            <div className="friend-row-actions">
+              <button
+                type="button"
+                className="btn-danger-soft"
+                title="Удалить"
+                onClick={() => void remove(entry)}
+              >
+                <Trash2 size={14} />
+              </button>
+            </div>
+          </div>
+        ))
+      )}
+    </div>
+  )
+}
 
 function RequestsTab({
   server,

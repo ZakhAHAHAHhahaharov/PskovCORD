@@ -35,9 +35,10 @@ from accounts.models import Friendship
 from .middleware import JWTAuthMiddleware
 from .models import (
     Attachment, Channel, Conversation, ConversationMessage,
-    ConversationParticipant, MAX_ATTACHMENT_BYTES, MAX_REACTIONS_PER_MESSAGE,
+    ConversationParticipant, MAX_ATTACHMENT_BYTES, MAX_EMOJI_BYTES,
+    MAX_REACTIONS_PER_MESSAGE,
     FriendNickname, Membership, Message, ProfileNote, Reaction, Role, Server, ServerBan,
-    ServerInvite, ServerJoinRequest, dm_room,
+    ServerEmoji, ServerInvite, ServerJoinRequest, dm_room,
 )
 from .permissions import can_dm
 
@@ -2592,6 +2593,262 @@ class AttachmentUploadTests(APITestCase):
         self.assertEqual(resp.status_code, 401)
 
 
+class CustomEmojiUploadTests(APITestCase):
+    """Загрузка кастомных эмодзи сервера: право, лимиты и формат."""
+
+    def setUp(self):
+        self.owner = User.objects.create_user(username="owner", password="pw12345")
+        self.member = User.objects.create_user(username="member", password="pw12345")
+        self.server = Server.objects.create(name="S", owner=self.owner)
+        roles.create_default_role(self.server)
+        Membership.objects.create(user=self.owner, server=self.server)
+        Membership.objects.create(user=self.member, server=self.server)
+        self.client.force_authenticate(self.owner)
+
+    @staticmethod
+    def _png(width=8, height=8):
+        buffer = io.BytesIO()
+        PILImage.new("RGBA", (width, height), (255, 0, 0, 255)).save(
+            buffer, format="PNG")
+        return buffer.getvalue()
+
+    @staticmethod
+    def _gif():
+        # Кадры РАЗНОГО цвета: одинаковые Pillow схлопывает в один, и гифка
+        # получилась бы статичной — тест бы проверял не то, что нужно.
+        images = [PILImage.new("RGB", (8, 8), c) for c in ("red", "green", "blue")]
+        buffer = io.BytesIO()
+        images[0].save(
+            buffer, format="GIF", save_all=True, append_images=images[1:])
+        return buffer.getvalue()
+
+    def _upload(self, name="kot", data=None, content_type="image/png", **extra):
+        payload = {
+            "name": name,
+            "file": SimpleUploadedFile(
+                "e.png", data if data is not None else self._png(),
+                content_type=content_type),
+            **extra,
+        }
+        return self.client.post(
+            f"/api/servers/{self.server.id}/emoji", payload, format="multipart")
+
+    def test_owner_can_upload(self):
+        resp = self._upload()
+        self.assertEqual(resp.status_code, 201)
+        self.assertEqual(resp.data["name"], "kot")
+        self.assertFalse(resp.data["animated"])
+        self.assertTrue(resp.data["url"].startswith("/media/emoji/"))
+        # У статичного эмодзи показывать по наведению нечего — static_url это
+        # он сам, чтобы у отрисовки был ровно один вход (CustomEmojiImage).
+        self.assertEqual(resp.data["static_url"], resp.data["url"])
+
+    def test_member_without_permission_rejected(self):
+        self.client.force_authenticate(self.member)
+        self.assertEqual(self._upload().status_code, 403)
+
+    def test_permission_grants_upload(self):
+        role = Role.objects.create(
+            server=self.server, name="Эмодзятник", position=1,
+            create_expressions=True)
+        Membership.objects.get(user=self.member, server=self.server).roles.add(role)
+        self.client.force_authenticate(self.member)
+        self.assertEqual(self._upload().status_code, 201)
+
+    def test_animated_gif_keeps_static_frame(self):
+        resp = self.client.post(
+            f"/api/servers/{self.server.id}/emoji",
+            {
+                "name": "pliaska",
+                "file": SimpleUploadedFile(
+                    "e.gif", self._gif(), content_type="image/gif"),
+                "static": SimpleUploadedFile(
+                    "s.png", self._png(), content_type="image/png"),
+            },
+            format="multipart",
+        )
+        self.assertEqual(resp.status_code, 201)
+        self.assertTrue(resp.data["animated"])
+        # Разные файлы: по умолчанию виден кадр, анимация — только по наведению.
+        self.assertNotEqual(resp.data["static_url"], resp.data["url"])
+
+    def test_client_filename_never_reaches_disk(self):
+        """Имя файла на диске собирает сервер, а не загружающий.
+
+        /media/emoji/ отдаёт nginx НАПРЯМУЮ и выбирает Content-Type по
+        расширению. Валидный GIF, присланный под именем "evil.html" (полиглоты
+        существуют — заголовок GIF ничему не мешает), отдавался бы документом
+        на нашем же origin, где в localStorage лежит JWT. Клиентское имя
+        отбрасывается целиком — см. chat.models.emoji_upload_to.
+        """
+        resp = self.client.post(
+            f"/api/servers/{self.server.id}/emoji",
+            {
+                "name": "polyglot",
+                "file": SimpleUploadedFile(
+                    "evil.html", self._gif(), content_type="text/html"),
+            },
+            format="multipart",
+        )
+        self.assertEqual(resp.status_code, 201)
+        self.assertTrue(resp.data["url"].endswith("/emoji.gif"), resp.data["url"])
+        self.assertNotIn("evil", resp.data["url"])
+        self.assertNotIn(".html", resp.data["url"])
+
+    def test_static_frame_filename_is_server_made_too(self):
+        resp = self.client.post(
+            f"/api/servers/{self.server.id}/emoji",
+            {
+                "name": "anim",
+                "file": SimpleUploadedFile(
+                    "e.gif", self._gif(), content_type="image/gif"),
+                "static": SimpleUploadedFile(
+                    "../../evil.html", self._png(), content_type="text/html"),
+            },
+            format="multipart",
+        )
+        self.assertEqual(resp.status_code, 201)
+        self.assertTrue(
+            resp.data["static_url"].endswith("/static.png"), resp.data["static_url"])
+        self.assertNotIn("..", resp.data["static_url"])
+
+    def test_oversized_rejected(self):
+        self.assertEqual(
+            self._upload(data=b"\0" * (MAX_EMOJI_BYTES + 1)).status_code, 400)
+
+    def test_non_image_rejected(self):
+        # Тип определяется по СОДЕРЖИМОМУ: честное имя и заголовок не помогут.
+        self.assertEqual(self._upload(data=b"<svg/>").status_code, 400)
+
+    def test_jpeg_rejected(self):
+        """JPEG отброшен не из соображений безопасности, а потому что у него
+        нет альфа-канала: эмодзи стал бы белым квадратом."""
+        buffer = io.BytesIO()
+        PILImage.new("RGB", (8, 8), "red").save(buffer, format="JPEG")
+        self.assertEqual(self._upload(data=buffer.getvalue()).status_code, 400)
+
+    def test_bad_and_duplicate_names_rejected(self):
+        self.assertEqual(self._upload().status_code, 201)
+        self.assertEqual(self._upload(name="kot").status_code, 400)
+        for bad in ("", "a", "кот", "с пробелом", "x" * 33):
+            self.assertEqual(self._upload(name=bad).status_code, 400, bad)
+
+    def test_rename_and_delete(self):
+        created = self._upload().data
+        url = f"/api/servers/{self.server.id}/emoji/{created['id']}"
+        self.assertEqual(self.client.patch(url, {"name": "kotik"}).data["name"], "kotik")
+        self.assertEqual(self.client.delete(url).status_code, 204)
+        self.assertFalse(ServerEmoji.objects.filter(id=created["id"]).exists())
+
+    def test_list_visible_to_members_only(self):
+        self._upload()
+        outsider = User.objects.create_user(username="out", password="pw12345")
+        self.assertEqual(
+            len(self.client.get(f"/api/servers/{self.server.id}/emoji").data), 1)
+        self.client.force_authenticate(outsider)
+        self.assertEqual(
+            self.client.get(f"/api/servers/{self.server.id}/emoji").status_code, 403)
+
+    def test_my_emoji_lists_all_my_servers(self):
+        self._upload()
+        self.client.force_authenticate(self.member)
+        self.assertEqual(len(self.client.get("/api/emoji").data), 1)
+        # Не участник — своих наборов у него нет.
+        self.client.force_authenticate(
+            User.objects.create_user(username="lone", password="pw12345"))
+        self.assertEqual(self.client.get("/api/emoji").data, [])
+
+    def test_resolve_ignores_membership(self):
+        """?ids= отвечает и про чужие серверы — это ЧТЕНИЕ: иначе присланный
+        в личку эмодзи остался бы у получателя вечной заглушкой. Ограничивается
+        отправка, а не отрисовка (см. MyEmoji)."""
+        created = self._upload().data
+        self.client.force_authenticate(
+            User.objects.create_user(username="lone", password="pw12345"))
+        resp = self.client.get(f"/api/emoji?ids={created['id']},999999")
+        self.assertEqual([e["id"] for e in resp.data], [created["id"]])
+
+
+class CustomEmojiPermissionTests(TestCase):
+    """Кто какой кастомный эмодзи вправе поставить — chat.emoji.usable_ids.
+
+    Правило: свои эмодзи сервера доступны всем его участникам всегда; чужие
+    внутри сервера — только с правом «Использовать внешние эмодзи»; в личке
+    ограничивать нечем, поэтому доступны все свои.
+    """
+
+    def setUp(self):
+        self.user = User.objects.create_user(username="u", password="pw12345")
+        self.home = Server.objects.create(name="Дом", owner=self.user)
+        self.other = Server.objects.create(name="Другой", owner=self.user)
+        Membership.objects.create(user=self.user, server=self.home)
+        Membership.objects.create(user=self.user, server=self.other)
+        self.home_emoji = self._emoji(self.home, "doma")
+        self.other_emoji = self._emoji(self.other, "chuzhoy")
+        # Сервер, где нас нет вовсе.
+        stranger = User.objects.create_user(username="s", password="pw12345")
+        self.foreign = Server.objects.create(name="Чужой", owner=stranger)
+        self.foreign_emoji = self._emoji(self.foreign, "nedostupny")
+
+    @staticmethod
+    def _emoji(server, name):
+        return ServerEmoji.objects.create(
+            server=server, name=name, content_type="image/png", size=100)
+
+    def _key(self, emoji):
+        return f"custom:{emoji.id}"
+
+    def test_own_server_emoji_always_usable(self):
+        self.assertTrue(emoji_keys.can_use(self._key(self.home_emoji), self.user, self.home))
+
+    def test_emoji_of_server_i_am_not_in_is_never_usable(self):
+        self.assertFalse(
+            emoji_keys.can_use(self._key(self.foreign_emoji), self.user, self.home))
+        self.assertFalse(emoji_keys.can_use(self._key(self.foreign_emoji), self.user))
+
+    def test_external_emoji_needs_permission(self):
+        # Роль по умолчанию с правом — как при создании сервера.
+        default = roles.create_default_role(self.home)
+        self.assertTrue(default.use_external_emoji)
+        self.assertTrue(
+            emoji_keys.can_use(self._key(self.other_emoji), self.user, self.home))
+
+        # Право сняли — эмодзи ДРУГОГО сервера в этом канале больше нельзя,
+        # а свой — по-прежнему можно.
+        default.use_external_emoji = False
+        default.save()
+        member = User.objects.create_user(username="m", password="pw12345")
+        Membership.objects.create(user=member, server=self.home)
+        Membership.objects.create(user=member, server=self.other)
+        self.assertFalse(
+            emoji_keys.can_use(self._key(self.other_emoji), member, self.home))
+        self.assertTrue(
+            emoji_keys.can_use(self._key(self.home_emoji), member, self.home))
+
+    def test_dm_has_no_restriction(self):
+        # server=None — личка: ролей нет, значит и ограничивать нечем.
+        self.assertTrue(emoji_keys.can_use(self._key(self.other_emoji), self.user))
+
+    def test_unicode_always_usable(self):
+        self.assertTrue(emoji_keys.can_use("🔥", self.user, self.home))
+
+    def test_sanitize_content_downgrades_forbidden_tokens(self):
+        allowed = f"<:doma:{self.home_emoji.id}>"
+        forbidden = f"<:nedostupny:{self.foreign_emoji.id}>"
+        result = emoji_keys.sanitize_content(
+            f"привет {allowed} и {forbidden}", self.user, self.home)
+        # Доступный токен остался картинкой, недоступный стал текстом — но
+        # сообщение целиком не потеряно.
+        self.assertIn(allowed, result)
+        self.assertNotIn(forbidden, result)
+        self.assertIn(":nedostupny:", result)
+
+    def test_sanitize_content_leaves_plain_text_alone(self):
+        for text in ("обычный текст", "1 < 2 и 3 > 2", ""):
+            self.assertEqual(
+                emoji_keys.sanitize_content(text, self.user, self.home), text)
+
+
 class EmojiKeyTests(TestCase):
     """Реакцией может быть только эмодзи — иначе счётчик реакций
     превращается во второй чат из произвольных строк."""
@@ -2619,11 +2876,14 @@ class EmojiKeyTests(TestCase):
         self.assertIsNone(emoji_keys.normalize(None))
         self.assertIsNone(emoji_keys.normalize(42))
 
-    def test_custom_emoji_key_rejected_while_feature_absent(self):
-        # PLACEHOLDER-ветка: модели кастомных эмодзи ещё нет, поэтому ссылки
-        # на них не принимаются — иначе копились бы реакции, которые нечем
-        # отрисовать (см. chat/emoji.py).
-        self.assertIsNone(emoji_keys.normalize("custom:42"))
+    def test_custom_emoji_key_form(self):
+        # normalize проверяет только ФОРМУ ключа: существует ли такой эмодзи и
+        # вправе ли его ставить этот человек — вопрос с контекстом, им ведает
+        # can_use (см. CustomEmojiPermissionTests ниже).
+        self.assertEqual(emoji_keys.normalize("custom:42"), "custom:42")
+        for key in ("custom:", "custom:abc", "custom:-1", "custom:4 2",
+                    "custom:" + "9" * 19):
+            self.assertIsNone(emoji_keys.normalize(key), key)
 
     def test_every_emoji_offered_by_the_picker_is_accepted(self):
         """Каждый эмодзи из каталога фронта должен проходить валидацию здесь.

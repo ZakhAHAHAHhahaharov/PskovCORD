@@ -10,8 +10,9 @@ import { escapeRegExp, WORD_CHAR } from '../mentions'
 import { styledNameProps } from '../nameStyle'
 import { displayNameOf, useNicknamesVersion } from '../nicknames'
 import { DeliveryStatus, DELIVERY_STATUS_PRESENTATION } from '../outbox'
-import { QUICK_REACTIONS } from '../emoji'
+import { EMOJI_TOKEN_RE, QUICK_REACTIONS, customEmojiKey } from '../emoji'
 import Avatar from './Avatar'
+import CustomEmojiImage from './CustomEmojiImage'
 import DeleteMessageModal from './DeleteMessageModal'
 import EmojiPicker, { EmojiPickerAnchor } from './EmojiPicker'
 import MessageAttachments from './MessageAttachments'
@@ -71,6 +72,64 @@ function renderMentions(
   }
   if (lastIndex === 0) return content
   if (lastIndex < content.length) nodes.push(content.slice(lastIndex))
+  return nodes
+}
+
+/** Сколько кастомных эмодзи в сообщении считается «сообщением из одних
+ * эмодзи» — тогда они рисуются крупно, как в Discord. Порог, а не точное
+ * «текста нет вовсе»: «<:кот:1> <:кот:1>» с пробелами между — всё ещё оно. */
+const JUMBO_EMOJI_LIMIT = 6
+
+/** Текст сообщения целиком: кастомные эмодзи картинками, @упоминания
+ * кнопками, остальное как есть.
+ *
+ * Порядок именно такой: сначала вырезаются токены <:имя:id>, и только их
+ * ОСТАТКИ уходят в renderMentions. Наоборот было бы неверно — имя эмодзи
+ * может совпасть с ником, и «@ник» внутри токена превратился бы в кнопку,
+ * разорвав токен пополам. */
+function renderContent(
+  content: string,
+  candidates: MentionCandidate[],
+  onMentionClick: (candidate: MentionCandidate, e: ReactMouseEvent) => void,
+): ReactNode {
+  if (!content.includes('<')) return renderMentions(content, candidates, onMentionClick)
+  const matches = [...content.matchAll(EMOJI_TOKEN_RE)]
+  if (matches.length === 0) return renderMentions(content, candidates, onMentionClick)
+
+  // Крупно — только если КРОМЕ эмодзи в сообщении ничего нет (пробелы не в
+  // счёт): «зацени <:кот:1>» должен остаться строчным, иначе эмодзи ломает
+  // высоту строки прямо посреди фразы.
+  const jumbo =
+    matches.length <= JUMBO_EMOJI_LIMIT &&
+    content.replace(EMOJI_TOKEN_RE, '').trim() === ''
+
+  const nodes: ReactNode[] = []
+  let lastIndex = 0
+  matches.forEach((match, i) => {
+    const start = match.index ?? 0
+    if (start > lastIndex) {
+      nodes.push(
+        <Fragment key={`t-${i}`}>
+          {renderMentions(content.slice(lastIndex, start), candidates, onMentionClick)}
+        </Fragment>,
+      )
+    }
+    nodes.push(
+      <CustomEmojiImage
+        key={`e-${i}`}
+        id={Number(match[3])}
+        className={jumbo ? 'custom-emoji-jumbo' : 'custom-emoji-inline'}
+      />,
+    )
+    lastIndex = start + match[0].length
+  })
+  if (lastIndex < content.length) {
+    nodes.push(
+      <Fragment key="t-last">
+        {renderMentions(content.slice(lastIndex), candidates, onMentionClick)}
+      </Fragment>,
+    )
+  }
   return nodes
 }
 
@@ -198,6 +257,17 @@ export default function MessageList({
     messageId: number
     anchor: EmojiPickerAnchor
   } | null>(null)
+  /** Выбрали реакцию в пикере — общее для стандартных и кастомных: к этому
+   * моменту и те, и другие уже сведены к одному ключу (см. emoji.ts). */
+  const pickReaction = (emoji: string) => {
+    if (!reactionPicker) return
+    const message = messages.find((m) => m.id === reactionPicker.messageId)
+    const mine = !!message?.reactions.some(
+      (r) => r.emoji === emoji && r.user_ids.includes(currentUserId),
+    )
+    onToggleReaction(reactionPicker.messageId, emoji, mine)
+    setReactionPicker(null)
+  }
   // Панель действий (реакции/ответ/редактировать/удалить) на десктопе
   // видна по :hover — на тач-устройстве такого нет вообще, а показывать её
   // сразу под КАЖДЫМ сообщением слишком шумно. Двойной тап по конкретному
@@ -348,7 +418,12 @@ export default function MessageList({
               {m.reply_to && (
                 <div className="message-reply-quote">
                   <span className="message-reply-author">{displayNameOf(m.reply_to.author)}</span>
-                  <span className="message-reply-content">{m.reply_to.content}</span>
+                  <span className="message-reply-content">
+                    {/* Без кандидатов на упоминание: в цитате одной строкой
+                        кликабельный «@ник» ни к чему, а вот токен эмодзи там
+                        показался бы сырым «<:кот:1>». */}
+                    {renderContent(m.reply_to.content, [], onOpenProfile)}
+                  </span>
                 </div>
               )}
               <div className="message-meta">
@@ -378,7 +453,7 @@ export default function MessageList({
               </div>
               {m.content && (
                 <div className={`message-content ${pendingDelete ? 'message-content-deleting' : ''}`}>
-                  {renderMentions(m.content, mentionCandidates, onOpenProfile)}
+                  {renderContent(m.content, mentionCandidates, onOpenProfile)}
                 </div>
               )}
               <MessageAttachments attachments={m.attachments} />
@@ -521,14 +596,11 @@ export default function MessageList({
       {reactionPicker && (
         <EmojiPicker
           anchor={reactionPicker.anchor}
-          onPick={(emoji) => {
-            const message = messages.find((m) => m.id === reactionPicker.messageId)
-            const mine = !!message?.reactions.some(
-              (r) => r.emoji === emoji && r.user_ids.includes(currentUserId),
-            )
-            onToggleReaction(reactionPicker.messageId, emoji, mine)
-            setReactionPicker(null)
-          }}
+          onPick={pickReaction}
+          // Кастомный эмодзи едет в реакцию тем же ключом "custom:<id>", что
+          // и на бэке (см. web/src/emoji.ts, backend chat/emoji.py) — дальше
+          // по коду он ничем не отличается от unicode-символа.
+          onPickCustom={(emoji) => pickReaction(customEmojiKey(emoji.id))}
           onClose={() => setReactionPicker(null)}
         />
       )}

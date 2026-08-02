@@ -20,9 +20,11 @@ PERMISSION_FIELDS = [
     ("manage_roles", "Управлять ролями", "general"),
     ("manage_server", "Управлять сервером", "general"),
     ("manage_members", "Выгонять/одобрять/банить участников", "general"),
+    ("create_expressions", "Создавать средства выражения эмоций", "general"),
 
     ("send_messages", "Отправка сообщений", "text"),
     ("delete_messages", "Удаление сообщений", "text"),
+    ("use_external_emoji", "Использовать внешние эмодзи", "text"),
 
     ("speak", "Говорить", "voice"),
     ("video", "Показывать видео", "voice"),
@@ -49,7 +51,7 @@ PERMISSION_NAMES = [field for field, _label, _group in PERMISSION_FIELDS]
 # создан скриптом мимо API). Без этого запаса участники такого сервера
 # молча теряли бы даже возможность писать.
 BASE_MEMBER_PERMISSIONS = {
-    "view_channels", "send_messages", "speak", "video",
+    "view_channels", "send_messages", "speak", "video", "use_external_emoji",
 }
 
 # Права, которые нельзя снять с роли "Владелец" (см. models.Role.is_owner_role)
