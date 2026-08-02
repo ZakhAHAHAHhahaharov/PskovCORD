@@ -109,10 +109,10 @@ export default function StatusEditModal({
         {emojiAnchor && (
           <EmojiPicker
             anchor={emojiAnchor}
-            onPick={(picked) => {
-              setEmoji(picked)
-              setEmojiAnchor(null)
-            }}
+            // Панель сама не закрывается после выбора (см. EmojiPicker) —
+            // можно передумать и кликнуть другой эмодзи, не открывая пикер
+            // заново; закроется она сама, когда курсор её покинет.
+            onPick={setEmoji}
             onClose={() => setEmojiAnchor(null)}
           />
         )}

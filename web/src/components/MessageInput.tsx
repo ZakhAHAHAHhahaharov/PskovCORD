@@ -3,12 +3,16 @@ import { Pencil, Plus, Smile, X } from 'lucide-react'
 import {
   Attachment,
   ChatMessageBase,
+  CustomEmoji,
   MentionCandidate,
   mediaUrl,
   uploadAttachment,
 } from '../api'
+import {
+  domToPlainText, getCaretOffset, plainOffsetToDomPoint, renderEmojiNode, renderValueIntoDom,
+  setCaretAtOffset,
+} from '../composerDom'
 import { ComposerDraft } from '../drafts'
-import { emojiToken } from '../emoji'
 import Avatar from './Avatar'
 import EmojiPicker, { EmojiPickerAnchor } from './EmojiPicker'
 import { useNickname } from '../nicknames'
@@ -131,11 +135,24 @@ export default function MessageInput({
   )
   const [emojiAnchor, setEmojiAnchor] = useState<EmojiPickerAnchor | null>(null)
   const [dragging, setDragging] = useState(false)
-  const inputRef = useRef<HTMLTextAreaElement>(null)
+  // Композер — contentEditable, а не textarea: только так кастомный эмодзи
+  // можно показать картинкой прямо во время набора, а не токеном "<:имя:id>"
+  // (браузер не умеет вставлять изображения внутрь textarea). Вся механика
+  // перевода DOM ↔ плоский текст, курсора и вставки — см. composerDom.ts.
+  const editorRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   // Черновик, спрятанный на время редактирования чужого сообщения — см.
   // эффект «вход/выход из режима редактирования» ниже.
   const preEditValueRef = useRef<string | null>(null)
+  // Последняя известная позиция курсора внутри editor'а — обновляется на
+  // каждый ввод/клик/отпускание клавиши, пока фокус реально в редакторе.
+  // Нужна, чтобы вставить эмодзи туда же, откуда его выбирали: клик по кнопке
+  // «Эмодзи» или по ячейке в пикере уводит фокус из editor'а, и обычный
+  // window.getSelection() к моменту вставки уже не укажет на нужное место —
+  // ровно та же проблема, что раньше решалась через input.selectionStart на
+  // textarea (он тоже переживает потерю фокуса, Selection в contentEditable
+  // так просто не переживает).
+  const savedRangeRef = useRef<Range | null>(null)
 
   // Черновик сохраняется целиком (текст + уже загруженные вложения) при любом
   // изменении хоть того, хоть другого — эффектом, а не из каждого места, где
@@ -162,7 +179,122 @@ export default function MessageInput({
     })
   }, [value, staged, draftKey, saveDraft, editTarget])
 
-  const updateValue = useCallback((next: string) => setValue(next), [])
+  // Content-Editable инициализируется ОДИН РАЗ при монтировании (черновик
+  // читается тем же снимком `restored`, что и начальное значение `value`
+  // выше) — дальше DOM неконтролируемый: обычный ввод правит его сам
+  // браузер, а перерисовка на каждый рендер сбрасывала бы курсор на середине
+  // печати (классическая проблема «управляемого» contentEditable). См.
+  // applyValue ниже — единственный путь, которым содержимое подменяется
+  // ЦЕЛИКОМ уже ПОСЛЕ монтирования.
+  useEffect(() => {
+    if (editorRef.current) renderValueIntoDom(editorRef.current, restored?.text ?? '')
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  /** DOM → `value`. Единственное место, которое читает содержимое editor'а —
+   * зовётся и после обычного ввода (onInput), и после любой программной
+   * вставки. Заодно подчищает «осиротевший» <br>, который некоторые браузеры
+   * оставляют в опустевшем contentEditable — без этого редактор перестаёт
+   * быть по-настоящему пустым, и CSS-плейсхолдер (:empty) не появляется. */
+  const syncValueFromDom = useCallback((): string => {
+    const editor = editorRef.current
+    if (!editor) return ''
+    const next = domToPlainText(editor)
+    if (next === '' && editor.childNodes.length > 0) editor.innerHTML = ''
+    setValue(next)
+    return next
+  }, [])
+
+  /** Запомнить текущую позицию курсора — см. savedRangeRef выше. */
+  const saveSelection = useCallback(() => {
+    const editor = editorRef.current
+    const selection = window.getSelection()
+    if (!editor || !selection || selection.rangeCount === 0) return
+    const range = selection.getRangeAt(0)
+    if (editor.contains(range.startContainer)) savedRangeRef.current = range.cloneRange()
+  }, [])
+
+  /** Полная замена содержимого — черновик, вход/выход из редактирования
+   * чужого сообщения, подстановка «Упомянуть», очистка после отправки.
+   * focus:true заодно ставит курсор в конец — логичное место продолжить
+   * печатать сразу после программной подстановки. */
+  const applyValue = useCallback((next: string, opts: { focus?: boolean } = {}) => {
+    const editor = editorRef.current
+    if (!editor) {
+      setValue(next)
+      return
+    }
+    renderValueIntoDom(editor, next)
+    setValue(next)
+    if (opts.focus) {
+      editor.focus()
+      setCaretAtOffset(editor, next.length)
+      saveSelection()
+    }
+  }, [saveSelection])
+
+  /** Вставляет узел на последнюю запомненную позицию курсора (или в конец,
+   * если её нет) и переносит курсор сразу за него — единая точка вставки для
+   * эмодзи (см. insertEmoji/insertCustomEmoji) и переноса строки по
+   * Shift+Enter (см. handleKeyDown).
+   *
+   * Range.insertNode делает всю работу сам, включая разрезание текстового
+   * узла пополам, если курсор стоял посреди слова — то же самое раньше textarea
+   * делала сама, а тут этим приходится управлять явно. Никакого
+   * requestAnimationFrame не нужно (в отличие от прежней версии на textarea):
+   * вставка меняет DOM СРАЗУ, а не через цикл setState → перерисовка. */
+  const insertNodeAtCaret = useCallback((node: Node) => {
+    const editor = editorRef.current
+    if (!editor) return
+    editor.focus()
+    const selection = window.getSelection()
+    let range: Range
+    if (savedRangeRef.current && editor.contains(savedRangeRef.current.startContainer)) {
+      range = savedRangeRef.current.cloneRange()
+    } else {
+      range = document.createRange()
+      range.selectNodeContents(editor)
+      range.collapse(false) // нет сохранённой позиции — вставляем в конец
+    }
+    range.deleteContents() // если на месте вставки было выделение — заменяем его
+    range.insertNode(node)
+    range.setStartAfter(node)
+    range.collapse(true)
+    selection?.removeAllRanges()
+    selection?.addRange(range)
+    savedRangeRef.current = range.cloneRange()
+    syncValueFromDom()
+  }, [syncValueFromDom])
+
+  /** Перенос строки по Shift+Enter — единственное место во всём компоненте,
+   * где явно используется execCommand, и вот почему. Ручная сборка через
+   * Range (вставить <br>, поставить курсор после — тот же приём, что у
+   * insertNodeAtCaret) здесь ЛОМАЕТСЯ: если такой <br> оказывается ПОСЛЕДНИМ
+   * дочерним узлом editor'а (обычное дело — Shift+Enter чаще всего жмут в
+   * конце текста), Chrome схлопывает курсор обратно на строку ДО переноса —
+   * устоявшаяся особенность caret вокруг замыкающего <br>, причём именно у
+   * НЕГО: та же самая ручная сборка для эмодзи-плитки (обычный inline-узел,
+   * не <br>) в конце текста работает нормально, проверено отдельно. Плоду
+   * этой особенности следующий введённый символ улетал бы ПЕРЕД переносом
+   * строки, а не после (воспроизведено и починено при разработке — см.
+   * историю коммитов). execCommand('insertLineBreak') — команда, которой
+   * САМ браузер пользуется для необработанного Enter, и потому этой
+   * проблеме не подвержена: это его штатный путь, а не наша самодеятельная
+   * эмуляция через Range. */
+  const insertLineBreakAtCaret = useCallback(() => {
+    const editor = editorRef.current
+    if (!editor) return
+    editor.focus()
+    const selection = window.getSelection()
+    if (savedRangeRef.current && editor.contains(savedRangeRef.current.startContainer)) {
+      selection?.removeAllRanges()
+      selection?.addRange(savedRangeRef.current)
+    }
+    document.execCommand('insertLineBreak')
+    savedRangeRef.current =
+      selection && selection.rangeCount > 0 ? selection.getRangeAt(0).cloneRange() : null
+    syncValueFromDom()
+  }, [syncValueFromDom])
 
   // --- автокомплит @упоминаний -------------------------------------------
   // mentionStart — индекс символа "@" в value, от которого набирается запрос;
@@ -202,33 +334,38 @@ export default function MessageInput({
     return { start: at, query }
   }, [])
 
+  /** Заменяет [mentionStart, caret) на "@ник ". В отличие от textarea, где это
+   * была просто склейка трёх строк, здесь нужно сначала перевести оба
+   * плоскотекстовых офсета в реальные точки DOM (plainOffsetToDomPoint) —
+   * caret берём СВЕЖИМ через getCaretOffset, а не из состояния: строка
+   * mentionQuery могла не успеть попасть в value синхронно. */
   const applyMention = (candidate: MentionCandidate) => {
     if (mentionStart == null) return
-    const input = inputRef.current
-    const caret = input?.selectionStart ?? value.length
-    const before = value.slice(0, mentionStart)
-    const after = value.slice(caret)
-    const inserted = `@${candidate.username} `
-    updateValue(before + inserted + after)
+    const editor = editorRef.current
+    if (!editor) return
+    const caret = getCaretOffset(editor)
+    const startPoint = plainOffsetToDomPoint(editor, mentionStart)
+    const endPoint = plainOffsetToDomPoint(editor, caret)
+    const range = document.createRange()
+    range.setStart(startPoint.node, startPoint.offset)
+    range.setEnd(endPoint.node, endPoint.offset)
+    range.deleteContents()
+    const textNode = document.createTextNode(`@${candidate.username} `)
+    range.insertNode(textNode)
+    range.setStartAfter(textNode)
+    range.collapse(true)
+    const selection = window.getSelection()
+    selection?.removeAllRanges()
+    selection?.addRange(range)
+    savedRangeRef.current = range.cloneRange()
     setMentionStart(null)
-    const nextCaret = before.length + inserted.length
-    requestAnimationFrame(() => {
-      input?.focus()
-      input?.setSelectionRange(nextCaret, nextCaret)
-    })
+    editor.focus()
+    syncValueFromDom()
   }
 
-  // Высота textarea растёт вместе с текстом (до предела в CSS max-height,
-  // дальше — собственный скролл). height:auto сначала — иначе браузер меряет
-  // scrollHeight от уже растянутой высоты и никогда не даёт полю сжаться
-  // обратно после удаления строк.
-  const autoGrow = useCallback(() => {
-    const el = inputRef.current
-    if (!el) return
-    el.style.height = 'auto'
-    el.style.height = `${el.scrollHeight}px`
-  }, [])
-  useEffect(autoGrow, [value, autoGrow])
+  // Автоматического роста высоты теперь не нужно: contentEditable — блочный
+  // элемент и растёт вместе с содержимым сам, до предела в CSS max-height
+  // (дальше — собственный скролл) — см. .composer-editor.
   // Глубина вложенности dragenter/dragleave: события приходят и от дочерних
   // элементов, и по одному dragleave подсветка гасла бы, стоило курсору
   // проехать над кнопкой внутри зоны.
@@ -243,9 +380,9 @@ export default function MessageInput({
   useEffect(() => {
     if (editTarget) {
       preEditValueRef.current = value
-      setValue(editTarget.content)
+      applyValue(editTarget.content)
     } else if (preEditValueRef.current !== null) {
-      setValue(preEditValueRef.current)
+      applyValue(preEditValueRef.current)
       preEditValueRef.current = null
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -253,8 +390,7 @@ export default function MessageInput({
 
   useEffect(() => {
     if (!prefill) return
-    updateValue(prefill.text)
-    inputRef.current?.focus()
+    applyValue(prefill.text, { focus: true })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [prefill?.token])
 
@@ -374,11 +510,11 @@ export default function MessageInput({
     // черновик, а пустой черновик стирает запись целиком (см. drafts.ts) —
     // иначе отправленный текст вернулся бы призраком при следующем заходе
     // в этот канал.
-    updateValue('')
+    applyValue('')
     clearStaged()
   }
 
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
     if (mentionOpen) {
       const activeIndex = Math.min(mentionActiveIndex, mentionMatches.length - 1)
       if (e.key === 'ArrowDown') {
@@ -408,46 +544,54 @@ export default function MessageInput({
       onCancelEdit()
       return
     }
-    // Enter отправляет, Shift+Enter — перенос строки (стандартный textarea
-    // ничего не отправляет по Enter сам по себе, так что перехватываем явно).
+    // Enter отправляет, Shift+Enter — перенос строки. У textarea перенос по
+    // Shift+Enter был бесплатным (браузер сам так себя ведёт); у
+    // contentEditable Enter в ЛЮБОМ виде норовит завести новый <div>/<p>
+    // (по-разному в разных браузерах), поэтому оба случая перехватываются
+    // явно, и перенос строки — ровно тот же <br>, что вставляет пикер эмодзи
+    // (см. insertNodeAtCaret).
     // isComposing — чтобы Enter, подтверждающий раскладку ввода (IME, для
     // китайского/японского/корейского текста), не улетал отправкой сообщения.
-    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+    if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
       e.preventDefault()
-      submit()
+      if (e.shiftKey) insertLineBreakAtCaret()
+      else submit()
     }
   }
 
-  /** Вставка эмодзи в позицию курсора, а не в конец строки: курсор чаще всего
-   * стоит там, где человек и хочет получить символ. */
+  /** Стандартный эмодзи — обычный unicode-символ, вставляется как текст. */
   const insertEmoji = (emoji: string) => {
-    const input = inputRef.current
-    if (!input) {
-      updateValue(value + emoji)
-      return
-    }
-    const start = input.selectionStart ?? value.length
-    const end = input.selectionEnd ?? start
-    const next = value.slice(0, start) + emoji + value.slice(end)
-    updateValue(next)
-    setEmojiAnchor(null)
-    // Курсор — сразу после вставленного, чтобы можно было продолжать печатать.
-    // requestAnimationFrame: до перерисовки в поле ещё старое значение, и
-    // setSelectionRange отработал бы по нему.
-    requestAnimationFrame(() => {
-      input.focus()
-      const caret = start + emoji.length
-      input.setSelectionRange(caret, caret)
-    })
+    insertNodeAtCaret(document.createTextNode(emoji))
+  }
+
+  /** Кастомный эмодзи сервера — атомарная картинка-плитка (см.
+   * composerDom.renderEmojiNode), а не токен "<:имя:id>" текстом: это и есть
+   * весь смысл contentEditable-композера — сразу видно, что вставилось, а не
+   * загадочный код. Токен появляется только когда содержимое editor'а
+   * переводится в plain text для отправки/черновика (см. syncValueFromDom). */
+  const insertCustomEmoji = (emoji: CustomEmoji) => {
+    insertNodeAtCaret(renderEmojiNode(emoji))
   }
 
   // Вставка картинки из буфера (скриншот через Ctrl+V) — самый частый способ
   // поделиться картинкой, и без этого он бы просто не работал.
+  //
+  // Текстовую вставку тоже приходится перехватывать явно (в отличие от
+  // textarea, где ничего, кроме голого текста, вставиться и не могло):
+  // contentEditable по умолчанию тащит из буфера форматирование чужой
+  // страницы (жирный, цвет, ссылки) — вставляем только text/plain, как
+  // обычное текстовое поле.
   const handlePaste = (e: React.ClipboardEvent) => {
     const files = Array.from(e.clipboardData.files)
-    if (files.length === 0) return
+    if (files.length > 0) {
+      e.preventDefault()
+      addFiles(files)
+      return
+    }
+    const text = e.clipboardData.getData('text/plain')
+    if (!text) return
     e.preventDefault()
-    addFiles(files)
+    insertNodeAtCaret(document.createTextNode(text))
   }
 
   const handleDrop = (e: React.DragEvent) => {
@@ -591,23 +735,33 @@ export default function MessageInput({
             e.target.value = ''
           }}
         />
-        <textarea
-          ref={inputRef}
-          rows={1}
-          value={value}
-          onChange={(e) => {
-            const next = e.target.value
-            updateValue(next)
-            const found = detectMention(next, e.target.selectionStart ?? next.length)
+        <div
+          ref={editorRef}
+          className="composer-editor"
+          // Контролируем содержимое сами (см. renderValueIntoDom/applyValue) —
+          // предупреждение React про contentEditable+children здесь не о чем:
+          // JSX ничего не передаёт в children, весь текст живёт императивно.
+          contentEditable
+          suppressContentEditableWarning
+          role="textbox"
+          aria-multiline="true"
+          data-placeholder={
+            editTarget ? 'Изменить сообщение…' : `Написать в ${hash ? '#' : ''}${channelName}`
+          }
+          onInput={() => {
+            const text = syncValueFromDom()
+            const caret = getCaretOffset(editorRef.current!)
+            const found = detectMention(text, caret)
             setMentionStart(found?.start ?? null)
             setMentionQuery(found?.query ?? '')
             setMentionActiveIndex(0)
+            saveSelection()
           }}
           onKeyDown={handleKeyDown}
+          onKeyUp={saveSelection}
+          onMouseUp={saveSelection}
+          onBlur={saveSelection}
           onPaste={handlePaste}
-          placeholder={
-            editTarget ? 'Изменить сообщение…' : `Написать в ${hash ? '#' : ''}${channelName}`
-          }
         />
         <button
           type="button"
@@ -636,11 +790,11 @@ export default function MessageInput({
         <EmojiPicker
           anchor={emojiAnchor}
           onPick={insertEmoji}
-          // Кастомный эмодзи живёт в тексте токеном <:имя:id> — он же уедет
-          // на сервер и там будет проверен правами (см. backend
-          // chat/emoji.py sanitize_content), а в ленте превратится обратно в
-          // картинку (см. MessageList.renderContent).
-          onPickCustom={(emoji) => insertEmoji(emojiToken(emoji))}
+          onPickCustom={insertCustomEmoji}
+          // Панель сама решает, когда закрыться (мышь ушла с неё, Esc, клик
+          // мимо — см. EmojiPicker) — insertEmoji/insertCustomEmoji её больше
+          // не трогают, иначе поставить подряд несколько эмодзи значило бы
+          // открывать панель заново на каждый.
           onClose={() => setEmojiAnchor(null)}
         />
       )}

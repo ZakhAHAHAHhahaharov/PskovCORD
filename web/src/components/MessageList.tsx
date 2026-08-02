@@ -258,7 +258,11 @@ export default function MessageList({
     anchor: EmojiPickerAnchor
   } | null>(null)
   /** Выбрали реакцию в пикере — общее для стандартных и кастомных: к этому
-   * моменту и те, и другие уже сведены к одному ключу (см. emoji.ts). */
+   * моменту и те, и другие уже сведены к одному ключу (см. emoji.ts).
+   *
+   * Панель НЕ закрывается здесь (см. EmojiPicker) — можно поставить подряд
+   * несколько реакций на одно сообщение, не открывая пикер заново на каждую;
+   * закроется она сама, когда курсор мыши её покинет. */
   const pickReaction = (emoji: string) => {
     if (!reactionPicker) return
     const message = messages.find((m) => m.id === reactionPicker.messageId)
@@ -266,7 +270,6 @@ export default function MessageList({
       (r) => r.emoji === emoji && r.user_ids.includes(currentUserId),
     )
     onToggleReaction(reactionPicker.messageId, emoji, mine)
-    setReactionPicker(null)
   }
   // Панель действий (реакции/ответ/редактировать/удалить) на десктопе
   // видна по :hover — на тач-устройстве такого нет вообще, а показывать её

@@ -3709,28 +3709,52 @@ textarea.inline-editable-input {
   padding: 0 8px;
 }
 
-.message-input textarea {
+/* Композер — contentEditable div (см. MessageInput.tsx), а не textarea:
+   только так кастомный эмодзи можно показать картинкой прямо во время
+   набора. Растёт вместе с текстом сам, никакого JS для этого не нужно
+   (в отличие от textarea) — до предела в max-height, дальше свой скролл. */
+.composer-editor {
   flex: 1;
   min-width: 0;
-  background: transparent;
-  border: none;
   padding: 12px 8px;
   color: var(--text-normal);
   font-size: calc(15px * var(--font-scale, 1));
   font-family: inherit;
   line-height: 1.375;
   outline: none;
-  /* Растёт вместе с текстом (см. MessageInput.autoGrow) — ручной resize
-     конфликтовал бы с автоматическим и торчал бы уголком поверх кнопок. */
-  resize: none;
-  /* После ~9 строк — свой скролл внутри поля, а не бесконечный рост
-     композера, отжимающий ленту сообщений за пределы экрана. */
+  /* pre-wrap: перенос строки внутри самого текстового узла (после вставки
+     многострочного текста через paste, см. MessageInput.handlePaste) рисуется
+     без явного <br> — то же поведение, что было у textarea по умолчанию. */
+  white-space: pre-wrap;
+  word-break: break-word;
   max-height: 240px;
   overflow-y: auto;
 }
 
-.message-input textarea::placeholder {
+/* :empty матчит, только когда у div ДЕЙСТВИТЕЛЬНО ноль дочерних узлов — см.
+   MessageInput.syncValueFromDom, который явно подчищает «осиротевший» <br>
+   в опустевшем поле, иначе плейсхолдер молча не появлялся бы. */
+.composer-editor:empty::before {
+  content: attr(data-placeholder);
   color: var(--text-faint);
+  pointer-events: none;
+}
+
+/* Кастомный эмодзи прямо в тексте композера — та же атомарная плитка, что
+   вставляется в готовое сообщение (.custom-emoji-inline), но без ленивой
+   анимации по наведению: показывается статичным кадром всегда, набор текста
+   не место для проигрывания гифок. */
+.composer-emoji {
+  display: inline-block;
+  vertical-align: -0.3em;
+  line-height: 0;
+}
+
+.composer-emoji img {
+  width: 20px;
+  height: 20px;
+  object-fit: contain;
+  pointer-events: none; /* клик должен попадать в редактор, не в саму картинку */
 }
 
 .composer-btn {
@@ -7693,7 +7717,7 @@ button.settings-row-clickable:hover .settings-row-label {
   /* iOS Safari (и часть других мобильных браузеров) сама зумит страницу при
      фокусе на поле с font-size < 16px — "минимально необходимый" размер
      тут в буквальном смысле 16px, меньше нельзя без побочного авто-зума.
-     У десятка полей по всему файлу (.message-input textarea,
+     У десятка полей по всему файлу (.composer-editor,
      .field-input, .status-edit-text-input и т.д.) свой font-size меньше
      16px для десктопа — !important здесь оправдан: это не стилевое
      предпочтение, а обход конкретного браузерного поведения, патчить
@@ -7704,16 +7728,16 @@ button.settings-row-clickable:hover .settings-row-label {
      обрезаться до 16 — важен только пол, не потолок. */
   input,
   textarea,
-  select {
+  select,
+  .composer-editor {
     font-size: max(16px, calc(16px * var(--font-scale, 1))) !important;
   }
 
-  /* Композер растёт под текст через JS (MessageInput.autoGrow — меряет
-     scrollHeight и выставляет inline height), но на случай, если высота
-     где-то не успела пересчитаться под увеличенный 16px-шрифт выше — CSS-
-     пол не даёт полю стать короче одной строки, плейсхолдер тогда не
+  /* Композер растёт под текст сам (см. .composer-editor), но на случай, если
+     высота где-то не успела пересчитаться под увеличенный 16px-шрифт выше —
+     CSS-пол не даёт полю стать короче одной строки, плейсхолдер тогда не
      обрезается сверху/снизу. */
-  .message-input textarea {
+  .composer-editor {
     min-height: 46px;
   }
 
