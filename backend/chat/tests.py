@@ -41,6 +41,7 @@ from .models import (
     ServerEmoji, ServerInvite, ServerJoinRequest, dm_room,
 )
 from .permissions import can_dm
+from .serializers import RoleSerializer
 
 User = get_user_model()
 
@@ -1706,8 +1707,12 @@ class RoleHierarchyTests(APITestCase):
 
 
 class VoicePermissionTests(APITestCase):
-    """Права speak/view_channels теперь действительно проверяются: до этого
-    роль могла их снять, а участник всё равно получал голосовой токен."""
+    """Права connect/speak/view_channels действительно проверяются: до этого
+    роль могла их снять, а участник всё равно получал голосовой токен.
+
+    Вход в канал закрывает connect, а speak решает только, поедет ли микрофон
+    (claim в токене SFU) — «слушатель» (connect да, speak нет) законно сидит
+    в канале молча."""
 
     def setUp(self):
         self.owner = User.objects.create_user(username="vp_owner", password="pw12345")
@@ -1722,15 +1727,26 @@ class VoicePermissionTests(APITestCase):
             server=self.server, name="general", kind=Channel.TEXT)
         self.client.force_authenticate(self.member)
 
-    def test_voice_credentials_denied_without_speak(self):
-        self.default_role.speak = False
-        self.default_role.save(update_fields=["speak"])
+    def test_voice_credentials_denied_without_connect(self):
+        self.default_role.connect = False
+        self.default_role.save(update_fields=["connect"])
         resp = self.client.post(f"/api/channels/{self.voice.id}/voice-credentials")
         self.assertEqual(resp.status_code, 403)
 
-    def test_voice_credentials_allowed_with_speak(self):
+    def test_voice_credentials_allowed_with_connect(self):
         resp = self.client.post(f"/api/channels/{self.voice.id}/voice-credentials")
         self.assertEqual(resp.status_code, 200)
+
+    def test_listener_gets_token_without_speak(self):
+        """connect без speak — это слушатель: токен выдаётся, но микрофон в
+        нём запрещён. Раньше такого участника не пускали в канал вовсе."""
+        self.default_role.speak = False
+        self.default_role.save(update_fields=["speak"])
+        resp = self.client.post(f"/api/channels/{self.voice.id}/voice-credentials")
+        self.assertEqual(resp.status_code, 200)
+        claims = jwt.decode(
+            resp.data["sfu_token"], settings.SFU_SECRET, algorithms=["HS256"])
+        self.assertFalse(claims["speak"])
 
     def test_token_carries_role_permissions(self):
         self.default_role.video = False
@@ -2740,6 +2756,26 @@ class CustomEmojiUploadTests(APITestCase):
         self.assertEqual(self.client.delete(url).status_code, 204)
         self.assertFalse(ServerEmoji.objects.filter(id=created["id"]).exists())
 
+    def test_creating_does_not_imply_managing(self):
+        """create_expressions и manage_expressions разделены не случайно: «пусть
+        добавляет свои» не должно означать «пусть удаляет чужие»."""
+        created = self._upload().data
+        role = Role.objects.create(
+            server=self.server, name="Художник", position=1,
+            create_expressions=True, manage_expressions=False)
+        Membership.objects.get(user=self.member, server=self.server).roles.add(role)
+        self.client.force_authenticate(self.member)
+
+        url = f"/api/servers/{self.server.id}/emoji/{created['id']}"
+        self.assertEqual(self.client.patch(url, {"name": "hop"}).status_code, 403)
+        self.assertEqual(self.client.delete(url).status_code, 403)
+        # А своё добавить — по-прежнему может.
+        self.assertEqual(self._upload(name="svoy").status_code, 201)
+
+        role.manage_expressions = True
+        role.save()
+        self.assertEqual(self.client.delete(url).status_code, 204)
+
     def test_list_visible_to_members_only(self):
         self._upload()
         outsider = User.objects.create_user(username="out", password="pw12345")
@@ -2809,13 +2845,13 @@ class CustomEmojiPermissionTests(TestCase):
     def test_external_emoji_needs_permission(self):
         # Роль по умолчанию с правом — как при создании сервера.
         default = roles.create_default_role(self.home)
-        self.assertTrue(default.use_external_emoji)
+        self.assertTrue(default.use_external_emojis)
         self.assertTrue(
             emoji_keys.can_use(self._key(self.other_emoji), self.user, self.home))
 
         # Право сняли — эмодзи ДРУГОГО сервера в этом канале больше нельзя,
         # а свой — по-прежнему можно.
-        default.use_external_emoji = False
+        default.use_external_emojis = False
         default.save()
         member = User.objects.create_user(username="m", password="pw12345")
         Membership.objects.create(user=member, server=self.home)
@@ -3876,3 +3912,444 @@ class CrossServerDmPrivacyTests(APITestCase):
         # 201 — новый диалог создан (первый между этой парой); can_dm() уже
         # пройден внутри _create_dm, до создания Conversation.
         self.assertEqual(resp.status_code, 201)
+
+
+class PermissionCatalogTests(APITestCase):
+    """GET /api/permissions — каталог прав для редактора ролей. Он и есть
+    единственный источник правды о списке (фронт больше не хранит копию),
+    поэтому важно, что он не расходится с моделью."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(username="pc_user", password="pw12345")
+        self.client.force_authenticate(self.user)
+
+    def test_every_permission_has_a_model_field(self):
+        resp = self.client.get("/api/permissions")
+        self.assertEqual(resp.status_code, 200)
+        for perm in resp.data["permissions"]:
+            self.assertTrue(
+                hasattr(Role, perm["name"]),
+                "право {} есть в каталоге, но не в модели Role".format(perm["name"]),
+            )
+
+    def test_every_permission_lands_in_a_declared_group(self):
+        resp = self.client.get("/api/permissions")
+        declared = {g["id"] for g in resp.data["groups"]}
+        for perm in resp.data["permissions"]:
+            self.assertIn(perm["group"], declared)
+
+    def test_upcoming_flag_marks_features_that_do_not_exist_yet(self):
+        resp = self.client.get("/api/permissions")
+        upcoming = {p["name"] for p in resp.data["permissions"] if p["upcoming"]}
+        self.assertEqual(upcoming, roles.UPCOMING_PERMISSIONS)
+
+    def test_role_serializer_exposes_the_whole_catalog(self):
+        """Право из каталога, не попавшее в RoleSerializer, было бы видно в
+        редакторе, но не сохранялось бы — молчаливо неработающий чекбокс."""
+        resp = self.client.get("/api/permissions")
+        names = {p["name"] for p in resp.data["permissions"]}
+        self.assertTrue(names.issubset(set(RoleSerializer().fields)))
+
+    def test_model_defaults_match_base_member_permissions(self):
+        """Дефолт поля Role — это и есть «право рядового участника»: с ним
+        создаётся роль по умолчанию, и он же подставляется существующим ролям
+        при миграции. Если он разойдётся с BASE_MEMBER_PERMISSIONS (запасной
+        набор для серверов без роли по умолчанию), участники одного и того же
+        сервера получат разные права в зависимости от того, есть ли на нём
+        роль по умолчанию."""
+        for name in roles.PERMISSION_NAMES:
+            self.assertEqual(
+                Role._meta.get_field(name).default,
+                name in roles.BASE_MEMBER_PERMISSIONS,
+                "дефолт поля {} разошёлся с BASE_MEMBER_PERMISSIONS".format(name),
+            )
+
+
+class SlowmodeTests(APITestCase):
+    """Медленный режим канала: настройка ручкой и сам отсчёт при отправке."""
+
+    def setUp(self):
+        self.owner = User.objects.create_user(username="sm_owner", password="pw12345")
+        self.member = User.objects.create_user(username="sm_member", password="pw12345")
+        self.server = Server.objects.create(name="s", owner=self.owner)
+        Membership.objects.create(user=self.owner, server=self.server)
+        Membership.objects.create(user=self.member, server=self.server)
+        self.default_role = roles.create_default_role(self.server)
+        self.text = Channel.objects.create(
+            server=self.server, name="general", kind=Channel.TEXT)
+        self.voice = Channel.objects.create(
+            server=self.server, name="General", kind=Channel.VOICE)
+
+    def test_owner_sets_slowmode(self):
+        self.client.force_authenticate(self.owner)
+        resp = self.client.patch(
+            "/api/channels/{}".format(self.text.id),
+            {"slowmode_seconds": 30}, format="json")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data["slowmode_seconds"], 30)
+
+    def test_regular_member_cannot_set_slowmode(self):
+        self.client.force_authenticate(self.member)
+        resp = self.client.patch(
+            "/api/channels/{}".format(self.text.id),
+            {"slowmode_seconds": 30}, format="json")
+        self.assertEqual(resp.status_code, 403)
+
+    def test_slowmode_rejected_on_voice_channel(self):
+        self.client.force_authenticate(self.owner)
+        resp = self.client.patch(
+            "/api/channels/{}".format(self.voice.id),
+            {"slowmode_seconds": 30}, format="json")
+        self.assertEqual(resp.status_code, 400)
+
+    def test_slowmode_out_of_range_rejected(self):
+        self.client.force_authenticate(self.owner)
+        for bad in (-1, 6 * 60 * 60 + 1):
+            resp = self.client.patch(
+                "/api/channels/{}".format(self.text.id),
+                {"slowmode_seconds": bad}, format="json")
+            self.assertEqual(resp.status_code, 400, bad)
+
+    def _wait(self, user):
+        """Сколько секунд ждать этому пользователю — дёргаем ровно ту функцию,
+        которой пользуется консьюмер, без поднятия WebSocket."""
+        consumer = GatewayConsumer()
+        consumer.user = user
+        self.text.refresh_from_db()
+        return consumer._slowmode_wait(
+            self.text, roles.permissions_for(user, self.server))
+
+    def test_no_wait_when_slowmode_off(self):
+        Message.objects.create(channel=self.text, author=self.member, content="hi")
+        self.assertEqual(self._wait(self.member), 0)
+
+    def test_wait_after_own_recent_message(self):
+        self.text.slowmode_seconds = 30
+        self.text.save(update_fields=["slowmode_seconds"])
+        Message.objects.create(channel=self.text, author=self.member, content="hi")
+        self.assertGreater(self._wait(self.member), 0)
+
+    def test_no_wait_when_last_message_is_old_enough(self):
+        self.text.slowmode_seconds = 30
+        self.text.save(update_fields=["slowmode_seconds"])
+        msg = Message.objects.create(
+            channel=self.text, author=self.member, content="hi")
+        Message.objects.filter(id=msg.id).update(
+            created_at=timezone.now() - timedelta(seconds=31))
+        self.assertEqual(self._wait(self.member), 0)
+
+    def test_someone_elses_message_does_not_hold_me(self):
+        """Медленный режим ограничивает КАЖДОГО по отдельности, а не темп
+        канала целиком — чужое сообщение мой отсчёт не запускает."""
+        self.text.slowmode_seconds = 30
+        self.text.save(update_fields=["slowmode_seconds"])
+        Message.objects.create(channel=self.text, author=self.owner, content="hi")
+        self.assertEqual(self._wait(self.member), 0)
+
+    def test_bypass_slowmode_skips_the_wait(self):
+        self.text.slowmode_seconds = 30
+        self.text.save(update_fields=["slowmode_seconds"])
+        Message.objects.create(channel=self.text, author=self.member, content="hi")
+        self.default_role.bypass_slowmode = True
+        self.default_role.save(update_fields=["bypass_slowmode"])
+        self.assertEqual(self._wait(self.member), 0)
+
+
+class ServerNicknameTests(APITestCase):
+    """Никнейм участника НА СЕРВЕРЕ (Membership.nickname): своё имя закрывает
+    change_nickname, чужое — manage_nicknames + иерархия ролей."""
+
+    def setUp(self):
+        self.owner = User.objects.create_user(username="sn_owner", password="pw12345")
+        self.member = User.objects.create_user(username="sn_member", password="pw12345")
+        self.other = User.objects.create_user(username="sn_other", password="pw12345")
+        self.server = Server.objects.create(name="s", owner=self.owner)
+        Membership.objects.create(user=self.owner, server=self.server)
+        Membership.objects.create(user=self.member, server=self.server)
+        Membership.objects.create(user=self.other, server=self.server)
+        self.default_role = roles.create_default_role(self.server)
+
+    def _url(self, user):
+        return "/api/servers/{}/members/{}/nickname".format(self.server.id, user.id)
+
+    def test_member_can_rename_self(self):
+        self.client.force_authenticate(self.member)
+        resp = self.client.patch(
+            self._url(self.member), {"nickname": "Вася"}, format="json")
+        self.assertEqual(resp.status_code, 200)
+        membership = Membership.objects.get(server=self.server, user=self.member)
+        self.assertEqual(membership.nickname, "Вася")
+
+    def test_member_cannot_rename_self_without_change_nickname(self):
+        self.default_role.change_nickname = False
+        self.default_role.save(update_fields=["change_nickname"])
+        self.client.force_authenticate(self.member)
+        resp = self.client.patch(
+            self._url(self.member), {"nickname": "Вася"}, format="json")
+        self.assertEqual(resp.status_code, 403)
+
+    def test_member_cannot_rename_others_by_default(self):
+        self.client.force_authenticate(self.member)
+        resp = self.client.patch(
+            self._url(self.other), {"nickname": "Петя"}, format="json")
+        self.assertEqual(resp.status_code, 403)
+
+    def test_manage_nicknames_allows_renaming_others(self):
+        self.client.force_authenticate(self.owner)
+        resp = self.client.patch(
+            self._url(self.other), {"nickname": "Петя"}, format="json")
+        self.assertEqual(resp.status_code, 200)
+        membership = Membership.objects.get(server=self.server, user=self.other)
+        self.assertEqual(membership.nickname, "Петя")
+
+    def test_cannot_rename_someone_not_below_you(self):
+        """Иерархия ролей действует и здесь — иначе manage_nicknames давало бы
+        переименовать администратора."""
+        mod_role = Role.objects.create(
+            server=self.server, name="mod", position=1, manage_nicknames=True)
+        peer_role = Role.objects.create(
+            server=self.server, name="peer", position=1)
+        Membership.objects.get(server=self.server, user=self.member).roles.add(mod_role)
+        Membership.objects.get(server=self.server, user=self.other).roles.add(peer_role)
+        self.client.force_authenticate(self.member)
+        resp = self.client.patch(
+            self._url(self.other), {"nickname": "Петя"}, format="json")
+        self.assertEqual(resp.status_code, 403)
+
+    def test_empty_nickname_clears_it(self):
+        Membership.objects.filter(server=self.server, user=self.member).update(
+            nickname="Вася")
+        self.client.force_authenticate(self.member)
+        resp = self.client.patch(
+            self._url(self.member), {"nickname": "  "}, format="json")
+        self.assertEqual(resp.status_code, 200)
+        membership = Membership.objects.get(server=self.server, user=self.member)
+        self.assertEqual(membership.nickname, "")
+
+    def test_roster_exposes_server_nickname(self):
+        Membership.objects.filter(server=self.server, user=self.other).update(
+            nickname="Петя")
+        self.client.force_authenticate(self.member)
+        resp = self.client.get("/api/servers/{}/members".format(self.server.id))
+        self.assertEqual(resp.status_code, 200)
+        row = next(r for r in resp.data if r["id"] == self.other.id)
+        self.assertEqual(row["server_nickname"], "Петя")
+
+
+class ReadMessageHistoryTests(APITestCase):
+    """read_message_history: без права видно только то, что пришло с момента
+    текущего входа в сеть (chat.presence.online_since)."""
+
+    def setUp(self):
+        self.owner = User.objects.create_user(username="rh_owner", password="pw12345")
+        self.member = User.objects.create_user(username="rh_member", password="pw12345")
+        self.server = Server.objects.create(name="s", owner=self.owner)
+        Membership.objects.create(user=self.owner, server=self.server)
+        Membership.objects.create(user=self.member, server=self.server)
+        self.default_role = roles.create_default_role(self.server)
+        self.channel = Channel.objects.create(
+            server=self.server, name="general", kind=Channel.TEXT)
+        self.old = Message.objects.create(
+            channel=self.channel, author=self.owner, content="старое")
+        Message.objects.filter(id=self.old.id).update(
+            created_at=timezone.now() - timedelta(hours=2))
+        self.client.force_authenticate(self.member)
+
+    def tearDown(self):
+        presence.force_offline(self.member.id)
+
+    def test_history_visible_with_permission(self):
+        resp = self.client.get(
+            "/api/channels/{}/messages".format(self.channel.id))
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual([m["id"] for m in resp.data], [self.old.id])
+
+    def test_old_messages_hidden_without_permission(self):
+        self.default_role.read_message_history = False
+        self.default_role.save(update_fields=["read_message_history"])
+        presence.user_connected(self.member.id)
+        resp = self.client.get(
+            "/api/channels/{}/messages".format(self.channel.id))
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(list(resp.data), [])
+
+    def test_messages_sent_during_this_session_stay_visible(self):
+        self.default_role.read_message_history = False
+        self.default_role.save(update_fields=["read_message_history"])
+        presence.user_connected(self.member.id)
+        fresh = Message.objects.create(
+            channel=self.channel, author=self.owner, content="свежее")
+        resp = self.client.get(
+            "/api/channels/{}/messages".format(self.channel.id))
+        self.assertEqual([m["id"] for m in resp.data], [fresh.id])
+
+    def test_pins_are_gated_too(self):
+        """Закреп ходит отдельной ручкой — без гейта он показывал бы старое
+        сообщение в обход основной ленты."""
+        self.old.pinned_at = timezone.now()
+        self.old.save(update_fields=["pinned_at"])
+        self.default_role.read_message_history = False
+        self.default_role.save(update_fields=["read_message_history"])
+        presence.user_connected(self.member.id)
+        resp = self.client.get("/api/channels/{}/pins".format(self.channel.id))
+        self.assertEqual(list(resp.data), [])
+
+
+class InviteAndBanPermissionTests(APITestCase):
+    """create_invites закрывает создание приглашений, ban_members — бан без
+    полного manage_members."""
+
+    def setUp(self):
+        self.owner = User.objects.create_user(username="ib_owner", password="pw12345")
+        self.member = User.objects.create_user(username="ib_member", password="pw12345")
+        self.target = User.objects.create_user(username="ib_target", password="pw12345")
+        self.server = Server.objects.create(name="s", owner=self.owner)
+        Membership.objects.create(user=self.owner, server=self.server)
+        Membership.objects.create(user=self.member, server=self.server)
+        Membership.objects.create(user=self.target, server=self.server)
+        self.default_role = roles.create_default_role(self.server)
+
+    def test_invite_link_allowed_by_default(self):
+        self.client.force_authenticate(self.member)
+        resp = self.client.get(
+            "/api/servers/{}/invite-link".format(self.server.id))
+        self.assertEqual(resp.status_code, 200)
+
+    def test_invite_link_denied_without_create_invites(self):
+        self.default_role.create_invites = False
+        self.default_role.save(update_fields=["create_invites"])
+        self.client.force_authenticate(self.member)
+        resp = self.client.get(
+            "/api/servers/{}/invite-link".format(self.server.id))
+        self.assertEqual(resp.status_code, 403)
+
+    def test_ban_members_permission_is_enough_to_ban(self):
+        role = Role.objects.create(
+            server=self.server, name="mod", position=1, ban_members=True)
+        Membership.objects.get(server=self.server, user=self.member).roles.add(role)
+        self.client.force_authenticate(self.member)
+        resp = self.client.post(
+            "/api/servers/{}/bans".format(self.server.id),
+            {"user_id": self.target.id}, format="json")
+        self.assertEqual(resp.status_code, 201)
+        self.assertTrue(
+            ServerBan.objects.filter(server=self.server, user=self.target).exists())
+
+    def test_ban_denied_without_either_permission(self):
+        self.client.force_authenticate(self.member)
+        resp = self.client.post(
+            "/api/servers/{}/bans".format(self.server.id),
+            {"user_id": self.target.id}, format="json")
+        self.assertEqual(resp.status_code, 403)
+
+
+class PrivateChannelTests(APITestCase):
+    """Приватный канал (Channel.is_private): обычное view_channels его не
+    открывает — нужен manage_channels либо роль из allowed_roles."""
+
+    def setUp(self):
+        self.owner = User.objects.create_user(username="pv_owner", password="pw12345")
+        self.member = User.objects.create_user(username="pv_member", password="pw12345")
+        self.server = Server.objects.create(name="s", owner=self.owner)
+        Membership.objects.create(user=self.owner, server=self.server)
+        self.member_ship = Membership.objects.create(
+            user=self.member, server=self.server)
+        self.default_role = roles.create_default_role(self.server)
+        self.channel = Channel.objects.create(
+            server=self.server, name="secret", kind=Channel.TEXT, is_private=True)
+
+    def test_regular_member_cannot_read_private_channel(self):
+        self.client.force_authenticate(self.member)
+        resp = self.client.get(
+            "/api/channels/{}/messages".format(self.channel.id))
+        self.assertEqual(resp.status_code, 403)
+
+    def test_manage_channels_sees_private_channel(self):
+        """Тот, кто заводит каналы, обязан видеть все — иначе мог бы создать
+        приватный канал и тут же потерять к нему доступ."""
+        self.client.force_authenticate(self.owner)
+        resp = self.client.get(
+            "/api/channels/{}/messages".format(self.channel.id))
+        self.assertEqual(resp.status_code, 200)
+
+    def test_allowed_role_opens_private_channel(self):
+        role = Role.objects.create(server=self.server, name="team", position=1)
+        self.member_ship.roles.add(role)
+        self.channel.allowed_roles.add(role)
+        self.client.force_authenticate(self.member)
+        resp = self.client.get(
+            "/api/channels/{}/messages".format(self.channel.id))
+        self.assertEqual(resp.status_code, 200)
+
+    def test_private_channel_hidden_from_server_payload(self):
+        public = Channel.objects.create(
+            server=self.server, name="general", kind=Channel.TEXT)
+        self.client.force_authenticate(self.member)
+        resp = self.client.get("/api/servers")
+        server_row = next(s for s in resp.data if s["id"] == self.server.id)
+        ids = [c["id"] for c in server_row["channels"]]
+        self.assertIn(public.id, ids)
+        self.assertNotIn(self.channel.id, ids)
+
+    def test_private_channel_visible_in_payload_for_allowed_role(self):
+        role = Role.objects.create(server=self.server, name="team", position=1)
+        self.member_ship.roles.add(role)
+        self.channel.allowed_roles.add(role)
+        self.client.force_authenticate(self.member)
+        resp = self.client.get("/api/servers")
+        server_row = next(s for s in resp.data if s["id"] == self.server.id)
+        ids = [c["id"] for c in server_row["channels"]]
+        self.assertIn(self.channel.id, ids)
+
+    def test_voice_credentials_denied_for_private_voice_channel(self):
+        voice = Channel.objects.create(
+            server=self.server, name="Secret", kind=Channel.VOICE, is_private=True)
+        self.client.force_authenticate(self.member)
+        resp = self.client.post(
+            "/api/channels/{}/voice-credentials".format(voice.id))
+        self.assertEqual(resp.status_code, 403)
+
+    def test_create_channel_accepts_privacy_and_slowmode(self):
+        self.client.force_authenticate(self.owner)
+        resp = self.client.post(
+            "/api/servers/{}/channels".format(self.server.id),
+            {"name": "новый", "kind": "text", "slowmode_seconds": 30,
+             "is_private": True},
+            format="json")
+        self.assertEqual(resp.status_code, 201)
+        self.assertEqual(resp.data["slowmode_seconds"], 30)
+        self.assertTrue(resp.data["is_private"])
+
+    def test_create_voice_channel_rejects_slowmode(self):
+        self.client.force_authenticate(self.owner)
+        resp = self.client.post(
+            "/api/servers/{}/channels".format(self.server.id),
+            {"name": "Голос", "kind": "voice", "slowmode_seconds": 30},
+            format="json")
+        self.assertEqual(resp.status_code, 400)
+
+    def test_allowed_roles_must_belong_to_this_server(self):
+        """Иначе допуск можно было бы выдать ссылкой на роль чужого сервера."""
+        other_server = Server.objects.create(name="other", owner=self.owner)
+        alien = Role.objects.create(server=other_server, name="alien", position=1)
+        self.client.force_authenticate(self.owner)
+        resp = self.client.patch(
+            "/api/channels/{}".format(self.channel.id),
+            {"allowed_role_ids": [alien.id]}, format="json")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(list(self.channel.allowed_roles.all()), [])
+
+    def test_patch_toggles_privacy(self):
+        self.client.force_authenticate(self.owner)
+        resp = self.client.patch(
+            "/api/channels/{}".format(self.channel.id),
+            {"is_private": False}, format="json")
+        self.assertEqual(resp.status_code, 200)
+        self.channel.refresh_from_db()
+        self.assertFalse(self.channel.is_private)
+
+    def test_patch_without_any_field_is_rejected(self):
+        self.client.force_authenticate(self.owner)
+        resp = self.client.patch(
+            "/api/channels/{}".format(self.channel.id), {}, format="json")
+        self.assertEqual(resp.status_code, 400)

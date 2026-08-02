@@ -74,3 +74,45 @@ def _shares_server_allowing_dms(sender, recipient) -> bool:
         user=recipient, server_id__in=sender_server_ids,
         allow_dms_from_server=True,
     ).exists()
+
+
+def can_see_channel(user, channel, perms=None) -> bool:
+    """Виден ли пользователю ЭТОТ канал.
+
+    Публичный канал — по обычному view_channels. Приватный (Channel.is_private)
+    им НЕ открывается: нужен либо manage_channels (тот, кто заводит каналы,
+    обязан видеть все — иначе он мог бы создать канал и тут же потерять к нему
+    доступ), либо роль из Channel.allowed_roles.
+
+    perms — уже посчитанные права (chat.roles.permissions_for), если они есть
+    у вызывающего: эта функция зовётся в цикле по каналам сервера, и считать
+    их заново на каждый канал значило бы пару запросов на канал.
+    """
+    from . import roles as roles_module
+    from .models import Membership
+
+    if perms is None:
+        perms = roles_module.permissions_for(user, channel.server)
+    if not perms.get("view_channels"):
+        return False
+    if not channel.is_private:
+        return True
+    if perms.get("manage_channels"):
+        return True
+    membership = Membership.objects.filter(
+        user=user, server_id=channel.server_id).prefetch_related("roles").first()
+    if membership is None:
+        return False
+    allowed = set(channel.allowed_roles.values_list("id", flat=True))
+    return any(role.id in allowed for role in membership.roles.all())
+
+
+def visible_channels(user, server, channels=None) -> list:
+    """Каналы сервера, которые пользователю можно показывать. Права считаются
+    ОДИН раз на весь список (см. can_see_channel)."""
+    from . import roles as roles_module
+
+    perms = roles_module.permissions_for(user, server)
+    if channels is None:
+        channels = server.channels.all()
+    return [c for c in channels if can_see_channel(user, c, perms)]

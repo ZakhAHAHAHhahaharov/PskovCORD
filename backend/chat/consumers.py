@@ -11,8 +11,8 @@ GatewayConsumer — единственный WebSocket на клиента (по
     {"op": "delete_message", "message_id": <id>}
     {"op": "edit_message", "message_id": <id>, "content": "..."}
     {"op": "pin_message", "message_id": <id>, "pinned": bool} — закрепить/
-     открепить сообщение в текстовом канале (нужно право "delete_messages" —
-     то же «модерация сообщений», что и на удаление чужих).
+     открепить сообщение в текстовом канале (нужно право "pin_messages";
+     открепить может ещё и "delete_messages" — «Управление сообщениями»).
     {"op": "add_reaction", "message_id": <id>, "emoji": "🔥"}
     {"op": "remove_reaction", "message_id": <id>, "emoji": "🔥"}
     {"op": "voice_join",   "channel_id": <id>}
@@ -25,7 +25,7 @@ GatewayConsumer — единственный WebSocket на клиента (по
      сервера отключить нельзя).
     {"op": "voice_mute_vote_start", "target_user_id": <id>} — начать
      голосование за мут участника, который сейчас в ТОМ ЖЕ голосовом канале,
-     что и отправитель (право не нужно — может любой участник канала).
+     что и отправитель (нужно право "start_mute_vote").
     {"op": "voice_mute_vote_cast", "for": bool} — проголосовать в активном
      голосовании канала, в котором отправитель сейчас находится (сама цель
      голосования голосовать не может).
@@ -207,6 +207,7 @@ SFU-сервис (mediasoup) — клиент открывает к нему с�
 import asyncio
 import json
 import logging
+import math
 import uuid
 from urllib.parse import parse_qs
 
@@ -220,6 +221,7 @@ from django.db.models import Q
 from accounts.models import Friendship
 
 from . import emoji as emoji_keys, mute_vote, presence, roles
+from .permissions import can_see_channel
 
 logger = logging.getLogger(__name__)
 from .models import (
@@ -481,8 +483,9 @@ class GatewayConsumer(AsyncWebsocketConsumer):
             return
         result = await self._create_message(
             channel_id, content[:4000], data.get("reply_to"), attachment_ids)
-        if not result:
-            await self._nack(nonce, "Нет доступа к каналу.")
+        if not result or result.get("error"):
+            await self._nack(
+                nonce, (result or {}).get("error") or "Нет доступа к каналу.")
             return
         self._remember_nonce(nonce, result["data"]["id"])
         await self.channel_layer.group_send(
@@ -825,6 +828,8 @@ class GatewayConsumer(AsyncWebsocketConsumer):
         member_ids = await asyncio.to_thread(presence.voice_member_ids, channel_id)
         if str(target_user_id) not in member_ids:
             return
+        if not await self._has_server_permission(server_id, "start_mute_vote"):
+            return
         if not await self._target_not_owner(server_id, target_user_id):
             return
         started = await asyncio.to_thread(
@@ -871,6 +876,11 @@ class GatewayConsumer(AsyncWebsocketConsumer):
             return
         target_room = await asyncio.to_thread(presence.voice_channel, str(target_user_id))
         if target_room != own_room:
+            return
+        server_id = await self._channel_server(own_room)
+        if not server_id or not await self._has_server_permission(
+            server_id, "request_screen_share"
+        ):
             return
         await self.channel_layer.group_send(
             f"user_{target_user_id}", {"type": "broadcast", "payload": {
@@ -928,6 +938,12 @@ class GatewayConsumer(AsyncWebsocketConsumer):
         # Иерархия ролей действует и здесь: отключить от голоса можно только
         # того, кто строго ниже — иначе модератор глушил бы администратора.
         return roles.can_act_on_member(self.user, server, target_user_id)
+
+    @database_sync_to_async
+    def _has_server_permission(self, server_id, permission):
+        from .models import Server
+        server = Server.objects.filter(id=server_id).first()
+        return bool(server) and roles.has_permission(self.user, server, permission)
 
     @database_sync_to_async
     def _target_not_owner(self, server_id, target_user_id):
@@ -1162,17 +1178,29 @@ class GatewayConsumer(AsyncWebsocketConsumer):
     @database_sync_to_async
     def _create_message(self, channel_id, content, reply_to_id=None,
                         attachment_ids=None):
+        """Создаёт сообщение или возвращает {"error": "текст"} — текст уезжает
+        клиенту в nack (см. _handle_send). Отдельный текст нужен из-за
+        медленного режима: «подождите 7 с» и «нет доступа к каналу» для
+        отправителя — совершенно разные ситуации, а раньше любой отказ
+        выглядел одинаково."""
         try:
             channel = Channel.objects.select_related("server").get(id=channel_id)
         except Channel.DoesNotExist:
-            return None
+            return {"error": "Нет доступа к каналу."}
         if not Membership.objects.filter(
             user=self.user, server=channel.server
         ).exists():
-            return None
+            return {"error": "Нет доступа к каналу."}
         perms = roles.permissions_for(self.user, channel.server)
         if not perms.get("view_channels") or not perms.get("send_messages"):
-            return None
+            return {"error": "Нет доступа к каналу."}
+        if not can_see_channel(self.user, channel, perms):
+            return {"error": "Нет доступа к каналу."}
+        if attachment_ids and not perms.get("attach_files"):
+            return {"error": "Нельзя прикреплять файлы в этом канале."}
+        wait = self._slowmode_wait(channel, perms)
+        if wait:
+            return {"error": f"Медленный режим: подождите {wait} с."}
         # Токены кастомных эмодзи, которых автору здесь нельзя, схлопываются в
         # ":имя:" — см. chat.emoji.sanitize_content, там же почему не отказом.
         content = emoji_keys.sanitize_content(content, self.user, channel.server)
@@ -1195,6 +1223,24 @@ class GatewayConsumer(AsyncWebsocketConsumer):
         # транзакции он бы отработал так же. Но так payload гарантированно
         # описывает то, что реально лежит в БД к моменту рассылки.
         return {"server_id": channel.server_id, "data": MessageSerializer(msg).data}
+
+    def _slowmode_wait(self, channel, perms) -> int:
+        """Сколько ещё секунд автору ждать в этом канале (0 — можно писать).
+
+        Отсчёт ведётся от ЕГО ЖЕ последнего сообщения в канале, а не от
+        общего счётчика: медленный режим ограничивает частоту каждого
+        участника по отдельности, а не темп канала целиком. Синхронный метод
+        — вызывается уже внутри database_sync_to_async (_create_message)."""
+        if not channel.slowmode_seconds or perms.get("bypass_slowmode"):
+            return 0
+        last = channel.messages.filter(author=self.user).order_by("-created_at").first()
+        if last is None:
+            return 0
+        elapsed = (timezone.now() - last.created_at).total_seconds()
+        remaining = channel.slowmode_seconds - elapsed
+        # ceil: 0.2 секунды остатка — это всё ещё «подождите 1 с», а не 0,
+        # иначе подсказка звала бы отправлять повторно раньше времени.
+        return max(0, math.ceil(remaining))
 
     @database_sync_to_async
     def _delete_message(self, message_id):
@@ -1263,7 +1309,12 @@ class GatewayConsumer(AsyncWebsocketConsumer):
         if not Membership.objects.filter(user=self.user, server=server).exists():
             return None
         perms = roles.permissions_for(self.user, server)
-        if not perms.get("delete_messages"):
+        # Закрепить — pin_messages; открепить может ещё и «Управление
+        # сообщениями» (delete_messages): оно про наведение порядка в чужих
+        # сообщениях, куда снятие чужого закрепления и относится.
+        allowed = perms.get("pin_messages") or (
+            not pinned and perms.get("delete_messages"))
+        if not allowed:
             logger.info(
                 "pin_message: user %s lacks permission to pin message %s on server %s",
                 self.user.id, message_id, server.id,
@@ -1284,12 +1335,17 @@ class GatewayConsumer(AsyncWebsocketConsumer):
     @database_sync_to_async
     def _voice_channel_server(self, channel_id):
         """server_id, если это голосовой канал, юзер — участник сервера и у
-        него есть права видеть канал и говорить в нём, иначе None.
+        него есть право видеть канал и подключаться к нему, иначе None.
 
-        view_channels/speak проверяются и здесь, и в VoiceCredentials: там —
+        view_channels/connect проверяются и здесь, и в VoiceCredentials: там —
         чтобы не выдать медиа-токен, тут — чтобы не пустить в presence-ростер
-        канала (иначе участник без права «Говорить» всё равно висел бы в
-        списке подключённых, просто молча).
+        канала.
+
+        Право «Говорить» (speak) здесь НЕ требуется: connect без speak — это
+        слушатель, он законно сидит в канале и слышит остальных, просто его
+        микрофон не публикуется (см. sfu.access_token, где speak уезжает
+        отдельным claim'ом). Раньше на этом месте стоял speak, и роль
+        «только слушать» была неотличима от полного запрета зайти.
         """
         try:
             channel = Channel.objects.select_related("server").get(id=channel_id)
@@ -1302,7 +1358,9 @@ class GatewayConsumer(AsyncWebsocketConsumer):
         ).exists():
             return None
         perms = roles.permissions_for(self.user, channel.server)
-        if not perms.get("view_channels") or not perms.get("speak"):
+        if not perms.get("view_channels") or not perms.get("connect"):
+            return None
+        if not can_see_channel(self.user, channel, perms):
             return None
         return channel.server_id
 
@@ -1434,10 +1492,14 @@ class GatewayConsumer(AsyncWebsocketConsumer):
                 user=self.user, server=server
             ).exists():
                 return None
-            # Право ровно то же, что нужно, чтобы сообщение вообще видеть.
-            # Отдельного «можно ставить реакции» нет: реакция — это чтение с
-            # обратной связью, а не сообщение (send_messages не требуется).
-            if not roles.permissions_for(self.user, server).get("view_channels"):
+            perms = roles.permissions_for(self.user, server)
+            if not perms.get("view_channels"):
+                return None
+            # add_reactions нужен только чтобы ПОСТАВИТЬ. Снять свою уже
+            # стоящую реакцию можно всегда: иначе участник, у которого право
+            # отобрали задним числом, остался бы навечно приклеен к реакциям,
+            # которые успел наставить.
+            if add and not perms.get("add_reactions"):
                 return None
             owner = {"message": msg}
 

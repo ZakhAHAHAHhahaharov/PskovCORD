@@ -6,7 +6,8 @@ import {
   Shield, ShieldBan, SlidersHorizontal, Smile, Trash2, UserRoundCheck, X,
 } from 'lucide-react'
 import {
-  api, CustomEmoji, Member, Role, Server, ServerAccessMode, ServerBanEntry,
+  api, CustomEmoji, Member, PermissionsCatalog, Role, Server, ServerAccessMode,
+  ServerBanEntry,
   ServerInviteLinkEntry, ServerJoinRequestEntry, ServerPermission, ServerRule,
 } from '../api'
 import { customEmojiStore, useCustomEmojiPacks } from '../customEmoji'
@@ -45,61 +46,19 @@ interface TabDef {
 const TABS: TabDef[] = [
   { id: 'profile', label: 'Профиль', icon: <SlidersHorizontal size={15} />, permission: 'manage_server' },
   { id: 'roles', label: 'Роли', icon: <Shield size={15} />, permission: 'manage_roles' },
-  { id: 'emoji', label: 'Эмодзи', icon: <Smile size={15} />, permission: 'create_expressions' },
+  // Вкладка про наведение порядка в уже загруженном (переименовать/удалить) —
+  // отсюда и manage_expressions, а не create_expressions: ДОБАВЛЯЮТ эмодзи в
+  // пикере, кнопкой «+» рядом с наборами, а не здесь.
+  { id: 'emoji', label: 'Эмодзи', icon: <Smile size={15} />, permission: 'manage_expressions' },
   { id: 'requests', label: 'Запросы', icon: <UserRoundCheck size={15} />, permission: 'manage_members' },
   { id: 'access', label: 'Доступ', icon: <Check size={15} />, permission: 'manage_server' },
   { id: 'bans', label: 'ЧС списочек xD', icon: <ShieldBan size={15} />, permission: 'manage_members' },
 ]
 
-/** Группы прав в редакторе роли — порядок и подписи повторяют
- * chat/roles.py PERMISSION_FIELDS (там же список полей модели). */
-const PERMISSION_GROUPS: { title: string; items: [ServerPermission, string][] }[] = [
-  {
-    title: 'Общие права сервера',
-    items: [
-      ['view_channels', 'Просматривать каналы'],
-      ['manage_channels', 'Управлять каналами'],
-      ['manage_roles', 'Управлять ролями'],
-      ['manage_server', 'Управлять сервером'],
-      // manage_invites / manage_nicknames отсюда убраны: они охраняли фичи,
-      // которых в проекте нет, и были переключателями, не делавшими ничего.
-      // Вернутся вместе с самими фичами — см. chat/roles.py.
-      ['manage_members', 'Выгонять / одобрять / банить участников'],
-      ['create_expressions', 'Создавать средства выражения эмоций'],
-    ],
-  },
-  {
-    title: 'Текстовые каналы',
-    items: [
-      ['send_messages', 'Отправка сообщений'],
-      ['delete_messages', 'Удаление сообщений'],
-      // Эмодзи САМОГО сервера доступны всем его участникам всегда — этим
-      // правом режется только принесённое с других серверов (см. backend
-      // chat/emoji.py usable_ids).
-      ['use_external_emoji', 'Использовать внешние эмодзи'],
-      // mention_everyone — там же: разбора @all/@online/@here нет нигде.
-    ],
-  },
-  {
-    title: 'Голосовые каналы',
-    items: [
-      ['speak', 'Говорить'],
-      ['video', 'Показывать видео'],
-    ],
-  },
-]
-
-const PERMISSION_LABELS: Record<string, string> = Object.fromEntries(
-  PERMISSION_GROUPS.flatMap((g) => g.items),
-)
-
-/** Права, которые нельзя снять с роли "Владелец" — см. одноимённую
- * backend-константу chat.roles.OWNER_LOCKED_PERMISSIONS: без них владелец
- * потерял бы доступ к настройкам/ролям собственного сервера навсегда,
- * заступиться некому (он и так уже выше всех в иерархии). Бэк форсит их в
- * True при любом PATCH независимо от этого списка — здесь чисто чтобы не
- * дать пользователю щёлкнуть чекбокс, которому бэк всё равно не даст сработать. */
-const OWNER_LOCKED_PERMISSIONS = new Set<ServerPermission>(['manage_server', 'manage_roles'])
+/** Список прав (подписи, пояснения, группы, пометка «скоро», owner_locked)
+ * приезжает с бэка — /api/permissions, см. chat/roles.py PERMISSION_FIELDS.
+ * Раньше он дублировался здесь константой и разъезжался с бэком при каждом
+ * изменении: право появлялось в модели и в проверках, но не в редакторе. */
 
 /** Держит ли ЭТО право хоть кто-то на сервере, кроме самого владельца —
  * через роль по умолчанию или любую персональную роль. Используется только
@@ -128,12 +87,16 @@ function Toggle({
   checked,
   label,
   hint,
+  badge,
   disabled,
   onChange,
 }: {
   checked: boolean
   label: string
   hint?: string
+  /** Короткая пометка рядом с названием — сейчас только «скоро» у прав,
+   * под которые ещё нет самой фичи (см. chat.roles.UPCOMING_PERMISSIONS). */
+  badge?: string
   disabled?: boolean
   onChange: (v: boolean) => void
 }) {
@@ -146,7 +109,10 @@ function Toggle({
         onChange={(e) => onChange(e.target.checked)}
       />
       <span className="srv-toggle-text">
-        <span className="srv-toggle-label">{label}</span>
+        <span className="srv-toggle-label">
+          {label}
+          {badge && <span className="srv-toggle-badge">{badge}</span>}
+        </span>
         {hint && <span className="srv-toggle-hint">{hint}</span>}
       </span>
     </label>
@@ -688,6 +654,7 @@ const RolesTab = forwardRef<
   }
 >(function RolesTab({ server, members, onMembersChanged, onRolesChanged }, ref) {
   const [roles, setRoles] = useState<Role[]>([])
+  const [catalog, setCatalog] = useState<PermissionsCatalog | null>(null)
   const [selectedId, setSelectedId] = useState<number | null>(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -699,8 +666,14 @@ const RolesTab = forwardRef<
   useEffect(() => {
     ;(async () => {
       try {
-        const list = await api.roles(server.id)
+        // Каталог прав и сами роли — одним заходом: без каталога рисовать
+        // редактор нечем (в нём и подписи, и порядок, и группы).
+        const [list, perms] = await Promise.all([
+          api.roles(server.id),
+          api.permissionsCatalog(),
+        ])
         setRoles(list)
+        setCatalog(perms)
         setSelectedId(list[0]?.id ?? null)
         setDraft(list[0] ?? null)
       } catch (err) {
@@ -710,6 +683,19 @@ const RolesTab = forwardRef<
       }
     })()
   }, [server.id])
+
+  /** Права, сгруппированные так, как их нужно рисовать: порядок групп и
+   * порядок прав внутри — целиком с бэка. Пустые группы отбрасываем, чтобы
+   * заголовок без единого переключателя не висел в редакторе. */
+  const permissionGroups = (catalog?.groups ?? [])
+    .map((group) => ({
+      ...group,
+      items: (catalog?.permissions ?? []).filter((p) => p.group === group.id),
+    }))
+    .filter((group) => group.items.length > 0)
+
+  const ownerLocked = (name: ServerPermission) =>
+    !!catalog?.permissions.find((p) => p.name === name)?.owner_locked
 
   const select = (role: Role) => {
     setSelectedId(role.id)
@@ -806,9 +792,10 @@ const RolesTab = forwardRef<
   const handleTogglePermission = (key: ServerPermission, checked: boolean) => {
     if (!draft) return
     if (draft.is_owner_role) {
-      if (OWNER_LOCKED_PERMISSIONS.has(key)) return // чекбокс и так задизейблен
+      if (ownerLocked(key)) return // чекбокс и так задизейблен
       if (!checked && !permissionHeldByAnyoneElse(key, roles, members)) {
-        const label = PERMISSION_LABELS[key] ?? key
+        const label =
+          catalog?.permissions.find((p) => p.name === key)?.label ?? key
         if (
           !window.confirm(
             `Больше ни у кого на сервере не будет права «${label}». Снять его у себя всё равно?`,
@@ -898,16 +885,21 @@ const RolesTab = forwardRef<
               </p>
             )}
 
-            {PERMISSION_GROUPS.map((group) => (
-              <div key={group.title} className="srv-perm-group">
+            {permissionGroups.map((group) => (
+              <div key={group.id} className="srv-perm-group">
                 <div className="field-label">{group.title}</div>
-                {group.items.map(([key, label]) => (
+                {group.items.map((perm) => (
                   <Toggle
-                    key={key}
-                    checked={draft[key]}
-                    label={label}
-                    disabled={draft.is_owner_role && OWNER_LOCKED_PERMISSIONS.has(key)}
-                    onChange={(v) => handleTogglePermission(key, v)}
+                    key={perm.name}
+                    checked={draft[perm.name]}
+                    label={perm.label}
+                    hint={perm.hint || undefined}
+                    // Право есть и сохраняется, но самой фичи ещё нет — бейдж
+                    // «скоро» рядом с названием, чтобы его не приняли за
+                    // работающую настройку (см. chat.roles.UPCOMING_PERMISSIONS).
+                    badge={perm.upcoming ? 'скоро' : undefined}
+                    disabled={draft.is_owner_role && perm.owner_locked}
+                    onChange={(v) => handleTogglePermission(perm.name, v)}
                   />
                 ))}
               </div>

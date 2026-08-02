@@ -180,7 +180,7 @@ def normalize(raw) -> str | None:
 #   * эмодзи ЧУЖОГО сервера (ты в нём не состоишь) — нельзя нигде: у тебя
 #     просто нет к нему доступа;
 #   * внутри канала сервера X эмодзи любого ДРУГОГО сервера — только с правом
-#     use_external_emoji на X. Это единственное, что ограничивает
+#     use_external_emojis на X. Это единственное, что ограничивает
 #     использование, ровно как в Discord.
 #
 # Функция принимает сразу набор id, а не один: и текст сообщения, и проверка
@@ -222,7 +222,7 @@ def usable_ids(emoji_ids, user, server=None) -> set:
     external = {
         emoji_id for emoji_id in allowed if owners[emoji_id] != server.id}
     if external and not roles.permissions_for(user, server).get(
-        "use_external_emoji"
+        "use_external_emojis"
     ):
         allowed -= external
     return allowed

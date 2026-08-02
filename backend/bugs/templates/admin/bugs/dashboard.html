@@ -1,0 +1,283 @@
+{% extends "admin/base_site.html" %}
+{% load static i18n %}
+
+{% block title %}Сводка по ошибкам{% endblock %}
+
+{% block extrastyle %}{{ block.super }}
+<style>
+  /* Цвета берём из проверенной палитры (см. skill dataviz): одна синяя серия
+     на все графики — в каждом из них ряд ровно один, и раскрашивать столбцы
+     по категориям было бы лишним кодированием того, что и так подписано на
+     оси. Тёмная тема — свои шаги той же гаммы, не автоинверсия; оба набора
+     объявлены и под media-запрос (системная тема), и под [data-theme]
+     (переключатель самой админки), иначе ручной выбор не победит системный. */
+  .bugs-dash {
+    --series-1: #2a78d6;
+    --series-fill: rgba(42, 120, 214, 0.14);
+    --grid: #e1e0d9;
+    --axis: #c3c2b7;
+    --muted: #898781;
+    --tile-bg: var(--darkened-bg, #f8f8f8);
+    --tile-border: rgba(11, 11, 11, 0.10);
+    --critical: #d03b3b;
+  }
+  @media (prefers-color-scheme: dark) {
+    html:not([data-theme="light"]) .bugs-dash {
+      --series-1: #3987e5;
+      --series-fill: rgba(57, 135, 229, 0.20);
+      --grid: #2c2c2a;
+      --axis: #383835;
+      --tile-border: rgba(255, 255, 255, 0.10);
+    }
+  }
+  html[data-theme="dark"] .bugs-dash {
+    --series-1: #3987e5;
+    --series-fill: rgba(57, 135, 229, 0.20);
+    --grid: #2c2c2a;
+    --axis: #383835;
+    --tile-border: rgba(255, 255, 255, 0.10);
+  }
+
+  .bugs-dash { margin: 0 0 24px; }
+  .bugs-range { display: flex; gap: 8px; align-items: center; margin: 0 0 20px; flex-wrap: wrap; }
+  .bugs-range a {
+    padding: 5px 12px; border: 1px solid var(--tile-border); border-radius: 999px;
+    text-decoration: none; font-size: 13px;
+  }
+  .bugs-range a.active { background: var(--series-1); color: #fff; border-color: var(--series-1); }
+
+  .bugs-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 20px; }
+  .bugs-tile { background: var(--tile-bg); border: 1px solid var(--tile-border); border-radius: 8px; padding: 14px 16px; }
+  .bugs-tile .label { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  .bugs-tile .value { font-size: 30px; font-weight: 700; line-height: 1.15; margin-top: 4px; }
+  .bugs-tile.is-critical .value { color: var(--critical); }
+
+  .bugs-charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 16px; }
+  .bugs-card { background: var(--tile-bg); border: 1px solid var(--tile-border); border-radius: 8px; padding: 14px 16px; min-width: 0; }
+  .bugs-card h2 { font-size: 14px; margin: 0 0 4px; }
+  .bugs-card .hint { font-size: 12px; color: var(--muted); margin: 0 0 10px; }
+  .bugs-card .canvas-wrap { position: relative; height: 240px; }
+  .bugs-card.wide { grid-column: 1 / -1; }
+  .bugs-empty { color: var(--muted); font-size: 13px; padding: 40px 0; text-align: center; }
+
+  /* Таблица дублирует верхний график данными — это обязательный текстовый
+     дубль для тех, кому цвет/канвас недоступен, и заодно единственный
+     способ дотянуться до конкретной группы кликом. */
+  .bugs-table { width: 100%; border-collapse: collapse; margin-top: 6px; font-size: 13px; }
+  .bugs-table th, .bugs-table td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--grid); }
+  .bugs-table th { color: var(--muted); font-weight: 600; font-size: 12px; text-transform: uppercase; }
+  .bugs-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .bugs-regressed td { background: rgba(208, 59, 59, 0.08); }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="bugs-dash">
+
+  <div class="bugs-range">
+    <span class="hint">Период:</span>
+    {% for option in day_options %}
+      <a href="?days={{ option }}" class="{% if option == stats.days %}active{% endif %}">{{ option }} дн.</a>
+    {% endfor %}
+    <a href="{% url 'admin:bugs_errorgroup_changelist' %}" style="margin-left:auto">Все ошибки списком →</a>
+  </div>
+
+  <div class="bugs-tiles">
+    <div class="bugs-tile">
+      <div class="label">Событий</div>
+      <div class="value">{{ stats.total_events }}</div>
+    </div>
+    <div class="bugs-tile">
+      <div class="label">Разных ошибок</div>
+      <div class="value">{{ stats.total_groups }}</div>
+    </div>
+    <div class="bugs-tile">
+      <div class="label">Людей задето</div>
+      <div class="value">{{ stats.affected_users }}</div>
+    </div>
+    <div class="bugs-tile {% if stats.regressed %}is-critical{% endif %}">
+      <div class="label">Регрессий</div>
+      <div class="value">{{ stats.regressed|length }}</div>
+    </div>
+  </div>
+
+  <div class="bugs-charts">
+    <div class="bugs-card wide">
+      <h2>События по дням</h2>
+      <p class="hint">Всплеск — повод искать, что выкатили в этот день.</p>
+      {% if stats.by_day %}
+        <div class="canvas-wrap"><canvas id="chart-by-day"></canvas></div>
+      {% else %}
+        <div class="bugs-empty">За период событий не было.</div>
+      {% endif %}
+    </div>
+
+    <div class="bugs-card">
+      <h2>По платформам</h2>
+      <p class="hint">Перекос в одну платформу — она и есть причина.</p>
+      {% if stats.by_platform %}
+        <div class="canvas-wrap"><canvas id="chart-by-platform"></canvas></div>
+      {% else %}
+        <div class="bugs-empty">Нет данных.</div>
+      {% endif %}
+    </div>
+
+    <div class="bugs-card">
+      <h2>По типам</h2>
+      <p class="hint">Голос и шлюз считаются отдельно от ошибок кода.</p>
+      {% if stats.by_kind %}
+        <div class="canvas-wrap"><canvas id="chart-by-kind"></canvas></div>
+      {% else %}
+        <div class="bugs-empty">Нет данных.</div>
+      {% endif %}
+    </div>
+
+    <div class="bugs-card wide">
+      <h2>Топ ошибок — по числу задетых людей</h2>
+      <p class="hint">Сортировка именно по людям, а не по событиям: одна ошибка в цикле даёт тысячи
+        событий у одного человека и не значит ничего, а та же ошибка у сотни людей — значит.</p>
+      {% if stats.top_groups %}
+        {# Высота под число строк: горизонтальные столбцы с длинными подписями
+           в фиксированные 240px не влезают и наезжают друг на друга. #}
+        <div class="canvas-wrap" style="height:{% widthratio stats.top_groups|length 1 44 %}px">
+          <canvas id="chart-top"></canvas>
+        </div>
+        <table class="bugs-table">
+          <thead>
+            <tr><th>Ошибка</th><th>Тип</th><th>Статус</th><th class="num">Людей</th><th class="num">Событий</th></tr>
+          </thead>
+          <tbody>
+            {% for group in stats.top_groups %}
+              <tr {% if group.is_regressed %}class="bugs-regressed"{% endif %}>
+                <td><a href="{% url 'admin:bugs_errorgroup_change' group.pk %}">{% if group.is_regressed %}🔁 {% endif %}{{ group.title }}</a></td>
+                <td>{{ group.get_kind_display }}</td>
+                <td>{{ group.get_status_display }}</td>
+                <td class="num">{{ group.affected }}</td>
+                <td class="num">{{ group.times_seen }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% else %}
+        <div class="bugs-empty">За период ошибок не было.</div>
+      {% endif %}
+    </div>
+
+    {% if stats.regressed %}
+      <div class="bugs-card wide">
+        <h2>Вернувшиеся после починки</h2>
+        <p class="hint">Помечены «Исправлена», но событие пришло уже после отметки — починка не сработала.</p>
+        <table class="bugs-table">
+          <thead><tr><th>Ошибка</th><th>Исправлена</th><th>Последний раз</th><th class="num">Событий</th></tr></thead>
+          <tbody>
+            {% for group in stats.regressed %}
+              <tr class="bugs-regressed">
+                <td><a href="{% url 'admin:bugs_errorgroup_change' group.pk %}">{{ group.title }}</a></td>
+                <td>{{ group.resolved_at|date:"d.m.Y H:i" }}</td>
+                <td>{{ group.last_seen|date:"d.m.Y H:i" }}</td>
+                <td class="num">{{ group.times_seen }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% endif %}
+  </div>
+</div>
+
+{{ charts|json_script:"bugs-charts-data" }}
+<script src="{% static 'bugs/chart.umd.min.js' %}"></script>
+<script>
+(function () {
+  var data = JSON.parse(document.getElementById('bugs-charts-data').textContent);
+  var css = getComputedStyle(document.querySelector('.bugs-dash'));
+  var series = css.getPropertyValue('--series-1').trim();
+  var fill = css.getPropertyValue('--series-fill').trim();
+  var grid = css.getPropertyValue('--grid').trim();
+  var muted = css.getPropertyValue('--muted').trim();
+
+  Chart.defaults.font.family = 'system-ui, -apple-system, "Segoe UI", sans-serif';
+  Chart.defaults.color = muted;
+  // Ряд в каждом графике один, поэтому легенда не несёт информации — её роль
+  // (что это за величина) выполняет заголовок карточки.
+  Chart.defaults.plugins.legend.display = false;
+
+  function axes(horizontal) {
+    var value = { grid: { color: grid, drawBorder: false }, ticks: { precision: 0 }, beginAtZero: true };
+    var category = { grid: { display: false }, ticks: { autoSkip: false } };
+    return horizontal ? { x: value, y: category } : { x: category, y: value };
+  }
+
+  function bar(id, chart, horizontal, onClick) {
+    var el = document.getElementById(id);
+    if (!el) return;
+    new Chart(el, {
+      type: 'bar',
+      data: {
+        labels: chart.labels,
+        datasets: [{
+          data: chart.values,
+          backgroundColor: series,
+          // Скруглённые торцы столбца у значения, основание — на нулевой
+          // линии; 2px просвет между соседями, чтобы они не слипались в
+          // одну плашку.
+          borderRadius: 4,
+          borderSkipped: 'start',
+          barPercentage: 0.82,
+          categoryPercentage: 0.86,
+        }],
+      },
+      options: {
+        indexAxis: horizontal ? 'y' : 'x',
+        responsive: true,
+        maintainAspectRatio: false,
+        scales: axes(horizontal),
+        onClick: onClick,
+        plugins: { tooltip: { displayColors: false } },
+      },
+    });
+  }
+
+  if (data.byDay && data.byDay.labels.length) {
+    new Chart(document.getElementById('chart-by-day'), {
+      type: 'line',
+      data: {
+        labels: data.byDay.labels,
+        datasets: [{
+          data: data.byDay.values,
+          borderColor: series,
+          backgroundColor: fill,
+          borderWidth: 2,
+          pointRadius: 4,
+          pointHoverRadius: 6,
+          pointBackgroundColor: series,
+          fill: true,
+          tension: 0.25,
+        }],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        // Перекрестие по всей вертикали: на линии человек целится в дату, а
+        // не в саму точку, и попадать в 8 пикселей маркера — мучение.
+        interaction: { mode: 'index', intersect: false },
+        scales: axes(false),
+        plugins: { tooltip: { displayColors: false } },
+      },
+    });
+  }
+
+  if (data.byPlatform) bar('chart-by-platform', data.byPlatform, true);
+  if (data.byKind) bar('chart-by-kind', data.byKind, true);
+  if (data.topGroups) {
+    bar('chart-top', data.topGroups, true, function (evt, elements) {
+      // Клик по столбцу — сразу в карточку группы: график отвечает «какая
+      // ошибка важнее», и следующий шаг всегда «открыть её».
+      if (!elements.length) return;
+      var url = data.topGroups.urls[elements[0].index];
+      if (url) window.location.href = url;
+    });
+  }
+})();
+</script>
+{% endblock %}

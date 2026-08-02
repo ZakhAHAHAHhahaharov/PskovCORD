@@ -4,6 +4,7 @@ from . import views
 
 urlpatterns = [
     path("config", views.config_view, name="config"),
+    path("permissions", views.permissions_catalog_view, name="permissions-catalog"),
 
     # Загрузка вложения — отдельно от отправки сообщения, см. AttachmentUpload.
     path("attachments", views.AttachmentUpload.as_view(), name="attachment-upload"),
@@ -29,6 +30,8 @@ urlpatterns = [
          views.ServerMembers.as_view(), name="server-members"),
     path("servers/<int:server_id>/members/<int:user_id>",
          views.ServerMemberDetail.as_view(), name="server-member-detail"),
+    path("servers/<int:server_id>/members/<int:user_id>/nickname",
+         views.ServerMemberNickname.as_view(), name="server-member-nickname"),
     path("servers/<int:server_id>/channels",
          views.ChannelCreate.as_view(), name="channel-create"),
 

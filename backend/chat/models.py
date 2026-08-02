@@ -66,8 +66,10 @@ class Role(models.Model):
     Права хранятся отдельными булевыми полями, а не битовой маской: их
     немного, они редко меняются, а читаемость в админке/миграциях и
     возможность фильтровать запросом того стоят. Полный список полей (и их
-    порядок в UI) — chat.roles.PERMISSION_FIELDS; при добавлении права
-    правьте оба места.
+    порядок/подписи в UI) — chat.roles.PERMISSION_FIELDS; при добавлении
+    права правьте оба места. Дефолт поля обязан совпадать с тем, входит ли
+    право в chat.roles.BASE_MEMBER_PERMISSIONS (см. PermissionCatalogTests) —
+    иначе роль по умолчанию и «запасные» права разъедутся.
     """
 
     server = models.ForeignKey(
@@ -94,26 +96,54 @@ class Role(models.Model):
     manage_roles = models.BooleanField(default=False)
     manage_server = models.BooleanField(default=False)
     manage_invites = models.BooleanField(default=False)
+    # Менять никнейм ДРУГИХ участников на этом сервере (Membership.nickname).
     manage_nicknames = models.BooleanField(default=False)
+    # Менять СВОЙ никнейм на этом сервере.
+    change_nickname = models.BooleanField(default=True)
     # Выгонять/одобрять заявки/банить/разбанить участников.
     manage_members = models.BooleanField(default=False)
-    # Загружать, переименовывать и удалять кастомные эмодзи ЭТОГО сервера
-    # (см. ServerEmoji). По умолчанию снято: эмодзи сервера видят все его
-    # участники, и добавлять их должен не каждый.
+    # Только банить — урезанная часть manage_members для роли «модератор»,
+    # которой не положено ни кикать, ни одобрять заявки.
+    ban_members = models.BooleanField(default=False)
+    create_invites = models.BooleanField(default=True)
+
+    # --- средства выражения эмоций (кастомные эмодзи/стикеры/звуки) ---------
+    # Эмодзи (ServerEmoji) уже настоящие: create_expressions пускает загружать
+    # новые, manage_expressions — переименовывать и удалять чужие. Стикеров и
+    # звуков ещё нет, поэтому use_external_stickers ниже остаётся в
+    # chat.roles.UPCOMING_PERMISSIONS с пометкой «скоро».
     create_expressions = models.BooleanField(default=False)
+    manage_expressions = models.BooleanField(default=False)
 
     # --- права текстового канала ---
     send_messages = models.BooleanField(default=True)
+    attach_files = models.BooleanField(default=True)
+    add_reactions = models.BooleanField(default=True)
+    # Удалять/откреплять чужие сообщения («Управление сообщениями» в UI).
     delete_messages = models.BooleanField(default=False)
+    pin_messages = models.BooleanField(default=False)
+    # Читать сообщения, отправленные до текущего входа (см.
+    # chat.presence.online_since и ChannelMessages).
+    read_message_history = models.BooleanField(default=True)
+    # Писать в канал с медленным режимом без ожидания (Channel.slowmode_seconds).
+    bypass_slowmode = models.BooleanField(default=False)
     mention_everyone = models.BooleanField(default=False)
     # Ставить в каналах ЭТОГО сервера эмодзи ДРУГИХ серверов. Эмодзи самого
     # сервера доступны всем его участникам всегда и этим правом не режутся —
-    # режется только «принёс со стороны» (см. chat.emoji.can_use).
-    use_external_emoji = models.BooleanField(default=True)
+    # режется только «принёс со стороны» (см. chat.emoji.usable_ids).
+    use_external_emojis = models.BooleanField(default=True)
+    # Стикеров в проекте ещё нет — право заведено заранее, см. «скоро» в
+    # chat.roles.UPCOMING_PERMISSIONS.
+    use_external_stickers = models.BooleanField(default=True)
 
     # --- права голосового канала ---
+    # Подключаться к голосовому каналу и слышать остальных. Отдельно от speak:
+    # connect=True/speak=False — «слушатель», который сидит в канале молча.
+    connect = models.BooleanField(default=True)
     speak = models.BooleanField(default=True)
     video = models.BooleanField(default=True)
+    start_mute_vote = models.BooleanField(default=True)
+    request_screen_share = models.BooleanField(default=True)
 
     # --- кто может упоминать ЭТУ роль (@RoleName) ---------------------------
     # Не путать с manage_roles (управление ролью) — это про то, чьё сообщение
@@ -167,6 +197,11 @@ class Membership(models.Model):
     # Роль по умолчанию (is_default) сюда не пишется — она и так действует
     # на всех участников, см. chat.roles.permissions_for.
     roles = models.ManyToManyField(Role, blank=True, related_name="members")
+    # Никнейм НА ЭТОМ СЕРВЕРЕ — видят все участники сервера (в отличие от
+    # приватного одностороннего FriendNickname, который видит только тот, кто
+    # его поставил). Пусто — показывается обычное имя. Своё меняет право
+    # change_nickname, чужие — manage_nicknames (см. chat.roles).
+    nickname = models.CharField(max_length=100, blank=True, default="")
 
     # --- личные настройки уведомлений/приватности для ЭТОГО сервера --------
     # Ничего из этого не влияет на доставку сообщений (WS как и раньше шлёт
@@ -378,6 +413,22 @@ class Channel(models.Model):
     # в голосовом канале кто-то есть и стирается вместе с последним ушедшим,
     # этот виден всегда, пока его явно не поменяют/не очистят.
     status = models.CharField(max_length=120, blank=True, default="")
+    # Медленный режим: сколько секунд автор обязан ждать между своими
+    # сообщениями в этом канале. 0 — выключен. Обходится правом
+    # bypass_slowmode (см. chat.roles) — проверка живёт в
+    # GatewayConsumer._create_message, где и создаётся сообщение.
+    slowmode_seconds = models.PositiveIntegerField(default=0)
+
+    # Приватный канал: виден только тем, у кого есть manage_channels, и
+    # обладателям ролей из allowed_roles. Обычное право view_channels на него
+    # не распространяется — в этом и смысл: «видеть каналы» даёт публичные,
+    # а к приватному нужен явный допуск (см. chat.permissions.can_see_channel).
+    is_private = models.BooleanField(default=False)
+    # Роли, которым открыт приватный канал. Пусто — канал виден только
+    # управляющим каналами (роль «staff-only»), это осмысленное состояние по
+    # умолчанию сразу после создания, а не полуфабрикат.
+    allowed_roles = models.ManyToManyField(
+        Role, blank=True, related_name="allowed_channels")
 
     class Meta:
         ordering = ["position", "id"]

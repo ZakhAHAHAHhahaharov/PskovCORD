@@ -196,11 +196,13 @@ export function useGatewayEvents(params: UseGatewayEventsParams) {
             muted: false,
             deafened: false,
             sharing_screen: false,
-            // Роли/владение приходят только из api.members() — здесь их нет,
-            // ставим пустые: строка ростера ими не пользуется, а редактор
-            // сервера работает с перезагруженным списком (reloadMembers).
+            // Роли/владение/ник на сервере приходят только из api.members() —
+            // здесь их нет, ставим пустые: строка ростера ими не пользуется, а
+            // редактор сервера работает с перезагруженным списком
+            // (reloadMembers).
             role_ids: [],
             is_owner: false,
+            server_nickname: '',
           },
         ]
       })
@@ -351,6 +353,18 @@ export function useGatewayEvents(params: UseGatewayEventsParams) {
           s.id === d.server_id
             ? { ...s, channels: s.channels.map((c) => (c.id === d.channel.id ? d.channel : c)) }
             : s,
+        ),
+      )
+    })
+    // Кому-то поменяли никнейм НА СЕРВЕРЕ (см. backend ServerMemberNickname) —
+    // публичный, поэтому обновляем ростер у всех, а не только у того, кто
+    // правил. Событие приходит и самому инициатору: он уже применил ответ
+    // ручки локально, и повторная запись того же значения ничего не меняет.
+    const offMemberNickname = gateway.on('server_member_nickname', (d) => {
+      if (d.server_id !== serverId) return
+      setMembers((prev) =>
+        prev.map((m) =>
+          m.id === d.user_id ? { ...m, server_nickname: d.nickname } : m,
         ),
       )
     })
@@ -673,6 +687,7 @@ export function useGatewayEvents(params: UseGatewayEventsParams) {
       offProfileUpdate()
       offChannelCreate()
       offChannelUpdate()
+      offMemberNickname()
       offServerUpdate()
       offServerEmoji()
       offJoinApproved()

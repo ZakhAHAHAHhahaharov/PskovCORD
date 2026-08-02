@@ -427,13 +427,26 @@ export function useServerData(userRef: RefObject<Me | null>) {
     [serverId],
   )
 
-  const handleCreateChannel = async (kind: 'text' | 'voice') => {
+  /** Какой канал сейчас создаём — вид или null. Само имя и настройки
+   * спрашивает CreateChannelModal (раньше это был window.prompt, который умел
+   * спросить только имя, а медленный режим/приватность задать было негде). */
+  const [createChannelKind, setCreateChannelKind] = useState<'text' | 'voice' | null>(
+    null,
+  )
+
+  const handleCreateChannel = (kind: 'text' | 'voice') => setCreateChannelKind(kind)
+
+  /** Ошибку наружу не глушим: модалка показывает её у себя и не закрывается,
+   * чтобы набранное имя не пропало (см. CreateChannelModal). */
+  const handleCreateChannelSubmit = async (
+    kind: 'text' | 'voice',
+    data: { name: string; slowmodeSeconds: number; isPrivate: boolean },
+  ) => {
     if (serverId == null) return
-    const name = window.prompt(
-      kind === 'text' ? 'Имя текстового канала:' : 'Имя голосового канала:',
-    )?.trim()
-    if (!name) return
-    const ch = await api.createChannel(serverId, name, kind)
+    const ch = await api.createChannel(serverId, data.name, kind, {
+      slowmodeSeconds: data.slowmodeSeconds,
+      isPrivate: data.isPrivate,
+    })
     setServers((prev) =>
       prev.map((s) =>
         s.id === serverId ? { ...s, channels: [...s.channels, ch] } : s,
@@ -471,17 +484,43 @@ export function useServerData(userRef: RefObject<Me | null>) {
     }
   }
 
+  /** Общая часть «поправили канал на сервере» — обе ручки ниже отдают уже
+   * обновлённый канал, и его надо положить в тот сервер, где он лежит. */
+  const applyChannelUpdate = (updated: Channel) =>
+    setServers((prev) =>
+      prev.map((s) => ({
+        ...s,
+        channels: s.channels.map((c) => (c.id === updated.id ? updated : c)),
+      })),
+    )
+
   const handleSetChannelStatus = async (channel: Channel, status: string) => {
     try {
-      const updated = await api.setChannelStatus(channel.id, status)
-      setServers((prev) =>
-        prev.map((s) => ({
-          ...s,
-          channels: s.channels.map((c) => (c.id === updated.id ? updated : c)),
-        })),
-      )
+      applyChannelUpdate(await api.setChannelStatus(channel.id, status))
     } catch (e) {
       alert('Не удалось установить статус канала: ' + (e as Error).message)
+    }
+  }
+
+  const handleSetChannelSlowmode = async (channel: Channel, seconds: number) => {
+    try {
+      applyChannelUpdate(await api.setChannelSlowmode(channel.id, seconds))
+    } catch (e) {
+      alert('Не удалось изменить медленный режим: ' + (e as Error).message)
+    }
+  }
+
+  const handleSetChannelPrivacy = async (
+    channel: Channel,
+    isPrivate: boolean,
+    allowedRoleIds: number[],
+  ) => {
+    try {
+      applyChannelUpdate(
+        await api.setChannelPrivacy(channel.id, isPrivate, allowedRoleIds),
+      )
+    } catch (e) {
+      alert('Не удалось изменить приватность канала: ' + (e as Error).message)
     }
   }
 
@@ -512,5 +551,7 @@ export function useServerData(userRef: RefObject<Me | null>) {
     handleMuteServer, handleUnmuteServer, handleSetNotificationLevel,
     handleToggleIgnoreAtHere, handleToggleSuppressRoleMentions, handleLeaveServer,
     handleCreateChannel, handleTogglePinChannel, handleCopyChannelLink, handleSetChannelStatus,
+    handleSetChannelSlowmode, handleSetChannelPrivacy,
+    createChannelKind, setCreateChannelKind, handleCreateChannelSubmit,
   }
 }

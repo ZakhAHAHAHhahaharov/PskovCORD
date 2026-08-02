@@ -5696,6 +5696,25 @@ button.settings-row-clickable:hover .settings-row-label {
 .srv-toggle-label {
   font-size: calc(14px * var(--font-scale, 1));
   color: var(--text-normal);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+/* Пометка «скоро» у прав, под которые ещё нет самой фичи (см. backend
+   chat.roles.UPCOMING_PERMISSIONS). Переключатель рабочий и сохраняется —
+   бейдж лишь честно говорит, что пока он ни на что не влияет. */
+.srv-toggle-badge {
+  font-size: calc(10px * var(--font-scale, 1));
+  line-height: 1;
+  padding: 3px 6px;
+  border-radius: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  background: var(--background-modifier-selected, rgba(127, 127, 127, 0.18));
+  white-space: nowrap;
 }
 
 .srv-toggle-hint {
@@ -7267,6 +7286,130 @@ button.settings-row-clickable:hover .settings-row-label {
   margin-top: 6px;
 }
 
+/* Пресеты медленного режима — сетка кнопок вместо выпадающего списка:
+   ступеней девять, и попасть в нужную одним кликом быстрее, чем открывать
+   select ради того же выбора. */
+.channel-menu-slowmode {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.channel-menu-slowmode-item {
+  width: 100%;
+  justify-content: center;
+}
+
+.channel-menu-slowmode-item.active {
+  background: var(--brand);
+  color: #fff;
+}
+
+/* Значки медленного режима/приватности в строке текстового канала. Первый
+   отжимается вправо, остальные встают рядом. */
+.channel-badge-icon {
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+
+.channel-badge-icon:first-of-type {
+  margin-left: auto;
+}
+
+.channel-menu-hint {
+  margin-top: 6px;
+  font-size: calc(12px * var(--font-scale, 1));
+  color: var(--text-muted);
+}
+
+.channel-menu-roles {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 4px;
+  max-height: 160px;
+  overflow-y: auto;
+}
+
+/* ---- модалка создания канала ---- */
+.create-channel-name {
+  position: relative;
+}
+
+.create-channel-name .field-input {
+  padding-left: 30px;
+}
+
+.create-channel-name-icon {
+  position: absolute;
+  left: 9px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  color: var(--text-muted);
+  pointer-events: none;
+}
+
+.create-channel-option {
+  margin-top: 16px;
+}
+
+.create-channel-option-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.create-channel-option-label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: calc(14px * var(--font-scale, 1));
+  color: var(--text-normal);
+}
+
+.create-channel-option-hint {
+  margin-top: 4px;
+  font-size: calc(12px * var(--font-scale, 1));
+  color: var(--text-muted);
+}
+
+.create-channel-slider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.create-channel-slider input[type='range'] {
+  flex: 1;
+}
+
+/* Ширина под самое длинное значение («21600» → «6 ч»), чтобы ползунок не
+   дёргался туда-сюда при смене подписи. */
+.create-channel-slider-value {
+  min-width: 52px;
+  text-align: right;
+  font-size: calc(13px * var(--font-scale, 1));
+  color: var(--text-normal);
+  font-variant-numeric: tabular-nums;
+}
+
+/* «Отмена» и «Создать канал» — в один ряд, а не столбиком, как одиночная
+   кнопка в остальных модалках. */
+.create-channel-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 20px;
+}
+
+.create-channel-actions button {
+  flex: 1;
+  margin: 0;
+}
+
 /* ---- настройки конфиденциальности сервера ---- */
 .privacy-modal {
   position: relative;
@@ -7890,6 +8033,182 @@ button.settings-row-clickable:hover .settings-row-label {
      (200px+1fr не оставлял бы редактору места на узком экране) ---- */
   .srv-roles {
     grid-template-columns: 1fr;
+  }
+}
+
+/* ---- кнопка «сообщить о проблеме» и её форма ---- */
+
+/* z-index 80 — НИЖЕ модального оверлея (100) намеренно: открытый диалог
+   накрывает кнопку своим затемнением сам, и не нужно отслеживать каждый
+   попап/лайтбокс по отдельности, чтобы её прятать. */
+/* Виджет обращения в поддержку, как в магазинах: сплошной акцентный круг с
+   тенью, видимый всегда. Прошлый вариант — приглушённый серый кружок на
+   45% непрозрачности — прятался на сером фоне настолько, что кнопку
+   приходилось искать. Заметность здесь важнее сдержанности: кнопкой,
+   которую не нашли, не воспользуются вовсе.
+
+   Тень, а не рамка: она отрывает кнопку от полотна приложения и на любом
+   фоне читается одинаково, тогда как рамка тонет в тёмной теме. */
+.bug-report-fab {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  z-index: 80;
+  height: 52px;
+  display: flex;
+  align-items: center;
+  gap: 0;
+  padding: 0 16px;
+  border: none;
+  border-radius: 26px;
+  background: var(--blurple);
+  color: #fff;
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35), 0 1px 3px rgba(0, 0, 0, 0.25);
+  transition: background 0.15s, box-shadow 0.15s, transform 0.15s, gap 0.18s;
+}
+
+.bug-report-fab:hover,
+.bug-report-fab:focus-visible {
+  background: var(--blurple-hover);
+  transform: translateY(-2px);
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.4), 0 2px 5px rgba(0, 0, 0, 0.3);
+  gap: 10px;
+}
+
+/* Подпись раскрывается по наведению. Круг в покое занимает ровно столько,
+   сколько нужно иконке, — постоянная плашка «Сообщить о проблеме» висела бы
+   поперёк интерфейса всё время. Схлопнута шириной, а не display:none, чтобы
+   текст оставался в разметке для программ чтения с экрана. */
+.bug-report-fab-label {
+  max-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1;
+  transition: max-width 0.18s ease;
+}
+
+.bug-report-fab:hover .bug-report-fab-label,
+.bug-report-fab:focus-visible .bug-report-fab-label {
+  max-width: 220px;
+}
+
+/* Просьба убрать анимации — про движение, а не про раскладку: подпись
+   по-прежнему свёрнута и раскрывается по наведению, просто мгновенно.
+   Раньше здесь она разворачивалась НАСОВСЕМ, и на узком экране кнопка
+   превращалась в плашку поперёк переписки — мобильное правило ниже гасит
+   только :hover и такую растяжку не поймало бы. */
+@media (prefers-reduced-motion: reduce) {
+  .bug-report-fab,
+  .bug-report-fab-label {
+    transition: none;
+  }
+
+  .bug-report-fab:hover {
+    transform: none;
+  }
+}
+
+.bug-report-modal {
+  width: min(520px, 100%);
+  text-align: left;
+}
+
+.bug-report-label {
+  display: block;
+  margin: 14px 0 6px;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  color: var(--text-muted);
+}
+
+.bug-report-optional {
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--text-faint);
+}
+
+.bug-report-input {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--input-border);
+  border-radius: 6px;
+  background: var(--input-bg);
+  color: var(--text-normal);
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 1.4;
+  resize: vertical;
+}
+
+.bug-report-input:focus {
+  outline: none;
+  border-color: var(--blurple);
+}
+
+.bug-report-hint {
+  margin: 14px 0 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-faint);
+}
+
+.bug-report-error {
+  margin: 12px 0 0;
+  font-size: 13px;
+  color: var(--red);
+}
+
+.bug-report-done {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 0 4px;
+  text-align: center;
+  color: var(--green);
+}
+
+.bug-report-done .modal-title {
+  margin: 0;
+  color: var(--text-normal);
+}
+
+.bug-report-done .bug-report-hint {
+  margin: 0 0 8px;
+}
+
+@media (max-width: 768px) {
+  /* Выше поля ввода сообщения: на мобильной раскладке композер занимает всю
+     нижнюю полосу. Отступ считается от его НАСТОЯЩЕЙ высоты (переменную
+     ведёт BugReportButton), а не фиксированный: композер растёт при наборе,
+     и с постоянным отступом кнопка уезжала под него уже на третьей строке —
+     проверено замером, наезд был 40px. 32px — собственный нижний отступ
+     композера (24, тоже замерен: с 24 кнопка вставала вплотную, зазор 0)
+     плюс 8px просвета. */
+  .bug-report-fab {
+    right: 14px;
+    bottom: calc(var(--composer-height, 0px) + 32px);
+    height: 46px;
+    padding: 0 13px;
+  }
+
+  /* На тач-экране подпись не раскрываем вовсе: :hover там «залипает» после
+     тапа, и кнопка осталась бы растянутой поперёк переписки. Иконки на
+     сплошном акцентном круге достаточно — смысл несёт aria-label. */
+  .bug-report-fab:hover .bug-report-fab-label,
+  .bug-report-fab:focus-visible .bug-report-fab-label {
+    max-width: 0;
+  }
+
+  .bug-report-fab:hover {
+    gap: 0;
+    transform: none;
   }
 }
 
