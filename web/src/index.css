@@ -6398,12 +6398,108 @@ button.settings-row-clickable:hover .settings-row-label {
   outline: none;
 }
 
+/* Лента вкладок пикера: ровно пополам — слева стандартные категории,
+   справа наборы кастомных эмодзи. min-width: 0 обязателен, иначе flex-дети
+   раздуваются под содержимое и половины перестают быть половинами. */
 .emoji-picker-tabs {
   display: flex;
-  gap: 2px;
+  align-items: center;
+  gap: 4px;
   padding: 4px 6px;
   border-bottom: 1px solid var(--border-color);
+}
+
+.emoji-picker-tabs > .emoji-strip,
+.emoji-picker-tabs > .emoji-tabs-custom {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.emoji-tabs-custom {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.emoji-tabs-custom > .emoji-strip {
+  flex: 1;
+  min-width: 0;
+}
+
+.emoji-tabs-divider {
+  flex: 0 0 1px;
+  align-self: stretch;
+  margin: 2px 2px;
+  background: var(--border-color);
+}
+
+.emoji-tabs-hint {
+  flex-shrink: 0;
+  padding: 0 6px;
+  font-size: calc(11px * var(--font-scale, 1));
+  color: var(--text-muted);
+  white-space: nowrap;
+  line-height: 30px;
+}
+
+/* ---- прокручиваемая лента (EmojiTabStrip) ---- */
+.emoji-strip {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.emoji-strip-track {
+  display: flex;
+  gap: 2px;
   overflow-x: auto;
+  scrollbar-width: none;
+  /* Полоса прокрутки скрыта намеренно: листают стрелками и перетаскиванием
+     (см. EmojiTabStrip), а 8 пикселей скроллбара под рядом 30-пиксельных
+     иконок съедали бы четверть его высоты. */
+  scroll-behavior: auto;
+  cursor: grab;
+  /* Иначе перетаскивание ленты выделяло бы подписи вкладок и утаскивало
+     значок сервера как картинку. */
+  user-select: none;
+}
+
+.emoji-strip-track::-webkit-scrollbar {
+  display: none;
+}
+
+.emoji-strip-track:active {
+  cursor: grabbing;
+}
+
+.emoji-strip-arrow {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  width: 18px;
+  color: var(--text-normal);
+  /* Градиент, а не сплошная заливка: под стрелкой видно, что лента там
+     продолжается, — это и подсказывает, что её можно листать. */
+  background: linear-gradient(to right, var(--modal-bg) 55%, transparent);
+}
+
+.emoji-strip-arrow.left {
+  left: 0;
+  justify-content: flex-start;
+}
+
+.emoji-strip-arrow.right {
+  right: 0;
+  justify-content: flex-end;
+  background: linear-gradient(to left, var(--modal-bg) 55%, transparent);
+}
+
+.emoji-strip-arrow:hover {
+  color: var(--text-link, #00a8fc);
 }
 
 .emoji-tab {
@@ -6419,6 +6515,337 @@ button.settings-row-clickable:hover .settings-row-label {
 .emoji-tab.active {
   opacity: 1;
   background: var(--channel-hover);
+}
+
+.emoji-tab-add {
+  opacity: 0.8;
+  background: var(--channel-hover);
+}
+
+.emoji-tab-pack {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px;
+}
+
+.emoji-tab-pack img {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+.emoji-tab-initial {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  background: var(--channel-hover);
+  font-size: calc(12px * var(--font-scale, 1));
+  font-weight: 600;
+}
+
+/* ---- кастомный эмодзи (CustomEmojiImage) ---- */
+/* Анимированный кадр лежит ПОВЕРХ статичного, поэтому контейнер
+   position: relative, а сам он — absolute на всю его площадь. Подменять src
+   нельзя: на время загрузки гифки на месте эмодзи была бы дырка. */
+.custom-emoji {
+  position: relative;
+  display: inline-block;
+  vertical-align: -0.25em;
+  line-height: 0;
+}
+
+.custom-emoji img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.custom-emoji-anim {
+  position: absolute;
+  inset: 0;
+  transition: opacity 0.08s linear;
+}
+
+.custom-emoji-inline {
+  width: 22px;
+  height: 22px;
+}
+
+/* Сообщение из одних эмодзи — крупно, как в Discord (см. MessageList,
+   JUMBO_EMOJI_LIMIT). */
+.custom-emoji-jumbo {
+  width: 44px;
+  height: 44px;
+  vertical-align: middle;
+}
+
+.custom-emoji.reaction-custom {
+  width: 16px;
+  height: 16px;
+}
+
+.custom-emoji-missing {
+  opacity: 0.5;
+}
+
+/* ---- редактор эмодзи (EmojiEditorModal) ---- */
+/* Поверх пикера (z-index 900), а не под ним, как обычные модалки: редактор
+   открывается ИЗ пикера и панель остаётся видна под ним. */
+.emoji-editor-overlay {
+  z-index: 950;
+}
+
+.emoji-editor {
+  width: min(560px, 94vw);
+  max-width: none;
+}
+
+.emoji-editor-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 24px 8px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: calc(13px * var(--font-scale, 1));
+}
+
+.emoji-editor-body {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.emoji-editor-stage {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+/* Шахматка под холстом: у эмодзи почти всегда прозрачный фон, и без неё не
+   видно, где заканчивается картинка, а где начинается пустота. */
+.emoji-editor-canvas {
+  width: 200px;
+  height: 200px;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  cursor: grab;
+  background-color: var(--input-bg);
+  background-image:
+    linear-gradient(45deg, rgba(128, 128, 128, 0.18) 25%, transparent 25%),
+    linear-gradient(-45deg, rgba(128, 128, 128, 0.18) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, rgba(128, 128, 128, 0.18) 75%),
+    linear-gradient(-45deg, transparent 75%, rgba(128, 128, 128, 0.18) 75%);
+  background-size: 16px 16px;
+  background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+}
+
+.emoji-editor-canvas:active {
+  cursor: grabbing;
+}
+
+.emoji-editor-previews {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+.emoji-editor-preview-box {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: calc(11px * var(--font-scale, 1));
+  color: var(--text-muted);
+}
+
+.emoji-editor-side {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.emoji-editor-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: calc(12px * var(--font-scale, 1));
+  color: var(--text-muted);
+}
+
+.emoji-editor-field input,
+.emoji-editor-field select {
+  background: var(--input-bg);
+  border: 1px solid var(--input-border);
+  border-radius: 4px;
+  padding: 6px 8px;
+  color: var(--text-normal);
+  font-size: calc(13px * var(--font-scale, 1));
+  outline: none;
+}
+
+.emoji-editor-slider {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: calc(11px * var(--font-scale, 1));
+  color: var(--text-muted);
+}
+
+.emoji-editor-slider > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 88px;
+}
+
+.emoji-editor-slider input {
+  flex: 1;
+  min-width: 0;
+}
+
+.emoji-editor-layers {
+  border-top: 1px solid var(--border-color);
+  padding-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.emoji-editor-layers-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: calc(12px * var(--font-scale, 1));
+  color: var(--text-muted);
+}
+
+.emoji-editor-add {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
+  background: var(--channel-hover);
+  color: var(--text-normal);
+}
+
+.emoji-editor-chooser {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--input-bg);
+}
+
+.emoji-editor-chooser input {
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--border-color);
+  padding: 4px 2px;
+  color: var(--text-normal);
+  outline: none;
+  font-size: calc(12px * var(--font-scale, 1));
+}
+
+.emoji-editor-chooser-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(28px, 1fr));
+  gap: 2px;
+  max-height: 130px;
+  overflow-y: auto;
+}
+
+.emoji-editor-chooser-grid button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 4px;
+  font-size: calc(18px * var(--font-scale, 1));
+  line-height: 1;
+}
+
+.emoji-editor-chooser-grid button:hover {
+  background: var(--channel-hover);
+}
+
+.emoji-editor-layer-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.emoji-editor-layer {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 4px;
+  border: 1px solid transparent;
+  background: var(--input-bg);
+  font-size: calc(16px * var(--font-scale, 1));
+  line-height: 1;
+}
+
+.emoji-editor-layer.active {
+  border-color: var(--text-link, #00a8fc);
+}
+
+.emoji-editor-layer-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.emoji-editor-remove,
+.emoji-editor-replace {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  align-self: flex-start;
+  padding: 4px 8px;
+  border-radius: 4px;
+  background: var(--channel-hover);
+  color: var(--text-normal);
+  font-size: calc(12px * var(--font-scale, 1));
+}
+
+.emoji-editor-hint,
+.emoji-editor-warn {
+  margin: 0;
+  font-size: calc(11px * var(--font-scale, 1));
+  line-height: 1.4;
+  color: var(--text-muted);
+}
+
+.emoji-editor-warn {
+  color: #faa61a;
+}
+
+@media (max-width: 560px) {
+  .emoji-editor-body {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .emoji-editor-stage {
+    align-items: center;
+  }
 }
 
 .emoji-picker-scroll {
@@ -6451,6 +6878,12 @@ button.settings-row-clickable:hover .settings-row-label {
 
 .emoji-cell:hover {
   background: var(--channel-hover);
+}
+
+.emoji-cell-custom {
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .emoji-empty {
@@ -6645,6 +7078,42 @@ button.settings-row-clickable:hover .settings-row-label {
 
 .btn-danger:hover {
   background: #c8393c;
+}
+
+/* Иконочный вариант — для строк списка, где сплошная красная кнопка
+   перетягивала бы на себя всё внимание (вкладка «Эмодзи»). */
+.btn-danger-soft {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 4px;
+  color: var(--text-muted);
+}
+
+.btn-danger-soft:hover {
+  background: var(--channel-hover);
+  color: var(--red);
+}
+
+.srv-emoji-name {
+  text-align: left;
+  color: var(--text-normal);
+}
+
+.srv-emoji-name:hover {
+  text-decoration: underline;
+}
+
+.srv-emoji-name-input {
+  background: var(--input-bg);
+  border: 1px solid var(--input-border);
+  border-radius: 4px;
+  padding: 3px 6px;
+  color: var(--text-normal);
+  font-size: calc(13px * var(--font-scale, 1));
+  outline: none;
 }
 
 /* ---- поиск серверов ---- */

@@ -2,6 +2,7 @@ import { RefObject, useCallback, useEffect, useMemo, useRef, useState } from 're
 import {
   api, Channel, Me, Member, NotificationLevel, Role, Server, ServerMemberSettings,
 } from '../api'
+import { customEmojiStore, loadMyEmoji } from '../customEmoji'
 import { isMentioned } from '../mentions'
 import { presenceStore } from '../presence'
 
@@ -27,6 +28,28 @@ export function useServerData(userRef: RefObject<Me | null>) {
   const fetchedServerDataIds = useRef<Set<number>>(new Set())
   const serversRef = useRef<Server[]>([])
   serversRef.current = servers
+
+  // --- кастомные эмодзи ----------------------------------------------------
+  // Наборы грузятся один раз на сессию: они нужны не только пикеру, но и
+  // отрисовке уже пришедших сообщений, то есть практически сразу и везде
+  // (см. customEmoji.ts).
+  useEffect(() => {
+    void loadMyEmoji()
+  }, [])
+
+  // Каталог серверов для пикера — порядок вкладок, значки и право добавлять.
+  // Отдельно от самих эмодзи: /api/emoji не знает про сервер БЕЗ эмодзи, а
+  // именно в такой чаще всего и добавляют первый.
+  useEffect(() => {
+    customEmojiStore.setCatalog(
+      servers.map((s) => ({
+        id: s.id,
+        name: s.name,
+        icon: s.icon || '',
+        canAdd: !!s.my_permissions?.create_expressions,
+      })),
+    )
+  }, [servers])
 
   // Непрочитанные текстовые каналы — тот же приём, что и unreadConversationIds
   // в домашнем домене: чисто клиентское, эфемерное состояние (сбрасывается

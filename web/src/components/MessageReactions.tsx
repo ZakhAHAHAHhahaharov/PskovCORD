@@ -1,6 +1,8 @@
+import { useState } from 'react'
 import { SmilePlus } from 'lucide-react'
 import { MessageReaction } from '../api'
-import { customEmojiUrl, parseEmojiKey } from '../emoji'
+import { parseEmojiKey } from '../emoji'
+import CustomEmojiImage from './CustomEmojiImage'
 
 /**
  * Лента реакций под сообщением.
@@ -17,16 +19,22 @@ import { customEmojiUrl, parseEmojiKey } from '../emoji'
 export const MAX_REACTIONS = 20
 
 /** Один эмодзи: unicode-символ или картинка кастомного эмодзи сервера.
- * Второй ветки пока не бывает — см. emoji.ts, там же почему она есть. */
-function EmojiGlyph({ emoji }: { emoji: string }) {
+ *
+ * playing прокидывается снаружи, а не берётся из наведения: в ленте реакций
+ * анимация запускается НАЖАТИЕМ, а не ховером — мышь проходит по пилюлям
+ * транзитом, и к чужой реакции подводят, чтобы прочитать подсказку «кто
+ * поставил» (см. CustomEmojiImage). */
+function EmojiGlyph({ emoji, playing }: { emoji: string; playing: boolean }) {
   const parsed = parseEmojiKey(emoji)
   if (parsed.kind === 'custom') {
-    const url = customEmojiUrl(parsed.value)
-    if (url) return <img className="reaction-custom" src={url} alt={emoji} />
-    // Кастомный эмодзи, картинку которого не достать (удалили с сервера) —
-    // показываем заглушкой, а не пустотой: счётчик рядом иначе выглядит
-    // сломанным.
-    return <span className="reaction-missing">□</span>
+    return (
+      <CustomEmojiImage
+        id={Number(parsed.value)}
+        className="reaction-custom"
+        play="none"
+        playing={playing}
+      />
+    )
   }
   return <span>{parsed.value}</span>
 }
@@ -68,7 +76,21 @@ export default function MessageReactions({
   /** Кнопка «+» — открыть пикер; получает якорь для позиционирования. */
   onOpenPicker: (rect: DOMRect) => void
 }) {
+  // Ключи реакций, которые сейчас «проигрываются»: нажатие по пилюле не
+  // только ставит/снимает реакцию, но и запускает анимацию кастомного эмодзи
+  // (единственный способ её увидеть — см. EmojiGlyph). Множество, а не один
+  // ключ: нажали на две подряд — играют обе.
+  const [playing, setPlaying] = useState<Set<string>>(new Set())
+
   if (reactions.length === 0) return null
+
+  const togglePlaying = (emoji: string) => {
+    setPlaying((prev) => {
+      const next = new Set(prev)
+      if (!next.delete(emoji)) next.add(emoji)
+      return next
+    })
+  }
 
   return (
     <div className="message-reactions">
@@ -80,9 +102,12 @@ export default function MessageReactions({
             type="button"
             className={`reaction-pill hover-tip ${mine ? 'mine' : ''}`}
             data-tooltip={tooltip(reaction, currentUserId, resolveUsername)}
-            onClick={() => onToggle(reaction.emoji, mine)}
+            onClick={() => {
+              togglePlaying(reaction.emoji)
+              onToggle(reaction.emoji, mine)
+            }}
           >
-            <EmojiGlyph emoji={reaction.emoji} />
+            <EmojiGlyph emoji={reaction.emoji} playing={playing.has(reaction.emoji)} />
             <span className="reaction-count">{reaction.count}</span>
           </button>
         )

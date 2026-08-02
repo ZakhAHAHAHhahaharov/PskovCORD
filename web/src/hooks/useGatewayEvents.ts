@@ -4,6 +4,7 @@ import {
 } from '../api'
 import type { VoiceState } from '../components/AppShell'
 import { invalidateAvatarAnimation } from '../avatarAnim'
+import { customEmojiStore } from '../customEmoji'
 import { useGateway } from '../gateway'
 import { outbox } from '../outbox'
 import { presenceStore } from '../presence'
@@ -379,6 +380,12 @@ export function useGatewayEvents(params: UseGatewayEventsParams) {
         ),
       )
     })
+    // Набор эмодзи сервера изменился (кто-то добавил, переименовал или
+    // удалил). Приходит целиком, а не «что именно поменялось» — см. backend
+    // _broadcast_emoji_update, там же почему.
+    const offServerEmoji = gateway.on('server_emoji', (d) => {
+      customEmojiStore.setServerEmoji(d.server_id, d.emoji)
+    })
     // Нашу заявку на вступление одобрили — сервер появляется в списке сразу.
     const offJoinApproved = gateway.on('server_join_approved', (d) => {
       setServers((prev) => (prev.some((s) => s.id === d.server.id) ? prev : [...prev, d.server]))
@@ -682,6 +689,7 @@ export function useGatewayEvents(params: UseGatewayEventsParams) {
       offChannelUpdate()
       offMemberNickname()
       offServerUpdate()
+      offServerEmoji()
       offJoinApproved()
       offCallState()
       offDmMsg()

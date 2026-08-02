@@ -54,6 +54,27 @@ server {
         add_header X-Content-Type-Options "nosniff" always;
     }
 
+    # Кастомные эмодзи серверов (chat.models.ServerEmoji) — тоже ОТДЕЛЬНЫЙ
+    # location до общего /media/ и по той же причине, что и вложения выше:
+    # файлы сюда кладут пользователи.
+    #
+    # Content-Disposition здесь НЕТ, только nosniff. Эмодзи существует ради
+    # того, чтобы его встраивали <img>, а «скачать вместо открыть» на это не
+    # влияет — но и пользы не приносит: по ссылке на эмодзи не переходят.
+    # nosniff же обязателен: он и запрещает браузеру «опознать» документ в
+    # файле, отданном как картинка.
+    #
+    # Первый рубеж, как и у вложений, на бэкенде и он же главный: формат
+    # проверяется по содержимому (только PNG/GIF/WEBP, chat/uploads.py
+    # sniff_emoji), а ИМЯ файла на диске собирает сам сервер из опознанного
+    # типа — клиентское не используется вовсе (chat/models.py
+    # emoji_upload_to). Без этого достаточно было бы прислать валидный GIF под
+    # именем "evil.html", чтобы nginx отдал его как text/html.
+    location /media/emoji/ {
+        alias /opt/pskovcord/deploy/media/emoji/;
+        add_header X-Content-Type-Options "nosniff" always;
+    }
+
     # Прочие пользовательские загрузки (favicon-наборы, см. core.models.Favicon) —
     # тем же приёмом, что и /static/: bind-mount ./media из
     # docker-compose.prod.yml, отдаём напрямую, минуя Django.

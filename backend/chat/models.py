@@ -108,9 +108,10 @@ class Role(models.Model):
     create_invites = models.BooleanField(default=True)
 
     # --- средства выражения эмоций (кастомные эмодзи/стикеры/звуки) ---------
-    # Самих эмодзи/стикеров/звуков в проекте ещё нет — права заведены заранее,
-    # помечены в chat.roles.UPCOMING_PERMISSIONS и в редакторе показываются с
-    # пометкой «скоро», чтобы их нельзя было спутать с работающими.
+    # Эмодзи (ServerEmoji) уже настоящие: create_expressions пускает загружать
+    # новые, manage_expressions — переименовывать и удалять чужие. Стикеров и
+    # звуков ещё нет, поэтому use_external_stickers ниже остаётся в
+    # chat.roles.UPCOMING_PERMISSIONS с пометкой «скоро».
     create_expressions = models.BooleanField(default=False)
     manage_expressions = models.BooleanField(default=False)
 
@@ -127,8 +128,12 @@ class Role(models.Model):
     # Писать в канал с медленным режимом без ожидания (Channel.slowmode_seconds).
     bypass_slowmode = models.BooleanField(default=False)
     mention_everyone = models.BooleanField(default=False)
-    # См. create_expressions выше — те же «скоро».
+    # Ставить в каналах ЭТОГО сервера эмодзи ДРУГИХ серверов. Эмодзи самого
+    # сервера доступны всем его участникам всегда и этим правом не режутся —
+    # режется только «принёс со стороны» (см. chat.emoji.usable_ids).
     use_external_emojis = models.BooleanField(default=True)
+    # Стикеров в проекте ещё нет — право заведено заранее, см. «скоро» в
+    # chat.roles.UPCOMING_PERMISSIONS.
     use_external_stickers = models.BooleanField(default=True)
 
     # --- права голосового канала ---
@@ -799,6 +804,115 @@ class Reaction(models.Model):
 
     def __str__(self) -> str:
         return f"{self.user} {self.emoji}"
+
+
+EMOJI_SUBDIR = "emoji"
+
+# Потолок на один кастомный эмодзи. Жёстче вложений на два порядка и по другой
+# причине: эмодзи не открывают по клику, его рисуют ДЕСЯТКАМИ разом — в ленте
+# реакций, в сетке пикера, в каждом сообщении. Мегабайтная гифка, размноженная
+# по экрану, кладёт не диск, а сам клиент.
+MAX_EMOJI_BYTES = 256 * 1024
+# Сколько эмодзи влезает на один сервер. Ограничение живёт здесь, а не в
+# настройках: это защита от того, чтобы ответ /api/emoji (он грузится целиком
+# при старте клиента) не рос без предела.
+MAX_EMOJI_PER_SERVER = 250
+# Имя эмодзи — то, что стоит между двоеточиями в токене <:name:id> (см.
+# chat.emoji). Латиница/цифры/подчёркивание, как в Discord: имя попадает в
+# текст сообщения, и разбирать его регуляркой проще, когда алфавит узкий.
+MAX_EMOJI_NAME_LEN = 32
+MIN_EMOJI_NAME_LEN = 2
+
+# Расширения, которые вообще могут получиться у файла эмодзи, — по одному на
+# формат из chat.uploads.EMOJI_IMAGE_FORMATS. Список нужен именно здесь: см.
+# emoji_upload_to, почему расширение решает вопрос безопасности.
+EMOJI_EXTENSIONS = {"png", "gif", "webp"}
+
+
+def emoji_upload_to(instance, filename: str) -> str:
+    """MEDIA_ROOT/emoji/<токен>/<emoji|static>.<png|gif|webp>.
+
+    Каталог на эмодзи по тем же причинам, что и у вложений (см.
+    attachment_upload_to): без коллизий, с неугадываемым путём. Токен —
+    отдельное поле, а не первичный ключ: ключ реакции выглядит как
+    "custom:<id>" и должен оставаться коротким числом (см. chat.emoji), а
+    неугадываемость нужна именно ПУТИ — /media/ отдаёт nginx без проверки прав.
+
+    Имя файла, в отличие от вложений, НЕ человеческое и НЕ приходит от
+    клиента — оно собирается здесь целиком. Причина ровно та же, по которой
+    chat.uploads выбрасывает тип, выведенный из расширения: под /media/emoji/
+    файлы отдаёт nginx НАПРЯМУЮ, и Content-Type он выбирает по расширению. Имя
+    вроде "evil.html", протащенное мимо клиента (сам файл при этом остаётся
+    валидным GIF — полиглоты существуют), отдавалось бы как документ на нашем
+    же origin, где в localStorage лежит JWT. Показывать исходное имя эмодзи
+    негде — у него есть собственное поле name, — так что терять тут нечего.
+    """
+    stem = "static" if filename.startswith("static") else "emoji"
+    ext = filename.rpartition(".")[2].lower()
+    if ext not in EMOJI_EXTENSIONS:
+        ext = "png"
+    return f"{EMOJI_SUBDIR}/{instance.file_token.hex}/{stem}.{ext}"
+
+
+class ServerEmoji(models.Model):
+    """Кастомный эмодзи сервера.
+
+    Целочисленный первичный ключ, а не UUID, — сознательно: id уезжает в ключ
+    реакции ("custom:42") и в токен внутри текста сообщения ("<:name:42>"),
+    то есть хранится в БД по строке на каждую реакцию и на каждое упоминание.
+    UUID раздул бы и то, и другое ради неугадываемости, которая здесь не
+    нужна: эмодзи и так виден всем участникам сервера.
+
+    animated + static_file — ради того, чтобы анимация НЕ игралась сама по
+    себе. Анимированный эмодзи показывается первым кадром (static_file,
+    статичный PNG), а сам GIF/WEBP клиент подгружает, только когда на эмодзи
+    наводят или когда нажимают на реакцию с ним. Кадр вырезает клиент при
+    загрузке (см. web/src/gif.ts — там уже есть покадровый разбор для
+    анимированных аватаров): у бэкенда нет ни ffmpeg, ни причин его заводить.
+    """
+
+    server = models.ForeignKey(
+        Server, on_delete=models.CASCADE, related_name="emoji")
+    name = models.CharField(max_length=MAX_EMOJI_NAME_LEN)
+    # Неугадываемая часть пути в /media — см. emoji_upload_to.
+    file_token = models.UUIDField(default=uuid.uuid4, editable=False)
+    file = models.FileField(upload_to=emoji_upload_to, max_length=300)
+    # Первый кадр анимированного эмодзи. У статичных пуст — там показывать
+    # по наведению нечего, file и есть статичная картинка.
+    static_file = models.FileField(
+        upload_to=emoji_upload_to, max_length=300, blank=True)
+    animated = models.BooleanField(default=False)
+    content_type = models.CharField(max_length=100)
+    size = models.PositiveIntegerField()
+    # Автор остаётся в истории после ухода с сервера — SET_NULL, а не CASCADE:
+    # удалять чужие эмодзи вместе с аккаунтом значило бы ломать чужие старые
+    # сообщения, где они стоят.
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True,
+        on_delete=models.SET_NULL, related_name="created_emoji")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["name", "id"]
+        constraints = [
+            # Имя уникально в пределах сервера: в тексте эмодзи опознаётся по
+            # id, но человек набирает ":имя:" и должен получать ровно один.
+            models.UniqueConstraint(
+                fields=["server", "name"], name="unique_server_emoji_name"),
+        ]
+
+    def __str__(self) -> str:
+        return f":{self.name}: @ {self.server_id}"
+
+
+@receiver(post_delete, sender=ServerEmoji)
+def _cleanup_emoji_files(sender, instance, **kwargs):
+    """Тот же приём, что и у вложений (см. _cleanup_attachment_file): сигнал, а
+    не override delete(), — иначе удаление сервера каскадом унесло бы строки,
+    оставив файлы лежать навсегда."""
+    for field in (instance.file, instance.static_file):
+        if field:
+            field.delete(save=False)
 
 
 class ProfileNote(models.Model):

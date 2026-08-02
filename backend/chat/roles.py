@@ -36,9 +36,10 @@ PERMISSION_FIELDS = [
      "general", "Позволяет менять никнейм других пользователей."),
 
     ("create_expressions", "Создавать средства выражения эмоций",
-     "expressions", "Позволяет добавлять пользовательские эмодзи, стикеры и звуки."),
+     "expressions", "Позволяет добавлять на сервер свои эмодзи."),
     ("manage_expressions", "Управление выражениями",
-     "expressions", "Позволяет редактировать и удалять пользовательские реакции."),
+     "expressions", "Позволяет переименовывать и удалять эмодзи сервера — "
+                    "в том числе загруженные другими."),
 
     ("send_messages", "Отправка сообщений", "text", ""),
     ("attach_files", "Прикреплять файлы",
@@ -86,9 +87,11 @@ PERMISSION_GROUPS = [
 # сохраняется в БД, но кодом нигде не проверяется — в UI помечается «скоро»
 # (см. PERMISSION_FIELDS выше). Как только фича появится — убрать отсюда.
 UPCOMING_PERMISSIONS = {
-    "create_expressions",
-    "manage_expressions",
-    "use_external_emojis",
+    # create_expressions / manage_expressions / use_external_emojis отсюда
+    # убраны: кастомные эмодзи появились (chat.models.ServerEmoji), и все три
+    # права теперь по-настоящему проверяются — в chat.views (загрузка,
+    # переименование, удаление) и в chat.emoji.usable_ids (использование).
+    # Стикеров и звуков всё ещё нет, поэтому это право остаётся «скоро».
     "use_external_stickers",
 }
 

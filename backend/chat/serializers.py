@@ -9,7 +9,8 @@ from . import presence, roles
 from .models import (
     Attachment, Channel, Conversation, ConversationMessage,
     ConversationParticipant, Membership,
-    Message, Role, Server, ServerBan, ServerInvite, ServerJoinRequest, dm_room,
+    Message, Role, Server, ServerBan, ServerEmoji, ServerInvite,
+    ServerJoinRequest, dm_room,
 )
 
 # Значок сервера жмётся клиентом до 512x512 (ServerSettingsModal.ICON_SIZE) —
@@ -397,6 +398,37 @@ class AttachmentSerializer(serializers.ModelSerializer):
         рассылается по WebSocket (см. chat.consumers). Домен подставляет
         клиент: тот же base, что у API (см. web/src/api.ts mediaUrl).
         """
+        return obj.file.url if obj.file else ""
+
+
+class ServerEmojiSerializer(serializers.ModelSerializer):
+    """Кастомный эмодзи в том виде, в каком его получает клиент.
+
+    Два URL, а не один: static_url — это первый кадр анимированного эмодзи, и
+    именно он показывается по умолчанию. Сам url клиент подставляет, только
+    когда на эмодзи навели (или нажали на реакцию) — см. web/src/components/
+    CustomEmojiImage.tsx. У статичных эмодзи static_url совпадает с url, чтобы
+    у отрисовки был ровно один вход и ей не приходилось выбирать поле.
+    """
+
+    url = serializers.SerializerMethodField()
+    static_url = serializers.SerializerMethodField()
+    server_name = serializers.CharField(source="server.name", read_only=True)
+
+    class Meta:
+        model = ServerEmoji
+        fields = ["id", "name", "server", "server_name", "url", "static_url",
+                  "animated", "size", "created_by", "created_at"]
+        read_only_fields = fields
+
+    # Путь от корня, а не абсолютный URL — по той же причине, что у вложений
+    # (см. AttachmentSerializer.get_url): тот же объект уезжает по WebSocket.
+    def get_url(self, obj):
+        return obj.file.url if obj.file else ""
+
+    def get_static_url(self, obj):
+        if obj.animated and obj.static_file:
+            return obj.static_file.url
         return obj.file.url if obj.file else ""
 
 

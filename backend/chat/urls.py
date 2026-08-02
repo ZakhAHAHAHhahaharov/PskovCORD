@@ -9,6 +9,10 @@ urlpatterns = [
     # Загрузка вложения — отдельно от отправки сообщения, см. AttachmentUpload.
     path("attachments", views.AttachmentUpload.as_view(), name="attachment-upload"),
 
+    # Кастомные эмодзи. /api/emoji — все мои наборы разом (и ?ids= для
+    # метаданных чужих, см. MyEmoji); управление — внутри своего сервера.
+    path("emoji", views.MyEmoji.as_view(), name="my-emoji"),
+
     path("servers", views.ServerListCreate.as_view(), name="server-list"),
     path("servers/discover", views.ServerDiscover.as_view(), name="server-discover"),
     path("servers/<int:server_id>", views.ServerDetail.as_view(), name="server-detail"),
@@ -30,6 +34,11 @@ urlpatterns = [
          views.ServerMemberNickname.as_view(), name="server-member-nickname"),
     path("servers/<int:server_id>/channels",
          views.ChannelCreate.as_view(), name="channel-create"),
+
+    path("servers/<int:server_id>/emoji", views.ServerEmojiList.as_view(),
+         name="server-emoji"),
+    path("servers/<int:server_id>/emoji/<int:emoji_id>",
+         views.ServerEmojiDetail.as_view(), name="server-emoji-detail"),
 
     path("servers/<int:server_id>/roles", views.ServerRoles.as_view(),
          name="server-roles"),

@@ -18,12 +18,13 @@ from rest_framework.views import APIView
 from accounts.models import Friendship
 from accounts.serializers import UserSerializer
 
-from . import presence, roles, sfu, uploads
+from . import emoji as emoji_keys, presence, roles, sfu, uploads
 from .models import (
     Attachment, Channel, Conversation, ConversationMessage,
     ConversationParticipant, FriendNickname, Membership, Message, ProfileNote, Role, Server,
-    ServerBan, ServerInvite, ServerJoinRequest, UserRelationState,
-    MAX_ATTACHMENT_BYTES, _invite_code, dm_room,
+    ServerBan, ServerEmoji, ServerInvite, ServerJoinRequest, UserRelationState,
+    MAX_ATTACHMENT_BYTES, MAX_EMOJI_BYTES, MAX_EMOJI_PER_SERVER,
+    _invite_code, dm_room,
 )
 from .permissions import (
     are_friends, blocked_user_ids, can_dm, can_see_channel, visible_channels,
@@ -31,9 +32,10 @@ from .permissions import (
 from .serializers import (
     AttachmentSerializer, ChannelSerializer, ConversationMessageSerializer,
     ConversationSerializer, MembershipSettingsSerializer, MessageSerializer,
-    RoleSerializer, ServerBanSerializer, ServerInviteLinkSerializer,
-    ServerInviteSerializer, ServerJoinRequestSerializer, ServerSerializer,
-    ServerUpdateSerializer, membership_settings_payload,
+    RoleSerializer, ServerBanSerializer, ServerEmojiSerializer,
+    ServerInviteLinkSerializer, ServerInviteSerializer,
+    ServerJoinRequestSerializer, ServerSerializer, ServerUpdateSerializer,
+    membership_settings_payload,
 )
 
 User = get_user_model()
@@ -2019,6 +2021,195 @@ class VoiceCredentials(APIView):
             "sfu_token": token,
             "ttl": ttl,
         })
+
+
+def _broadcast_emoji_update(server):
+    """Разослать участникам сервера актуальный набор его эмодзи.
+
+    Целиком, а не «добавился такой-то»: набор небольшой (см.
+    MAX_EMOJI_PER_SERVER), а инкрементальные события пришлось бы согласовывать
+    с тем, что клиент мог пропустить их, пока был в оффлайне. Приводить всех к
+    одному состоянию дешевле, чем чинить рассинхрон — тот же приём, что у
+    ленты реакций (см. reactions_payload).
+    """
+    channel_layer = get_channel_layer()
+    async_to_sync(channel_layer.group_send)(
+        f"server_{server.id}", {"type": "broadcast", "payload": {
+            "op": "server_emoji",
+            "server_id": server.id,
+            "emoji": ServerEmojiSerializer(
+                server.emoji.all(), many=True).data,
+        }})
+
+
+def _validate_emoji_name(raw, server, exclude_id=None):
+    """(имя, None) либо (None, Response с ошибкой)."""
+    name = (raw or "").strip()
+    if not emoji_keys.NAME_RE.match(name):
+        return None, Response(
+            {"detail": "Имя эмодзи — от 2 до 32 символов: латиница, цифры, «_»."},
+            status=400)
+    taken = ServerEmoji.objects.filter(server=server, name=name)
+    if exclude_id is not None:
+        taken = taken.exclude(id=exclude_id)
+    if taken.exists():
+        return None, Response(
+            {"detail": f"Эмодзи с именем «{name}» на сервере уже есть."},
+            status=400)
+    return name, None
+
+
+class ServerEmojiList(APIView):
+    """GET — эмодзи сервера (видны всем участникам), POST — загрузить новый.
+
+    Загрузка идёт multipart'ом и требует права «Создавать средства выражения
+    эмоций» (create_expressions). Полей два: `file` — сам эмодзи, и `static` —
+    первый кадр, если `file` анимированный. Кадр вырезает КЛИЕНТ (см.
+    web/src/gif.ts): у бэкенда нет ffmpeg, а Pillow пришлось бы учить
+    склеивать дельта-кадры GIF вручную — при том, что клиент этот разбор уже
+    умеет, он же его и показывает в редакторе.
+
+    Если клиент кадр не прислал, эмодзи всё равно сохранится — просто будет
+    анимироваться всегда. Отказывать из-за этого нельзя: браузер без
+    WebCodecs (см. gif.ts, запасной путь) кадр отдать не всегда может.
+    """
+
+    parser_classes = [MultiPartParser, FormParser]
+
+    def get(self, request, server_id):
+        server = get_object_or_404(Server, id=server_id)
+        if not is_member(request.user, server):
+            return Response({"detail": "Вы не участник сервера."}, status=403)
+        return Response(
+            ServerEmojiSerializer(server.emoji.all(), many=True).data)
+
+    def post(self, request, server_id):
+        server = get_object_or_404(Server, id=server_id)
+        denied = _require_permission(request, server, "create_expressions")
+        if denied:
+            return denied
+
+        if server.emoji.count() >= MAX_EMOJI_PER_SERVER:
+            return Response(
+                {"detail": f"На сервере уже {MAX_EMOJI_PER_SERVER} эмодзи — "
+                           "удалите ненужные."},
+                status=400)
+
+        uploaded = request.FILES.get("file")
+        if uploaded is None or uploaded.size == 0:
+            return Response({"detail": "Нужен файл в поле file."}, status=400)
+        if uploaded.size > MAX_EMOJI_BYTES:
+            return Response(
+                {"detail": f"Эмодзи слишком большой (макс. "
+                           f"{MAX_EMOJI_BYTES // 1024} КБ)."},
+                status=400)
+
+        sniffed = uploads.sniff_emoji(uploaded)
+        if sniffed is None:
+            return Response(
+                {"detail": "Подойдёт только PNG, GIF или WEBP."}, status=400)
+        content_type, animated = sniffed
+
+        name, denied = _validate_emoji_name(request.data.get("name"), server)
+        if denied:
+            return denied
+
+        emoji = ServerEmoji(
+            server=server, name=name, animated=animated,
+            content_type=content_type, size=uploaded.size,
+            created_by=request.user,
+        )
+        # Имя файла собирается из ОПОЗНАННОГО типа, а не из uploaded.name:
+        # под /media/emoji/ файлы отдаёт nginx, и Content-Type он выбирает по
+        # расширению — см. emoji_upload_to, там подробно, чем это грозит.
+        emoji.file.save(
+            f"emoji.{content_type.rpartition('/')[2]}", uploaded, save=False)
+
+        static = request.FILES.get("static") if animated else None
+        if static is not None and 0 < static.size <= MAX_EMOJI_BYTES:
+            # Кадр приходит от клиента, то есть проверяется ровно так же, как
+            # и всё остальное присланное: картинка по содержимому или ничего.
+            static_sniffed = uploads.sniff_emoji(static)
+            if static_sniffed and not static_sniffed[1]:
+                emoji.static_file.save(
+                    f"static.{static_sniffed[0].rpartition('/')[2]}",
+                    static, save=False)
+
+        emoji.save()
+        _broadcast_emoji_update(server)
+        return Response(ServerEmojiSerializer(emoji).data, status=201)
+
+
+class ServerEmojiDetail(APIView):
+    """PATCH — переименовать, DELETE — удалить. И то, и другое по
+    manage_expressions, а НЕ по create_expressions: права разделены именно
+    затем, чтобы можно было дать «пусть добавляет свои», не давая при этом
+    «пусть удаляет чужие» (см. chat.roles.PERMISSION_FIELDS, там же подписи,
+    которые видит владелец сервера)."""
+
+    def patch(self, request, server_id, emoji_id):
+        server = get_object_or_404(Server, id=server_id)
+        denied = _require_permission(request, server, "manage_expressions")
+        if denied:
+            return denied
+        emoji = get_object_or_404(ServerEmoji, id=emoji_id, server=server)
+        name, denied = _validate_emoji_name(
+            request.data.get("name"), server, exclude_id=emoji.id)
+        if denied:
+            return denied
+        emoji.name = name
+        emoji.save(update_fields=["name"])
+        _broadcast_emoji_update(server)
+        return Response(ServerEmojiSerializer(emoji).data)
+
+    def delete(self, request, server_id, emoji_id):
+        server = get_object_or_404(Server, id=server_id)
+        denied = _require_permission(request, server, "manage_expressions")
+        if denied:
+            return denied
+        emoji = get_object_or_404(ServerEmoji, id=emoji_id, server=server)
+        # Реакции с этим ключом и токены в старых сообщениях остаются: чистить
+        # их значило бы переписывать чужую переписку. Отрисовка такого «сироты»
+        # уже предусмотрена — см. web MessageReactions.EmojiGlyph.
+        emoji.delete()
+        _broadcast_emoji_update(server)
+        return Response(status=204)
+
+
+class MyEmoji(APIView):
+    """GET /api/emoji — все эмодзи, доступные мне: наборы всех моих серверов.
+
+    Один запрос вместо похода за каждым сервером отдельно: клиенту этот список
+    нужен целиком и сразу — из него строится и лента наборов в пикере, и
+    отрисовка токенов в уже пришедших сообщениях.
+
+    ?ids=1,2,3 — отдельный режим: метаданные конкретных эмодзи БЕЗ проверки
+    членства. Он нужен для чтения, а не для отправки: в личку могли прислать
+    эмодзи сервера, где меня нет, и без этого у меня на месте картинки был бы
+    вечный квадрат-заглушка. Ограничивать чтение здесь бессмысленно — сам файл
+    в /media/ и так отдаётся любому, у кого есть ссылка (см. emoji_upload_to);
+    ограничивается ОТПРАВКА, и делает это chat.emoji.usable_ids.
+    """
+
+    # Сколько id можно спросить за раз. Клиент спрашивает ровно про то, что
+    # встретил в видимых сообщениях, — этого с запасом хватает на экран.
+    MAX_RESOLVE_IDS = 100
+
+    def get(self, request):
+        raw_ids = request.query_params.get("ids")
+        if raw_ids:
+            ids = []
+            for chunk in raw_ids.split(",")[:self.MAX_RESOLVE_IDS]:
+                chunk = chunk.strip()
+                if chunk.isdigit():
+                    ids.append(int(chunk))
+            queryset = ServerEmoji.objects.filter(id__in=ids)
+        else:
+            queryset = ServerEmoji.objects.filter(
+                server__memberships__user=request.user)
+        queryset = queryset.select_related("server").order_by(
+            "server_id", "name", "id")
+        return Response(ServerEmojiSerializer(queryset, many=True).data)
 
 
 class AttachmentUpload(APIView):
