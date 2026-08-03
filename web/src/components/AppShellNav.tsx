@@ -107,6 +107,7 @@ export default function AppShellNav({
           onParticipantContextMenu={participant.openParticipantContextMenu}
           onOpenParticipantProfile={openProfilePopup}
           onChannelContextMenu={(c, e) => server.setChannelContextMenuId({ id: c.id, x: e.clientX, y: e.clientY })}
+          onMoveVoiceUser={voice.handleMoveVoiceUser}
         />
       )}
     </div>

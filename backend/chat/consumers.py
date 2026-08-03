@@ -23,6 +23,13 @@ GatewayConsumer — единственный WebSocket на клиента (по
     {"op": "voice_disconnect_user", "user_id": <id>} — отключить участника от
      ЕГО текущего голосового канала (нужно право "manage_members", владельца
      сервера отключить нельзя).
+    {"op": "voice_move_user", "user_id": <id>, "channel_id": <id>} —
+     переместить участника ИЗ его текущего голосового канала В указанный
+     (перетаскивание строки участника на другой канал в сайдбаре; нужно
+     право "manage_members" и оба канала на одном сервере, владельца сервера
+     переместить нельзя). Себя самого этим оп'ом не двигают — перетаскивание
+     своей строки клиент обрабатывает как обычный voice_join, без похода
+     сюда вовсе.
     {"op": "voice_mute_vote_start", "target_user_id": <id>} — начать
      голосование за мут участника, который сейчас в ТОМ ЖЕ голосовом канале,
      что и отправитель (нужно право "start_mute_vote").
@@ -73,6 +80,12 @@ GatewayConsumer — единственный WebSocket на клиента (по
     {"op": "voice_screen_share_update", "user_id": <id>, "sharing": bool}
     {"op": "voice_kicked", "channel_id": <id>} — персонально тому, кого только
      что принудительно отключили от голосового канала (voice_disconnect_user).
+    {"op": "voice_moved", "channel_id": <id>} — персонально тому, кого только
+     что переместили в другой голосовой канал (voice_move_user). В отличие
+     от voice_kicked сервер НИЧЕГО не делает с presence сам — клиент обязан
+     сам вызвать обычный voice_join по этому channel_id: реальный WebRTC-
+     транспорт живёт на клиенте и требует настоящего join'а к SFU нового
+     канала, переставить его чужим соединением нельзя физически.
     {"op": "voice_kicked_other_device"} — персонально ОСТАЛЬНЫМ подключениям
      того же аккаунта (см. _kick_other_devices): голос только что начался на
      другом устройстве/вкладке, у себя (канал или диалог/группа — не важно,
@@ -390,6 +403,8 @@ class GatewayConsumer(AsyncWebsocketConsumer):
                 await self._handle_voice_topic_update(data)
             elif op == "voice_disconnect_user":
                 await self._handle_voice_disconnect_user(data)
+            elif op == "voice_move_user":
+                await self._handle_voice_move_user(data)
             elif op == "voice_mute_vote_start":
                 await self._handle_voice_mute_vote_start(data)
             elif op == "voice_mute_vote_cast":
@@ -816,6 +831,53 @@ class GatewayConsumer(AsyncWebsocketConsumer):
             f"user_{target_user_id}", {"type": "broadcast", "payload": {
                 "op": "voice_kicked",
                 "channel_id": int(prev),
+            }})
+
+    async def _handle_voice_move_user(self, data):
+        """Переместить участника ИЗ его текущего голосового канала В другой —
+        аналог перетаскивания строки участника на другой канал в сайдбаре.
+
+        В отличие от _handle_voice_disconnect_user, здесь НЕ трогаем presence
+        вообще: голос на сервере — это тонкая мета (кто где), а настоящий
+        WebRTC-транспорт живёт на клиенте цели и требует НАСТОЯЩЕГО join'а к
+        SFU нового канала — переставить его отсюда, чужим соединением,
+        нельзя физически. Поэтому обработчик — чистая проверка прав плюс
+        персональный пинг: клиент цели сам вызовет обычный voice_join, когда
+        получит voice_moved (см. web/src/hooks/useGatewayEvents.ts) — со
+        стороны цели это неотличимо от того, как если бы она сама кликнула
+        по новому каналу.
+
+        Себя самого этим оп'ом не двигают: перетаскивание своей же строки
+        клиент обрабатывает как обычный клик по каналу (voice_join), без
+        похода на бэк вообще — правами это не режется, потому что права там
+        и не нужны (см. web/src/hooks/useVoiceCall.ts handleMoveVoiceUser).
+        """
+        target_user_id = data.get("user_id")
+        dest_channel_id = data.get("channel_id")
+        if not target_user_id or not dest_channel_id or int(target_user_id) == self.user.id:
+            return
+        target_user_id = int(target_user_id)
+        # _voice_channel_server проверяет, что self.user (тот, кто тащит)
+        # сам вправе видеть канал назначения и подключаться к нему — то же
+        # самое, что потребовалось бы, если бы он заходил туда сам.
+        dest_server_id = await self._voice_channel_server(dest_channel_id)
+        if not dest_server_id:
+            return
+        target_room = await asyncio.to_thread(presence.voice_channel, str(target_user_id))
+        if not target_room or is_dm_room(target_room):
+            return
+        if int(target_room) == int(dest_channel_id):
+            return  # уже там
+        target_server_id = await self._channel_server(target_room)
+        if target_server_id != dest_server_id:
+            return  # только внутри одного сервера — иначе неоднозначно, куда «доставать» цель
+        allowed = await self._can_manage_members(dest_server_id, target_user_id)
+        if not allowed:
+            return
+        await self.channel_layer.group_send(
+            f"user_{target_user_id}", {"type": "broadcast", "payload": {
+                "op": "voice_moved",
+                "channel_id": int(dest_channel_id),
             }})
 
     async def _handle_voice_mute_vote_start(self, data):

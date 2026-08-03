@@ -116,27 +116,60 @@ export function useVoiceCall(
     return channels.find((c) => c.id === Number(voice.room.id))?.topic ?? null
   }, [voice, channels])
 
-  const handleJoinVoice = async (ch: Channel) => {
-    try {
-      const { sfu_url, sfu_token } = await api.voiceCredentials(ch.id)
-      setVoiceStatus('connecting')
-      // gateway.voiceJoin — это «мета» голоса (presence/roster/call-state) в
-      // Django; медиа идёт отдельно через SFU по sfu_url/sfu_token. Честный
-      // статус ('connecting'/'failed') считается по факту подключения
-      // WebRTC-транспорта к SFU внутри VoiceProvider (onStatus).
-      gateway.voiceJoin(ch.id)
-      // Свой собственный звук входа — здесь и только здесь (см. комментарий
-      // у эффекта звуков ростера ниже).
-      playJoinSound()
-      setVoice({ room: { id: ch.id, name: ch.name, kind: 'channel' }, sfuUrl: sfu_url, sfuToken: sfu_token })
-      // Клик по голосовому каналу — это и вход в него, и выбор того, что
-      // показывать в main (как и для текстовых каналов): переключаем main
-      // на VoiceStage этого канала.
-      setChannelId(ch.id)
-    } catch (e) {
-      alert('Не удалось подключиться к голосу: ' + (e as Error).message)
-    }
-  }
+  // useCallback (раньше был обычной функцией, пересоздающейся на каждый
+  // рендер): handleJoinVoiceById/handleMoveVoiceUser ниже держат её в своих
+  // зависимостях, и нестабильная ссылка пересоздавала бы уже ИХ на каждый
+  // рендер тоже.
+  const handleJoinVoice = useCallback(
+    async (ch: Channel) => {
+      try {
+        const { sfu_url, sfu_token } = await api.voiceCredentials(ch.id)
+        setVoiceStatus('connecting')
+        // gateway.voiceJoin — это «мета» голоса (presence/roster/call-state) в
+        // Django; медиа идёт отдельно через SFU по sfu_url/sfu_token. Честный
+        // статус ('connecting'/'failed') считается по факту подключения
+        // WebRTC-транспорта к SFU внутри VoiceProvider (onStatus).
+        gateway.voiceJoin(ch.id)
+        // Свой собственный звук входа — здесь и только здесь (см. комментарий
+        // у эффекта звуков ростера ниже).
+        playJoinSound()
+        setVoice({ room: { id: ch.id, name: ch.name, kind: 'channel' }, sfuUrl: sfu_url, sfuToken: sfu_token })
+        // Клик по голосовому каналу — это и вход в него, и выбор того, что
+        // показывать в main (как и для текстовых каналов): переключаем main
+        // на VoiceStage этого канала.
+        setChannelId(ch.id)
+      } catch (e) {
+        alert('Не удалось подключиться к голосу: ' + (e as Error).message)
+      }
+    },
+    [gateway, setChannelId],
+  )
+
+  /** Тот же handleJoinVoice, но по id канала — нужен там, где под рукой нет
+   * самого объекта Channel: перемещение чужим действием (voice_moved, см.
+   * useGatewayEvents) знает только id, а не полный канал. */
+  const handleJoinVoiceById = useCallback(
+    (channelId: number) => {
+      const channel = channels.find((c) => c.id === channelId)
+      if (channel) void handleJoinVoice(channel)
+    },
+    [channels, handleJoinVoice],
+  )
+
+  /** Перетащили строку участника голосового канала на другой канал (см.
+   * ChannelSidebar). Своя же строка — просто переключение канала, права не
+   * нужны (то же самое, что кликнуть по каналу самому); чужая — уходит на
+   * сервер, там и решается, разрешено ли (право "manage_members"). */
+  const handleMoveVoiceUser = useCallback(
+    (userId: number, channel: Channel) => {
+      if (userId === user?.id) {
+        void handleJoinVoice(channel)
+        return
+      }
+      gateway.voiceMoveUser(userId, channel.id)
+    },
+    [gateway, user, handleJoinVoice],
+  )
 
   const handleLeaveVoice = useCallback(() => {
     // Свой собственный звук выхода — здесь и только здесь (см. комментарий
@@ -459,11 +492,11 @@ export function useVoiceCall(
     activeMuteVoteChannelId, setActiveMuteVoteChannelId,
     muteVote, setMuteVote,
     dmRoster, isInDmCall, voiceRoster, voiceTopic,
-    handleJoinVoice, handleLeaveVoice, handleDmVoiceJoin,
+    handleJoinVoice, handleJoinVoiceById, handleLeaveVoice, handleDmVoiceJoin,
     handleAcceptIncomingCall, handleDeclineIncomingCall,
     handleWatchScreen, handleWatchBadge, handleDmRequestWatch,
     handleDmVoiceStageResizeStart, handleVoiceStatus,
-    handleDisconnectUser, handleStartMuteVote, handleCastMuteVote,
+    handleDisconnectUser, handleMoveVoiceUser, handleStartMuteVote, handleCastMuteVote,
     handleRequestScreenShare, handleWakeUser,
   }
 }

@@ -37,9 +37,9 @@ export function useServerData(userRef: RefObject<Me | null>) {
     void loadMyEmoji()
   }, [])
 
-  // Каталог серверов для пикера — порядок вкладок, значки и право добавлять.
-  // Отдельно от самих эмодзи: /api/emoji не знает про сервер БЕЗ эмодзи, а
-  // именно в такой чаще всего и добавляют первый.
+  // Каталог серверов для пикера — порядок вкладок, значки и права добавлять/
+  // управлять. Отдельно от самих эмодзи: /api/emoji не знает про сервер БЕЗ
+  // эмодзи, а именно в такой чаще всего и добавляют первый.
   useEffect(() => {
     customEmojiStore.setCatalog(
       servers.map((s) => ({
@@ -47,6 +47,7 @@ export function useServerData(userRef: RefObject<Me | null>) {
         name: s.name,
         icon: s.icon || '',
         canAdd: !!s.my_permissions?.create_expressions,
+        canManage: !!s.my_permissions?.manage_expressions,
       })),
     )
   }, [servers])
