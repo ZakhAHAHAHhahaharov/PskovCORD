@@ -10,9 +10,10 @@ import { escapeRegExp, WORD_CHAR } from '../mentions'
 import { styledNameProps } from '../nameStyle'
 import { displayNameOf, useNicknamesVersion } from '../nicknames'
 import { DeliveryStatus, DELIVERY_STATUS_PRESENTATION } from '../outbox'
-import { EMOJI_TOKEN_RE, QUICK_REACTIONS, customEmojiKey } from '../emoji'
+import { EMOJI_TOKEN_RE, QUICK_REACTIONS, STICKER_TOKEN_RE, customEmojiKey } from '../emoji'
 import Avatar from './Avatar'
 import CustomEmojiImage from './CustomEmojiImage'
+import StickerImage from './StickerImage'
 import DeleteMessageModal from './DeleteMessageModal'
 import EmojiPicker, { EmojiPickerAnchor } from './EmojiPicker'
 import MessageAttachments from './MessageAttachments'
@@ -87,7 +88,7 @@ const JUMBO_EMOJI_LIMIT = 6
  * ОСТАТКИ уходят в renderMentions. Наоборот было бы неверно — имя эмодзи
  * может совпасть с ником, и «@ник» внутри токена превратился бы в кнопку,
  * разорвав токен пополам. */
-function renderContent(
+function renderInline(
   content: string,
   candidates: MentionCandidate[],
   onMentionClick: (candidate: MentionCandidate, e: ReactMouseEvent) => void,
@@ -127,6 +128,77 @@ function renderContent(
     nodes.push(
       <Fragment key="t-last">
         {renderMentions(content.slice(lastIndex), candidates, onMentionClick)}
+      </Fragment>,
+    )
+  }
+  return nodes
+}
+
+/** Сторона стикера в ленте. Крупно и без вариантов: стикер и есть реплика, а
+ * не украшение к тексту — мельче он читался бы как большой эмодзи. */
+const STICKER_SIZE = 160
+
+/** Насколько «свежим» считается сообщение, у которого стикер играет сам. По
+ * времени создания, а не по «это сообщение только что отрисовалось»: при
+ * входе в канал отрисовывается вся история разом, и по второму признаку
+ * ожили бы все стикеры сразу. */
+const FRESH_MESSAGE_MS = 15_000
+
+function isFreshMessage(createdAt: string): boolean {
+  return Date.now() - new Date(createdAt).getTime() < FRESH_MESSAGE_MS
+}
+
+/** Текст сообщения целиком: стикеры картинками, кастомные эмодзи картинками,
+ * @упоминания кнопками, остальное как есть.
+ *
+ * Стикеры отделяются ПЕРВЫМИ, и только их остатки уходят в разбор эмодзи и
+ * упоминаний: токен стикера ("<sticker:42>") в чужие регулярки не попадает, но
+ * порядок всё равно важен — он держит стикер блоком, а не строчкой посреди
+ * фразы. Обычно, впрочем, кроме него в сообщении ничего и нет: стикер уходит
+ * отдельной репликой (см. MessageInput.sendSticker), а текст рядом с ним
+ * появляется только если его дописали правкой. */
+function renderContent(
+  content: string,
+  candidates: MentionCandidate[],
+  onMentionClick: (candidate: MentionCandidate, e: ReactMouseEvent) => void,
+  /** Проиграть анимацию один раз сразу — у только что пришедшего сообщения.
+   * Иначе прокрутка истории запускала бы анимацию у всех стикеров разом. */
+  stickerAutoPlay = false,
+): ReactNode {
+  if (!content.includes('<sticker:')) {
+    return renderInline(content, candidates, onMentionClick)
+  }
+  const matches = [...content.matchAll(STICKER_TOKEN_RE)]
+  const nodes: ReactNode[] = []
+  let lastIndex = 0
+  matches.forEach((match, i) => {
+    const start = match.index ?? 0
+    if (start > lastIndex) {
+      nodes.push(
+        <Fragment key={`st-${i}`}>
+          {renderInline(content.slice(lastIndex, start), candidates, onMentionClick)}
+        </Fragment>,
+      )
+    }
+    nodes.push(
+      <StickerImage
+        key={`s-${i}`}
+        id={Number(match[1])}
+        size={STICKER_SIZE}
+        // Наведение на сам стикер, а не на строку сообщения: стикер занимает
+        // её почти целиком, зато отдельного состояния «навели на сообщение»
+        // для этого не нужно — а оно перерисовывало бы строку на каждое
+        // движение мыши по ленте.
+        play="hover"
+        autoPlay={stickerAutoPlay}
+      />,
+    )
+    lastIndex = start + match[0].length
+  })
+  if (lastIndex < content.length) {
+    nodes.push(
+      <Fragment key="st-last">
+        {renderInline(content.slice(lastIndex), candidates, onMentionClick)}
       </Fragment>,
     )
   }
@@ -424,8 +496,13 @@ export default function MessageList({
                   <span className="message-reply-content">
                     {/* Без кандидатов на упоминание: в цитате одной строкой
                         кликабельный «@ник» ни к чему, а вот токен эмодзи там
-                        показался бы сырым «<:кот:1>». */}
-                    {renderContent(m.reply_to.content, [], onOpenProfile)}
+                        показался бы сырым «<:кот:1>». Стикер в цитате — просто
+                        слово «стикер»: картинка в 160 пикселей разорвала бы
+                        строку, ради которой цитата и существует. */}
+                    {renderInline(
+                      m.reply_to.content.replace(STICKER_TOKEN_RE, '[стикер]'),
+                      [], onOpenProfile,
+                    )}
                   </span>
                 </div>
               )}
@@ -456,7 +533,9 @@ export default function MessageList({
               </div>
               {m.content && (
                 <div className={`message-content ${pendingDelete ? 'message-content-deleting' : ''}`}>
-                  {renderContent(m.content, mentionCandidates, onOpenProfile)}
+                  {renderContent(
+                    m.content, mentionCandidates, onOpenProfile, isFreshMessage(m.created_at),
+                  )}
                 </div>
               )}
               <MessageAttachments attachments={m.attachments} />

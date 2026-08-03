@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "jsqr": "^1.4.0",
+    "lottie-web": "^5.12.2",
     "lucide-react": "^1.26.0",
     "mediasoup-client": "^3.7.18",
     "qrcode": "^1.5.4",

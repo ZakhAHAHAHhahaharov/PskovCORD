@@ -1,20 +1,22 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Pencil, Plus, Smile, X } from 'lucide-react'
+import { Pencil, Plus, Smile, Sticker as StickerIcon, X } from 'lucide-react'
 import {
   Attachment,
   ChatMessageBase,
   CustomEmoji,
   MentionCandidate,
+  Sticker,
   mediaUrl,
   uploadAttachment,
 } from '../api'
+import { STICKER_TOKEN_RE, stickerToken } from '../emoji'
 import {
   domToPlainText, getCaretOffset, plainOffsetToDomPoint, renderEmojiNode, renderValueIntoDom,
   setCaretAtOffset,
 } from '../composerDom'
 import { ComposerDraft } from '../drafts'
 import Avatar from './Avatar'
-import EmojiPicker, { EmojiPickerAnchor } from './EmojiPicker'
+import EmojiPicker, { EmojiPickerAnchor, PickerMode } from './EmojiPicker'
 import { useNickname } from '../nicknames'
 
 export interface MessageInputPrefill {
@@ -133,7 +135,10 @@ export default function MessageInput({
   const [staged, setStaged] = useState<StagedFile[]>(() =>
     draftToStaged(restored?.attachments ?? []),
   )
+  // Пикер один на обе кнопки композера — «стикер» и «смайл»; отличаются они
+  // только вкладкой, на которой он откроется (см. pickerMode).
   const [emojiAnchor, setEmojiAnchor] = useState<EmojiPickerAnchor | null>(null)
+  const [pickerMode, setPickerMode] = useState<PickerMode>('emoji')
   const [dragging, setDragging] = useState(false)
   // Композер — contentEditable, а не textarea: только так кастомный эмодзи
   // можно показать картинкой прямо во время набора, а не токеном "<:имя:id>"
@@ -573,6 +578,26 @@ export default function MessageInput({
     insertNodeAtCaret(renderEmojiNode(emoji))
   }
 
+  /** Стикер уходит ОТДЕЛЬНЫМ сообщением прямо по клику, не заходя в поле
+   * ввода. Это не «ещё один способ вставить картинку в текст», а самостоятельная
+   * реплика — как в Discord и Telegram.
+   *
+   * Важное следствие: недописанное сообщение в поле остаётся ровно там, где
+   * было, и НЕ уезжает вместе со стикером. Поэтому здесь не зовётся ни submit
+   * (он отправил бы и текст, и вложения, и очистил бы композер), ни applyValue:
+   * onSend получает готовый токен, а всё состояние композера остаётся
+   * нетронутым — включая черновик, который эффект выше даже не перезапишет,
+   * потому что value и staged не менялись.
+   *
+   * Заготовленный ответ (replyTarget) стикер при этом ИСПОЛЬЗУЕТ и снимает —
+   * ровно как обычная отправка (см. useChannelMessages.handleSend): стикером
+   * отвечают так же, как словами, и притворяться, что ответа не было, значило
+   * бы отправить его «в никуда». */
+  const sendSticker = (sticker: Sticker) => {
+    if (editTarget) return // в режиме правки чужого текста стикеру не место
+    onSend({ content: stickerToken(sticker.id), attachments: [] })
+  }
+
   // Вставка картинки из буфера (скриншот через Ctrl+V) — самый частый способ
   // поделиться картинкой, и без этого он бы просто не работал.
   //
@@ -592,6 +617,22 @@ export default function MessageInput({
     if (!text) return
     e.preventDefault()
     insertNodeAtCaret(document.createTextNode(text))
+  }
+
+  /** Открыть панель выражений на нужной вкладке (или закрыть, если она уже
+   * открыта на ней же).
+   *
+   * Координаты кнопки снимаем СРАЗУ, синхронно с кликом, а не внутри
+   * функции-апдейтера setState: currentTarget у DOM-события валиден только
+   * пока событие реально диспетчеризуется — если React вызовет апдейтер позже
+   * (при повторной обработке хука на следующем рендере, что бывает при
+   * батчинге), e.currentTarget к тому моменту уже null, и
+   * .getBoundingClientRect() падал с TypeError (живой репорт из прода —
+   * трейсбэк уходил именно отсюда). */
+  const openPicker = (e: React.MouseEvent, mode: PickerMode) => {
+    const rect = e.currentTarget.getBoundingClientRect()
+    setEmojiAnchor((prev) => (prev && pickerMode === mode ? null : { rect }))
+    setPickerMode(mode)
   }
 
   const handleDrop = (e: React.DragEvent) => {
@@ -657,7 +698,10 @@ export default function MessageInput({
         replyTarget && (
           <div className="reply-banner">
             <span className="reply-banner-text">
-              Ответ пользователю <b>{replyAuthorNickname || replyTarget.author.username}</b>: {replyTarget.content}
+              {/* Токен стикера в баннере — просто слово: сырое
+                  «<sticker:42>» человеку ни о чём не говорит. */}
+              Ответ пользователю <b>{replyAuthorNickname || replyTarget.author.username}</b>:{' '}
+              {replyTarget.content.replace(STICKER_TOKEN_RE, '[стикер]')}
             </span>
             <button className="reply-banner-cancel" title="Отменить ответ" onClick={onCancelReply}>
               <X size={14} />
@@ -763,22 +807,27 @@ export default function MessageInput({
           onBlur={saveSelection}
           onPaste={handlePaste}
         />
+        {/* Стикеры слева от эмодзи — обе кнопки открывают ОДНУ И ТУ ЖЕ
+            панель, каждая на своей вкладке. Повторный клик по той же кнопке
+            панель закрывает, клик по соседней — переключает вкладку, не
+            закрывая (иначе «промахнулся кнопкой» стоило бы двух лишних
+            кликов). В режиме правки чужого сообщения стикера нет: он уходит
+            отдельным сообщением, а не в правку. */}
+        {!editTarget && (
+          <button
+            type="button"
+            className="composer-btn"
+            title="Стикеры"
+            onClick={(e) => openPicker(e, 'stickers')}
+          >
+            <StickerIcon size={18} />
+          </button>
+        )}
         <button
           type="button"
           className="composer-btn"
           title="Эмодзи"
-          onClick={(e) => {
-            // Координаты снимаем СРАЗУ, синхронно с кликом, а не внутри
-            // функции-апдейтера setState. currentTarget у DOM-события валиден
-            // только пока событие реально диспетчеризуется — если React
-            // вызовет апдейтер позже (при повторной обработке хука на
-            // следующем рендере, что бывает при батчинге), e.currentTarget к
-            // тому моменту уже null, и .getBoundingClientRect() падал с
-            // TypeError (см. живой репорт в проде — трейсбэк уходил именно
-            // отсюда, через emojiAnchor useState на строке ниже).
-            const rect = e.currentTarget.getBoundingClientRect()
-            setEmojiAnchor((prev) => (prev ? null : { rect }))
-          }}
+          onClick={(e) => openPicker(e, 'emoji')}
         >
           <Smile size={18} />
         </button>
@@ -788,13 +837,20 @@ export default function MessageInput({
 
       {emojiAnchor && (
         <EmojiPicker
+          // key: вкладка задаётся начальным состоянием внутри панели, и без
+          // пересоздания клик по соседней кнопке композера её не переключил
+          // бы. Заодно сбрасывается поиск и прокрутка — при переходе «стикеры
+          // ⇄ эмодзи» и то, и другое всё равно ни к чему.
+          key={pickerMode}
           anchor={emojiAnchor}
+          mode={pickerMode}
           onPick={insertEmoji}
           onPickCustom={insertCustomEmoji}
-          // Панель сама решает, когда закрыться (мышь ушла с неё, Esc, клик
-          // мимо — см. EmojiPicker) — insertEmoji/insertCustomEmoji её больше
-          // не трогают, иначе поставить подряд несколько эмодзи значило бы
-          // открывать панель заново на каждый.
+          onPickSticker={editTarget ? undefined : sendSticker}
+          // Панель сама решает, когда закрыться (Esc или левый клик мимо —
+          // см. EmojiPicker); insertEmoji/insertCustomEmoji/sendSticker её
+          // больше не трогают, иначе отправить подряд несколько стикеров
+          // значило бы открывать панель заново на каждый.
           onClose={() => setEmojiAnchor(null)}
         />
       )}

@@ -6,6 +6,7 @@ mesh-сигналинга offer/answer/ice в gateway больше нет.
 import asyncio
 import base64
 from datetime import timedelta
+import gzip
 import hashlib
 import hmac
 import io
@@ -28,7 +29,9 @@ from PIL import Image as PILImage
 from rest_framework.test import APIClient, APITestCase
 from rest_framework_simplejwt.tokens import AccessToken
 
-from . import emoji as emoji_keys, mute_vote, presence, roles, sfu, turn
+from . import (
+    emoji as emoji_keys, mute_vote, presence, roles, sfu, stickers, turn,
+)
 from .consumers import GatewayConsumer
 from accounts.models import Friendship
 
@@ -38,7 +41,8 @@ from .models import (
     ConversationParticipant, MAX_ATTACHMENT_BYTES, MAX_EMOJI_BYTES,
     MAX_REACTIONS_PER_MESSAGE,
     FriendNickname, Membership, Message, ProfileNote, Reaction, Role, Server, ServerBan,
-    ServerEmoji, ServerInvite, ServerJoinRequest, dm_room,
+    ServerEmoji, ServerInvite, ServerJoinRequest, Sticker, StickerPack,
+    MAX_STICKER_BYTES, STICKER_SIDE, dm_room,
 )
 from .permissions import can_dm
 from .serializers import RoleSerializer
@@ -2969,6 +2973,290 @@ class CustomEmojiUploadTests(APITestCase):
             User.objects.create_user(username="lone", password="pw12345"))
         resp = self.client.get(f"/api/emoji?ids={created['id']},999999")
         self.assertEqual([e["id"] for e in resp.data], [created["id"]])
+
+
+class StickerUploadTests(APITestCase):
+    """Загрузка стикеров: право, приведение формата и лимиты.
+
+    Главное отличие от эмодзи — файл НЕ сохраняется как прислали: любая
+    картинка становится WebP, растровая анимация — анимированным WebP с
+    вырезанным первым кадром, Lottie и WebM берутся как есть (см.
+    chat.stickers).
+    """
+
+    def setUp(self):
+        self.owner = User.objects.create_user(username="owner", password="pw12345")
+        self.member = User.objects.create_user(username="member", password="pw12345")
+        self.server = Server.objects.create(name="S", owner=self.owner)
+        roles.create_default_role(self.server)
+        Membership.objects.create(user=self.owner, server=self.server)
+        Membership.objects.create(user=self.member, server=self.server)
+        self.client.force_authenticate(self.owner)
+
+    @staticmethod
+    def _png(width=400, height=400):
+        buffer = io.BytesIO()
+        PILImage.new("RGBA", (width, height), (255, 0, 0, 255)).save(
+            buffer, format="PNG")
+        return buffer.getvalue()
+
+    @staticmethod
+    def _gif():
+        # Кадры РАЗНОГО цвета: одинаковые Pillow схлопывает в один.
+        images = [PILImage.new("RGB", (64, 64), c) for c in ("red", "green", "blue")]
+        buffer = io.BytesIO()
+        images[0].save(
+            buffer, format="GIF", save_all=True, append_images=images[1:],
+            duration=80)
+        return buffer.getvalue()
+
+    @staticmethod
+    def _lottie():
+        return json.dumps(
+            {"v": "5.7.4", "w": 512, "h": 512, "fr": 60, "layers": [{"ty": 4}]}
+        ).encode()
+
+    def _upload(self, name="кот", data=None, filename="s.png", **extra):
+        payload = {
+            "name": name,
+            "file": SimpleUploadedFile(
+                filename, data if data is not None else self._png(),
+                content_type="application/octet-stream"),
+            **extra,
+        }
+        return self.client.post(
+            f"/api/servers/{self.server.id}/stickers", payload, format="multipart")
+
+    def test_png_becomes_webp(self):
+        resp = self._upload()
+        self.assertEqual(resp.status_code, 201, resp.data)
+        self.assertEqual(resp.data["format"], "webp")
+        self.assertFalse(resp.data["animated"])
+        self.assertTrue(resp.data["url"].endswith("/sticker.webp"), resp.data["url"])
+        # У статичного показывать по наведению нечего — static_url это он сам.
+        self.assertEqual(resp.data["static_url"], resp.data["url"])
+
+    def test_cyrillic_name_allowed(self):
+        """Имя стикера не попадает в токен (там только id), поэтому алфавит
+        ему не ограничен — в отличие от эмодзи."""
+        resp = self._upload(name="кот в шляпе")
+        self.assertEqual(resp.status_code, 201, resp.data)
+        self.assertEqual(resp.data["name"], "кот в шляпе")
+
+    def test_animated_gif_becomes_animated_webp_with_frame(self):
+        resp = self._upload(data=self._gif(), filename="s.gif")
+        self.assertEqual(resp.status_code, 201, resp.data)
+        self.assertEqual(resp.data["format"], "webp")
+        self.assertTrue(resp.data["animated"])
+        # Разные файлы: по умолчанию виден кадр, анимация — по наведению.
+        self.assertNotEqual(resp.data["static_url"], resp.data["url"])
+        self.assertTrue(resp.data["static_url"].endswith("/static.webp"))
+
+    def test_lottie_kept_as_json(self):
+        resp = self._upload(data=self._lottie(), filename="s.json")
+        self.assertEqual(resp.status_code, 201, resp.data)
+        self.assertEqual(resp.data["format"], "lottie")
+        self.assertTrue(resp.data["animated"])
+        self.assertTrue(resp.data["url"].endswith("/sticker.json"))
+        # Первый кадр Lottie рисует сам клиент — файла для него нет.
+        self.assertEqual(resp.data["static_url"], "")
+
+    def test_json_without_layers_rejected(self):
+        resp = self._upload(data=b'{"hello": "world"}', filename="s.json")
+        self.assertEqual(resp.status_code, 400)
+
+    def test_garbage_rejected(self):
+        self.assertEqual(self._upload(data=b"not a sticker at all").status_code, 400)
+
+    def test_client_filename_never_reaches_disk(self):
+        """Имя файла на диске собирает сервер — та же защита, что у эмодзи
+        (см. chat.models.sticker_upload_to)."""
+        resp = self._upload(data=self._gif(), filename="evil.html")
+        self.assertEqual(resp.status_code, 201, resp.data)
+        self.assertNotIn("evil", resp.data["url"])
+        self.assertNotIn(".html", resp.data["url"])
+
+    def test_member_without_permission_rejected(self):
+        self.client.force_authenticate(self.member)
+        self.assertEqual(self._upload().status_code, 403)
+
+    def test_pack_is_created_and_reused(self):
+        first = self._upload(name="один", pack="Мемы")
+        second = self._upload(name="два", pack="Мемы")
+        self.assertEqual(first.status_code, 201)
+        self.assertEqual(second.status_code, 201)
+        self.assertEqual(first.data["pack"], second.data["pack"])
+        self.assertEqual(
+            StickerPack.objects.get(id=first.data["pack"]).name, "Мемы")
+
+    def test_default_pack_is_named_after_server(self):
+        resp = self._upload()
+        self.assertEqual(
+            StickerPack.objects.get(id=resp.data["pack"]).name, self.server.name)
+
+    def test_deleting_last_sticker_removes_the_pack(self):
+        """Пустая вкладка в пикере никому не нужна — набор уходит следом."""
+        created = self._upload()
+        pack_id = created.data["pack"]
+        resp = self.client.delete(
+            f"/api/servers/{self.server.id}/stickers/{created.data['id']}")
+        self.assertEqual(resp.status_code, 204)
+        self.assertFalse(StickerPack.objects.filter(id=pack_id).exists())
+
+    def test_my_stickers_lists_default_and_my_packs(self):
+        self._upload()
+        default = StickerPack.objects.create(server=None, name="Базовый")
+        Sticker.objects.create(
+            pack=default, name="базовый", content_type="image/webp", size=10)
+        # Набор сервера, где нас нет, в выдачу попасть не должен.
+        stranger = User.objects.create_user(username="s", password="pw12345")
+        foreign = Server.objects.create(name="Чужой", owner=stranger)
+        foreign_pack = StickerPack.objects.create(server=foreign, name="Чужой")
+        Sticker.objects.create(
+            pack=foreign_pack, name="чужой", content_type="image/webp", size=10)
+
+        resp = self.client.get("/api/stickers")
+        self.assertEqual(resp.status_code, 200)
+        names = {pack["name"] for pack in resp.data}
+        self.assertIn("Базовый", names)
+        self.assertIn(self.server.name, names)
+        self.assertNotIn("Чужой", names)
+
+
+class StickerPermissionTests(TestCase):
+    """Кто какой стикер вправе отправить — chat.emoji.usable_sticker_ids.
+
+    Правило то же, что у эмодзи, плюс одно послабление: базовый набор
+    (server=None) доступен всем и везде — он ничей.
+    """
+
+    def setUp(self):
+        self.user = User.objects.create_user(username="u", password="pw12345")
+        self.home = Server.objects.create(name="Дом", owner=self.user)
+        self.other = Server.objects.create(name="Другой", owner=self.user)
+        Membership.objects.create(user=self.user, server=self.home)
+        Membership.objects.create(user=self.user, server=self.other)
+        self.home_sticker = self._sticker(self.home, "домашний")
+        self.other_sticker = self._sticker(self.other, "чужой")
+        stranger = User.objects.create_user(username="s", password="pw12345")
+        self.foreign = Server.objects.create(name="Чужой", owner=stranger)
+        self.foreign_sticker = self._sticker(self.foreign, "недоступный")
+        self.default_sticker = self._sticker(None, "базовый")
+
+    @staticmethod
+    def _sticker(server, name):
+        pack = StickerPack.objects.create(
+            server=server, name=f"pack-{name}")
+        return Sticker.objects.create(
+            pack=pack, name=name, content_type="image/webp", size=100)
+
+    def _usable(self, sticker, server=None):
+        return sticker.id in emoji_keys.usable_sticker_ids(
+            [sticker.id], self.user, server)
+
+    def test_default_pack_is_usable_everywhere(self):
+        self.assertTrue(self._usable(self.default_sticker, self.home))
+        self.assertTrue(self._usable(self.default_sticker))
+
+    def test_own_server_sticker_always_usable(self):
+        self.assertTrue(self._usable(self.home_sticker, self.home))
+
+    def test_sticker_of_server_i_am_not_in_is_never_usable(self):
+        self.assertFalse(self._usable(self.foreign_sticker, self.home))
+        self.assertFalse(self._usable(self.foreign_sticker))
+
+    def test_external_sticker_needs_permission(self):
+        default = roles.create_default_role(self.home)
+        self.assertTrue(default.use_external_stickers)
+        self.assertTrue(self._usable(self.other_sticker, self.home))
+        # Право сняли — стикер ДРУГОГО сервера здесь больше нельзя, а свой и
+        # базовый по-прежнему можно.
+        default.use_external_stickers = False
+        default.save()
+        member = User.objects.create_user(username="m", password="pw12345")
+        Membership.objects.create(user=member, server=self.home)
+        Membership.objects.create(user=member, server=self.other)
+        self.user = member
+        self.assertFalse(self._usable(self.other_sticker, self.home))
+        self.assertTrue(self._usable(self.home_sticker, self.home))
+        self.assertTrue(self._usable(self.default_sticker, self.home))
+
+    def test_sanitize_replaces_forbidden_sticker_token(self):
+        allowed = f"<sticker:{self.home_sticker.id}>"
+        denied = f"<sticker:{self.foreign_sticker.id}>"
+        cleaned = emoji_keys.sanitize_content(
+            f"{allowed} и {denied}", self.user, self.home)
+        self.assertIn(allowed, cleaned)
+        self.assertNotIn(denied, cleaned)
+        # Не пустая строка: сообщение из одного стикера иначе схлопнулось бы в
+        # пустое и не отправилось бы вовсе.
+        self.assertIn(emoji_keys.STICKER_DENIED_PLACEHOLDER, cleaned)
+
+    def test_sanitize_keeps_emoji_and_sticker_tokens_together(self):
+        """Оба разбора идут по одному тексту — один не должен съедать другой."""
+        emoji = ServerEmoji.objects.create(
+            server=self.home, name="kot", content_type="image/png", size=10)
+        text = f"<:kot:{emoji.id}> <sticker:{self.home_sticker.id}>"
+        self.assertEqual(
+            emoji_keys.sanitize_content(text, self.user, self.home), text)
+
+
+class StickerFormatTests(TestCase):
+    """chat.stickers.prepare — приведение файла к формату стикера."""
+
+    def test_static_image_is_downscaled_to_webp(self):
+        buffer = io.BytesIO()
+        PILImage.new("RGBA", (1000, 800), (0, 128, 255, 255)).save(
+            buffer, format="PNG")
+        prepared = stickers.prepare(buffer.getvalue())
+        self.assertEqual(prepared.format, "webp")
+        self.assertFalse(prepared.animated)
+        self.assertLessEqual(len(prepared.data), MAX_STICKER_BYTES)
+        with PILImage.open(io.BytesIO(prepared.data)) as img:
+            self.assertLessEqual(max(img.size), STICKER_SIDE)
+
+    def test_animated_gif_becomes_animated_webp(self):
+        images = [PILImage.new("RGB", (64, 64), c) for c in ("red", "green")]
+        buffer = io.BytesIO()
+        images[0].save(
+            buffer, format="GIF", save_all=True, append_images=images[1:],
+            duration=100)
+        prepared = stickers.prepare(buffer.getvalue())
+        self.assertEqual(prepared.format, "webp")
+        self.assertTrue(prepared.animated)
+        self.assertIsNotNone(prepared.static)
+        with PILImage.open(io.BytesIO(prepared.data)) as img:
+            self.assertTrue(getattr(img, "is_animated", False))
+        # Первый кадр — отдельная СТАТИЧНАЯ картинка, иначе он анимировался бы
+        # там, где должен просто лежать (сетка пикера, лента до наведения).
+        with PILImage.open(io.BytesIO(prepared.static)) as still:
+            self.assertFalse(getattr(still, "is_animated", False))
+
+    def test_gzipped_lottie_is_unpacked(self):
+        raw = json.dumps({"v": "5", "w": 512, "h": 512, "layers": [{}]}).encode()
+        prepared = stickers.prepare(gzip.compress(raw))
+        self.assertEqual(prepared.format, "lottie")
+        self.assertEqual(json.loads(prepared.data)["w"], 512)
+
+    def test_matroska_without_webm_doctype_rejected(self):
+        """EBML-заголовок общий у .mkv и .webm, а играет браузер только
+        второй — различаем по DocType, а не по расширению."""
+        with self.assertRaises(stickers.StickerError):
+            stickers.prepare(b"\x1a\x45\xdf\xa3" + b"matroska" + b"\x00" * 64)
+
+    def test_webm_passes_through(self):
+        raw = b"\x1a\x45\xdf\xa3" + b"\x00" * 8 + b"webm" + b"\x00" * 64
+        prepared = stickers.prepare(raw)
+        self.assertEqual(prepared.format, "webm")
+        self.assertTrue(prepared.animated)
+        self.assertEqual(prepared.data, raw)
+
+    def test_svg_is_not_a_sticker(self):
+        """SVG — XML-документ, который браузер выполняет вместе со <script>
+        внутри; вектор у нас Lottie (см. chat/stickers.py и chat/uploads.py)."""
+        svg = b'<svg xmlns="http://www.w3.org/2000/svg"><script>x()</script></svg>'
+        with self.assertRaises(stickers.StickerError):
+            stickers.prepare(svg)
 
 
 class CustomEmojiPermissionTests(TestCase):

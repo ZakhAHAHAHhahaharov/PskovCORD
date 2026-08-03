@@ -400,6 +400,40 @@ export interface CustomEmoji {
   created_at: string
 }
 
+/** Стикер (backend chat.models.Sticker).
+ *
+ * format определяет, ЧЕМ его рисовать (см. StickerImage):
+ *   'webp'   — картинка; анимированная, если animated,
+ *   'lottie' — векторная анимация, проигрывается lottie-web,
+ *   'webm'   — видео с альфой в <video>.
+ *
+ * static_url — первый кадр растровой анимации, то, что видно, пока стикер не
+ * играет. У Lottie и WebM он пуст: первый кадр там показывает сам плеер. */
+export interface Sticker {
+  id: number
+  name: string
+  /** id набора (StickerPack), в котором лежит стикер. */
+  pack: number
+  url: string
+  static_url: string
+  format: 'webp' | 'lottie' | 'webm'
+  animated: boolean
+  size: number
+  created_by: number | null
+  created_at: string
+}
+
+/** Набор стикеров — вкладка в ленте наборов пикера. server === null у базовых
+ * наборов: они видны всем и всегда (см. backend MyStickers). */
+export interface StickerPack {
+  id: number
+  name: string
+  server: number | null
+  server_name: string
+  sort_order: number
+  stickers: Sticker[]
+}
+
 /** Одна реакция-эмодзи в агрегированном виде.
  *
  * Сервер не присылает готовый флаг «моя»: один и тот же объект уходит всем
@@ -945,6 +979,27 @@ export function uploadEmoji(
   return postForm<CustomEmoji>(`/api/servers/${serverId}/emoji`, form, opts)
 }
 
+/** Загрузка стикера (нужно право create_expressions на сервере).
+ *
+ * Файл уезжает КАК ЕСТЬ, без обработки на клиенте, — в отличие от эмодзи, где
+ * первый кадр вырезает браузер. Стикер всё равно перекодируется на сервере
+ * целиком (см. backend chat/stickers.py: любая картинка → WebP, растровая
+ * анимация → анимированный WebP, Lottie и WebM — как есть), и делать часть
+ * той же работы дважды незачем. */
+export function uploadSticker(
+  serverId: number,
+  name: string,
+  file: File,
+  pack?: string,
+  opts: UploadOptions = {},
+): Promise<Sticker> {
+  const form = new FormData()
+  form.append('name', name)
+  form.append('file', file, file.name)
+  if (pack) form.append('pack', pack)
+  return postForm<Sticker>(`/api/servers/${serverId}/stickers`, form, opts)
+}
+
 /** Расширение по MIME — только для имени файла: настоящий тип бэкенд всё
  * равно определяет по содержимому (см. backend chat/uploads.py sniff_emoji). */
 function blobExt(blob: Blob): string {
@@ -1122,6 +1177,25 @@ export const api = {
     }),
   deleteEmoji: (serverId: number, emojiId: number) =>
     req(`/api/servers/${serverId}/emoji/${emojiId}`, { method: 'DELETE' }),
+
+  // --- стикеры --------------------------------------------------------------
+  /** Все доступные мне наборы: базовые (ничьи, видны всем) плюс наборы моих
+   * серверов. Как и с эмодзи, напрямую отсюда не читают — есть кэш с
+   * подпиской, см. stickers.ts. */
+  myStickers: (): Promise<StickerPack[]> => req('/api/stickers'),
+  /** Метаданные конкретных стикеров, в том числе с серверов, где меня нет:
+   * стикер могли прислать в личку. */
+  resolveStickers: (ids: number[]): Promise<Sticker[]> =>
+    req(`/api/stickers?ids=${ids.join(',')}`),
+  serverStickers: (serverId: number): Promise<StickerPack[]> =>
+    req(`/api/servers/${serverId}/stickers`),
+  renameSticker: (serverId: number, stickerId: number, name: string): Promise<Sticker> =>
+    req(`/api/servers/${serverId}/stickers/${stickerId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ name }),
+    }),
+  deleteSticker: (serverId: number, stickerId: number) =>
+    req(`/api/servers/${serverId}/stickers/${stickerId}`, { method: 'DELETE' }),
   setMemberRoles: (serverId: number, userId: number, roleIds: number[]) =>
     req(`/api/servers/${serverId}/members/${userId}`, {
       method: 'PATCH',

@@ -10,7 +10,7 @@ from .models import (
     Attachment, Channel, Conversation, ConversationMessage,
     ConversationParticipant, Membership,
     Message, Role, Server, ServerBan, ServerEmoji, ServerInvite,
-    ServerJoinRequest, dm_room,
+    ServerJoinRequest, Sticker, StickerPack, dm_room,
 )
 
 # Значок сервера жмётся клиентом до 512x512 (ServerSettingsModal.ICON_SIZE) —
@@ -430,6 +430,61 @@ class ServerEmojiSerializer(serializers.ModelSerializer):
         if obj.animated and obj.static_file:
             return obj.static_file.url
         return obj.file.url if obj.file else ""
+
+
+class StickerSerializer(serializers.ModelSerializer):
+    """Стикер в том виде, в каком его получает клиент.
+
+    static_url — первый кадр растровой анимации; он же показывается в сетке
+    пикера и в ленте, пока на стикер не навели (анимация по требованию —
+    ровно та же логика, что у кастомных эмодзи, см. CustomEmojiImage). У
+    Lottie и WebM он пуст: первый кадр там рисует сам клиент, отдельного файла
+    для этого не нужно.
+    """
+
+    url = serializers.SerializerMethodField()
+    static_url = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Sticker
+        fields = ["id", "name", "pack", "url", "static_url", "format",
+                  "animated", "size", "created_by", "created_at"]
+        read_only_fields = fields
+
+    # Путь от корня, а не абсолютный URL — тот же объект уезжает по WebSocket
+    # (см. AttachmentSerializer.get_url).
+    def get_url(self, obj):
+        return obj.file.url if obj.file else ""
+
+    def get_static_url(self, obj):
+        if obj.static_file:
+            return obj.static_file.url
+        # У статичного стикера первый кадр и есть сам файл; у Lottie/WebM тут
+        # пусто, и клиент это различает по полю format.
+        return "" if obj.animated else (obj.file.url if obj.file else "")
+
+
+class StickerPackSerializer(serializers.ModelSerializer):
+    """Набор стикеров вместе со всем содержимым — одной вкладкой пикера.
+
+    Стикеры вложены, а не отдельным запросом: набор небольшой (см.
+    MAX_STICKERS_PER_PACK), а вкладка без содержимого бесполезна — её всё
+    равно тут же пришлось бы догружать.
+
+    Права («могу ли я тут удалять») сюда не кладутся: один и тот же объект
+    уходит broadcast'ом всем участникам сервера, как и набор эмодзи. Клиент
+    считает их сам, сверяя pack.server со списком своих серверов.
+    """
+
+    stickers = StickerSerializer(many=True, read_only=True)
+    server_name = serializers.CharField(
+        source="server.name", read_only=True, default="")
+
+    class Meta:
+        model = StickerPack
+        fields = ["id", "name", "server", "server_name", "sort_order",
+                  "stickers"]
+        read_only_fields = fields
 
 
 def reactions_payload(reactions) -> list:

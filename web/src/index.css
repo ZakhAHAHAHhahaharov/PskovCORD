@@ -6641,6 +6641,138 @@ button.settings-row-clickable:hover .settings-row-label {
   opacity: 0.5;
 }
 
+/* ---- стикеры (StickerImage) ---- */
+/* Размер задаётся инлайном из компонента (см. STICKER_SIZE/STICKER_CELL):
+   один и тот же стикер рисуется и в ленте, и в сетке пикера, и вкладкой
+   набора — три размера на один класс. */
+.sticker {
+  position: relative;
+  display: inline-block;
+  line-height: 0;
+  /* Иначе перетаскивание ленты/сетки утаскивало бы стикер как картинку. */
+  user-select: none;
+}
+
+.sticker img,
+.sticker video,
+.sticker svg {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.sticker-lottie {
+  width: 100%;
+  height: 100%;
+}
+
+/* Анимация рисуется ПОВЕРХ статичного кадра, а не подменяет ему src: подмена
+   дала бы дырку на время загрузки (тот же приём, что у .custom-emoji-anim). */
+.sticker-anim {
+  position: absolute;
+  inset: 0;
+  transition: opacity 0.08s linear;
+}
+
+.sticker-missing {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px;
+  border: 1px dashed var(--border-color);
+  border-radius: 8px;
+  color: var(--text-muted);
+  font-size: calc(12px * var(--font-scale, 1));
+  line-height: 1.3;
+  text-align: center;
+}
+
+/* ---- сетка стикеров в пикере ---- */
+/* Ровно три в ряд: стикер должен быть крупным (отличают их по рисунку, а не
+   по подписи), и при ширине панели в 400 пикселей три — это максимум, при
+   котором он ещё узнаётся. */
+.sticker-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 4px;
+}
+
+.sticker-cell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px;
+  border-radius: 8px;
+}
+
+.sticker-cell:hover {
+  background: var(--channel-hover);
+}
+
+/* Пометка «базовый» у ничейного набора — чтобы было видно, почему из него
+   ничего нельзя удалить. */
+.pack-badge {
+  margin-left: 6px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--channel-hover);
+  font-size: calc(9px * var(--font-scale, 1));
+  letter-spacing: 0.02em;
+}
+
+/* ---- переключатель «Стикеры / Эмодзи» ---- */
+.picker-modes {
+  display: flex;
+  gap: 4px;
+  padding: 6px 6px 0;
+}
+
+.picker-mode {
+  flex: 1;
+  padding: 6px 0;
+  border-radius: 6px;
+  color: var(--text-muted);
+  font-size: calc(13px * var(--font-scale, 1));
+  font-weight: 600;
+}
+
+.picker-mode:hover {
+  background: var(--channel-hover);
+  color: var(--text-normal);
+}
+
+.picker-mode.active {
+  background: var(--channel-hover);
+  color: var(--text-normal);
+}
+
+/* ---- загрузка стикера (StickerUploadModal) ---- */
+.sticker-upload {
+  width: min(380px, 94vw);
+}
+
+.sticker-upload-preview {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 160px;
+  margin-bottom: 10px;
+  border-radius: 8px;
+  background: var(--input-bg);
+}
+
+.sticker-upload-preview img,
+.sticker-upload-preview video {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+.sticker-upload-nopreview {
+  color: var(--text-muted);
+  font-size: calc(13px * var(--font-scale, 1));
+}
+
 /* ---- редактор эмодзи (EmojiEditorModal) ---- */
 /* Поверх пикера (z-index 900), а не под ним, как обычные модалки: редактор
    открывается ИЗ пикера и панель остаётся видна под ним. */
@@ -6900,6 +7032,16 @@ button.settings-row-clickable:hover .settings-row-label {
   flex: 1;
   overflow-y: auto;
   padding: 6px;
+  /* Сетку можно не только крутить колесом, но и тащить зажатой левой кнопкой
+     (см. dragScroll.ts) — без колеса мыши это единственный способ до неё
+     добраться. Отсюда и курсор-«рука», и запрет выделения: иначе
+     перетаскивание выделяло бы подписи категорий. */
+  cursor: grab;
+  user-select: none;
+}
+
+.emoji-picker-scroll:active {
+  cursor: grabbing;
 }
 
 .emoji-category-label {

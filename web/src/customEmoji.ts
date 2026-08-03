@@ -144,6 +144,14 @@ export const customEmojiStore = {
     return catalog.filter((server) => server.canAdd)
   },
 
+  /** Мои серверы целиком — со значками, названиями и правами на средства
+   * выражения. Нужен не только эмодзи: по нему же считается, могу ли я
+   * управлять набором СТИКЕРОВ (см. stickers.ts — там своих прав нет, они
+   * общие, «Управление выражениями» на сервере набора). */
+  getCatalog(): EmojiServer[] {
+    return catalog
+  },
+
   /** Полный список моих эмодзи — для поиска по всем наборам разом. */
   all(): CustomEmoji[] {
     return customEmojiStore.getPacks().flatMap((pack) => pack.emoji)
@@ -222,4 +230,11 @@ export function useCustomEmojiPacks(): CustomEmojiPack[] {
 export function useEmojiUploadTargets(): EmojiServer[] {
   useCustomEmojiVersion()
   return customEmojiStore.getUploadTargets()
+}
+
+/** Мои серверы глазами пикера — с правами на средства выражения (эмодзи и
+ * стикеры сразу), с подпиской на изменения. */
+export function useExpressionServers(): EmojiServer[] {
+  useCustomEmojiVersion()
+  return customEmojiStore.getCatalog()
 }

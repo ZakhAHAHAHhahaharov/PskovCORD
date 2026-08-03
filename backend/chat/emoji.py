@@ -237,23 +237,116 @@ def can_use(key: str, user, server=None) -> bool:
     return emoji_id in usable_ids([emoji_id], user, server)
 
 
+# --- стикеры -----------------------------------------------------------------
+# Стикер едет в тексте сообщения тем же способом, что и кастомный эмодзи, —
+# токеном. Отдельного поля у сообщения нет намеренно: и канал, и личка, и
+# правка, и ответ-превью, и поиск уже умеют работать с content, а поле
+# пришлось бы протаскивать через две модели, два сериализатора и четыре
+# обработчика консьюмера ради того же самого результата.
+#
+# Имени внутри токена, в отличие от эмодзи, НЕТ: стикер рисуется целиком,
+# читать его подпись в сыром тексте некому, зато без имени в токене имя самого
+# стикера освобождается от алфавитных ограничений — и может быть кириллицей
+# (см. chat.models.Sticker.name). Форма не пересекается с EMOJI_TOKEN_RE: там
+# после "<" идёт либо ":", либо "a:".
+STICKER_TOKEN_RE = re.compile(r"<sticker:(\d{1,18})>")
+
+# Чем заменяется стикер, которого автору здесь нельзя. Не пустой строкой:
+# сообщение из одного только стикера схлопнулось бы в пустое, а пустые
+# сообщения без вложений не создаются вовсе — то есть отправка молча
+# проваливалась бы вместо понятного «его тут нельзя».
+STICKER_DENIED_PLACEHOLDER = "[стикер]"
+
+
+def usable_sticker_ids(sticker_ids, user, server=None) -> set:
+    """Из переданных id стикеров — те, что этому пользователю здесь разрешены.
+
+    Правило то же, что у эмодзи (см. usable_ids), плюс одно послабление:
+    базовый набор (StickerPack.server is None) доступен всем и везде — он
+    ничей, ограничивать в нём нечего.
+    """
+    from .models import Membership, Sticker
+
+    ids = {int(i) for i in sticker_ids}
+    if not ids or not user or not user.is_authenticated:
+        return set()
+
+    owners = dict(
+        Sticker.objects.filter(id__in=ids).values_list("id", "pack__server_id"))
+    if not owners:
+        return set()
+
+    # Базовые проходят всегда и не участвуют в проверках ниже.
+    allowed = {sid for sid, owner in owners.items() if owner is None}
+
+    my_servers = set(
+        Membership.objects.filter(user=user).values_list("server_id", flat=True))
+    allowed |= {
+        sid for sid, owner in owners.items()
+        if owner is not None and owner in my_servers
+    }
+    if server is None:
+        return allowed
+
+    from . import roles
+
+    external = {
+        sid for sid in allowed
+        if owners[sid] is not None and owners[sid] != server.id
+    }
+    # Своё право, а не use_external_emojis: оно заведено под это с самого
+    # начала (см. chat.roles) — можно разрешить чужие эмодзи, но запретить
+    # чужие стикеры, они и заметнее, и крупнее.
+    if external and not roles.permissions_for(user, server).get(
+        "use_external_stickers"
+    ):
+        allowed -= external
+    return allowed
+
+
+def sticker_ids_in_text(content: str) -> list:
+    """id всех стикеров, упомянутых в тексте."""
+    if not content or "<" not in content:
+        return []
+    return [int(m.group(1)) for m in STICKER_TOKEN_RE.finditer(content)]
+
+
 def sanitize_content(content: str, user, server=None) -> str:
-    """Убирает из текста сообщения токены эмодзи, которых автору здесь нельзя.
+    """Убирает из текста сообщения токены эмодзи и стикеров, которых автору
+    здесь нельзя.
 
     Не отклоняет сообщение целиком: «нельзя» тут — обычное дело (эмодзи удалили
     с сервера, пока висел черновик; роль сняли право на внешние), и терять
-    из-за этого весь текст несоразмерно. Недоступный токен превращается в
+    из-за этого весь текст несоразмерно. Недоступный эмодзи превращается в
     ":имя:" — читатель видит, что имелось в виду, но картинки не будет ни у
-    кого. Именно это и есть точка контроля: без неё право «использовать внешние
-    эмодзи» ничего бы не значило для текста, только для реакций.
+    кого; недоступный стикер — в "[стикер]". Именно это и есть точка контроля:
+    без неё право «использовать внешние эмодзи» ничего бы не значило для
+    текста, только для реакций.
     """
     if not content or "<" not in content:
         return content
+    content = _sanitize_emoji(content, user, server)
+    return _sanitize_stickers(content, user, server)
+
+
+def _sanitize_emoji(content: str, user, server) -> str:
     matches = list(EMOJI_TOKEN_RE.finditer(content))
     if not matches:
         return content
     allowed = usable_ids([m.group(3) for m in matches], user, server)
     return EMOJI_TOKEN_RE.sub(
         lambda m: m.group(0) if int(m.group(3)) in allowed else f":{m.group(2)}:",
+        content,
+    )
+
+
+def _sanitize_stickers(content: str, user, server) -> str:
+    matches = list(STICKER_TOKEN_RE.finditer(content))
+    if not matches:
+        return content
+    allowed = usable_sticker_ids([m.group(1) for m in matches], user, server)
+    return STICKER_TOKEN_RE.sub(
+        lambda m: m.group(0) if int(m.group(1)) in allowed
+        else STICKER_DENIED_PLACEHOLDER,
         content,
     )

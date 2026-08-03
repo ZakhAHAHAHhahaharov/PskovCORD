@@ -8,6 +8,7 @@ import { customEmojiStore } from '../customEmoji'
 import { useGateway } from '../gateway'
 import { outbox } from '../outbox'
 import { presenceStore } from '../presence'
+import { stickerStore } from '../stickers'
 import { playLeaveSound, playScreenShareRequestSound, playWakeUpSound } from '../sounds'
 
 interface CallParticipant {
@@ -401,6 +402,12 @@ export function useGatewayEvents(params: UseGatewayEventsParams) {
     const offServerEmoji = gateway.on('server_emoji', (d) => {
       customEmojiStore.setServerEmoji(d.server_id, d.emoji)
     })
+    // То же самое для наборов стикеров сервера — и тоже целиком: набор мог не
+    // пополниться, а исчезнуть (удалили последний стикер, см. backend
+    // ServerStickerDetail.delete).
+    const offServerStickers = gateway.on('server_stickers', (d) => {
+      stickerStore.setServerPacks(d.server_id, d.packs)
+    })
     // Нашу заявку на вступление одобрили — сервер появляется в списке сразу.
     const offJoinApproved = gateway.on('server_join_approved', (d) => {
       setServers((prev) => (prev.some((s) => s.id === d.server.id) ? prev : [...prev, d.server]))
@@ -706,6 +713,7 @@ export function useGatewayEvents(params: UseGatewayEventsParams) {
       offMemberNickname()
       offServerUpdate()
       offServerEmoji()
+      offServerStickers()
       offJoinApproved()
       offCallState()
       offDmMsg()
