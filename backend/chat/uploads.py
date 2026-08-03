@@ -119,6 +119,40 @@ def sniff_emoji(uploaded_file) -> tuple[str, bool] | None:
     return mime, animated
 
 
+# Контейнеры, в которых браузеры отдают запись с микрофона (MediaRecorder).
+# Chrome/Edge — webm с opus внутри, Firefox — ogg, Safari — mp4/m4a.
+#
+# Опознаются по СИГНАТУРЕ, а не по расширению, в отличие от обычных
+# аудиовложений выше: у голосового расширения по-честному нет вовсе (файл
+# собран в памяти браузера), а доверять присланному content_type нельзя нигде.
+# Заодно это отсекает попытку выдать за голосовое что угодно другое: у
+# сообщения с voice=True особая отрисовка и своё право, и пускать туда
+# произвольный файл незачем.
+_VOICE_SIGNATURES = (
+    # EBML — общий заголовок Matroska/WebM. Отличать webm от mkv здесь, в
+    # отличие от стикеров, не нужно: и то и другое браузер проиграет как
+    # аудио, а видеодорожки в записи с микрофона нет.
+    (b"\x1a\x45\xdf\xa3", "audio/webm"),
+    (b"OggS", "audio/ogg"),
+)
+# У MP4/M4A сигнатура не в начале файла: первые четыре байта — размер бокса,
+# и только за ними идёт "ftyp".
+_MP4_BRAND_OFFSET = 4
+
+
+def sniff_voice(uploaded_file) -> str | None:
+    """content_type записанного голосового сообщения; None — не годится."""
+    uploaded_file.seek(0)
+    head = uploaded_file.read(16)
+    uploaded_file.seek(0)
+    for signature, mime in _VOICE_SIGNATURES:
+        if head.startswith(signature):
+            return mime
+    if head[_MP4_BRAND_OFFSET:_MP4_BRAND_OFFSET + 4] == b"ftyp":
+        return "audio/mp4"
+    return None
+
+
 def _guess_media_type(filename: str) -> str:
     guessed, _encoding = mimetypes.guess_type(filename or "")
     if guessed and guessed.startswith(EMBEDDABLE_MEDIA_PREFIXES):

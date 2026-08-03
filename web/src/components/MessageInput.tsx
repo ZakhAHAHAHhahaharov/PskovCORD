@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Pencil, Plus, Smile, Sticker as StickerIcon, X } from 'lucide-react'
+import { Check, Mic, Pencil, Plus, Smile, Sticker as StickerIcon, Trash2, X } from 'lucide-react'
 import {
   Attachment,
   ChatMessageBase,
@@ -8,7 +8,11 @@ import {
   Sticker,
   mediaUrl,
   uploadAttachment,
+  uploadVoiceMessage,
 } from '../api'
+import {
+  MAX_VOICE_MS, VoiceRecording, canRecordVoice, formatVoiceTime,
+} from '../voiceRecorder'
 import { STICKER_TOKEN_RE, stickerToken } from '../emoji'
 import {
   domToPlainText, getCaretOffset, plainOffsetToDomPoint, renderEmojiNode, renderValueIntoDom,
@@ -87,6 +91,10 @@ function formatSize(bytes: number): string {
 
 const MENTION_RESULTS_LIMIT = 6
 
+/** Короче этого запись не отправляется вовсе — это промах по кнопке, а не
+ * сообщение. */
+const MIN_VOICE_MS = 500
+
 export default function MessageInput({
   channelName,
   onSend,
@@ -101,6 +109,7 @@ export default function MessageInput({
   loadDraft,
   saveDraft,
   mentionCandidates = [],
+  canSendVoice = true,
 }: {
   /** Название текстового канала/собеседника/группы для плейсхолдера. */
   channelName: string
@@ -128,6 +137,9 @@ export default function MessageInput({
   /** Кандидаты на @упоминание при вводе "@ник" — ростер сервера или участники
    * диалога/группы, кому принадлежит это конкретное поле ввода. */
   mentionCandidates?: MentionCandidate[]
+  /** Право «Отправление голосовых сообщений» здесь. По умолчанию true — в
+   * личке и группе ролей нет вовсе, и спрашивать не у кого. */
+  canSendVoice?: boolean
 }) {
   const replyAuthorNickname = useNickname(replyTarget?.author.id)
   const restored = draftKey && loadDraft ? loadDraft(draftKey) : undefined
@@ -635,6 +647,95 @@ export default function MessageInput({
     setPickerMode(mode)
   }
 
+  // --- голосовое сообщение -------------------------------------------------
+  // Запись живёт в ref, а не в состоянии: сам объект неизменяемый (см.
+  // VoiceRecording), а перерисовка нужна на другое — таймер и индикатор
+  // громкости, они и лежат в стейте.
+  const recorderRef = useRef<VoiceRecording | null>(null)
+  const [recordingSince, setRecordingSince] = useState<number | null>(null)
+  const [recordElapsed, setRecordElapsed] = useState(0)
+  const [micLevel, setMicLevel] = useState(0)
+  const [voiceSending, setVoiceSending] = useState(false)
+  const [voiceError, setVoiceError] = useState('')
+  const recording = recordingSince !== null
+
+  // Таймер записи. Отдельным эффектом, а не setInterval'ом внутри старта:
+  // так он гарантированно снимается и при размонтировании композера
+  // (переключили канал прямо во время записи).
+  useEffect(() => {
+    if (!recording) return
+    const id = window.setInterval(() => {
+      const rec = recorderRef.current
+      if (!rec) return
+      setRecordElapsed(rec.elapsedMs)
+      // Дальше предела всё равно не примут (backend обрежет длительность) —
+      // останавливаемся сами и отправляем что успели, а не теряем запись.
+      if (rec.elapsedMs >= MAX_VOICE_MS) void finishVoice()
+    }, 200)
+    return () => window.clearInterval(id)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [recording])
+
+  // Микрофон надо отпустить в любом случае: пока дорожка потока жива, система
+  // показывает «идёт запись», даже если вкладку давно переключили.
+  useEffect(
+    () => () => {
+      recorderRef.current?.cancel()
+      recorderRef.current = null
+    },
+    [],
+  )
+
+  const startVoice = async () => {
+    setVoiceError('')
+    try {
+      recorderRef.current = await VoiceRecording.start(setMicLevel)
+      setRecordElapsed(0)
+      setRecordingSince(Date.now())
+    } catch (err) {
+      // Чаще всего это отказ в доступе к микрофону — сообщение браузера тут
+      // невнятное, поэтому своё.
+      setVoiceError(
+        (err as Error).name === 'NotAllowedError'
+          ? 'Микрофон недоступен — разрешите доступ в настройках браузера.'
+          : `Не удалось начать запись: ${(err as Error).message}`,
+      )
+    }
+  }
+
+  const cancelVoice = () => {
+    recorderRef.current?.cancel()
+    recorderRef.current = null
+    setRecordingSince(null)
+    setMicLevel(0)
+  }
+
+  /** Закончить запись и отправить её ОТДЕЛЬНЫМ сообщением — как стикер (см.
+   * sendSticker): текст в поле ввода и прикреплённые файлы остаются на месте,
+   * голосовое к ним не примешивается. */
+  const finishVoice = async () => {
+    const rec = recorderRef.current
+    if (!rec) return
+    recorderRef.current = null
+    setRecordingSince(null)
+    setMicLevel(0)
+    const result = await rec.stop()
+    // Случайное касание кнопки — не сообщение. Полсекунды это заведомо
+    // меньше любого осмысленного «ага».
+    if (result.durationMs < MIN_VOICE_MS) return
+    setVoiceSending(true)
+    try {
+      const attachment = await uploadVoiceMessage(
+        result.blob, result.durationMs, result.waveform,
+      )
+      onSend({ content: '', attachments: [attachment] })
+    } catch (err) {
+      setVoiceError((err as Error).message)
+    } finally {
+      setVoiceSending(false)
+    }
+  }
+
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault()
     dragDepth.current = 0
@@ -753,7 +854,50 @@ export default function MessageInput({
         </div>
       )}
 
-      <form className="message-input" onSubmit={submit}>
+      {/* Пока идёт запись, на месте композера — панель записи: печатать в
+          этот момент всё равно нечего, а полоса с таймером и двумя понятными
+          кнопками не оставляет вопросов, что происходит и как это прекратить.
+          Сам композер при этом НЕ размонтируется, а прячется классом (см.
+          .message-input.hidden-by-recorder): его содержимое живёт прямо в DOM
+          contentEditable'а, а не в состоянии React (см. комментарий у
+          renderValueIntoDom), и снос узла стёр бы недописанное сообщение —
+          ровно то, чего голосовое трогать не должно. */}
+      {recording && (
+        <div className="voice-recorder">
+          <button
+            type="button"
+            className="voice-recorder-cancel"
+            title="Отменить запись"
+            onClick={cancelVoice}
+          >
+            <Trash2 size={16} />
+          </button>
+          <span className="voice-recorder-dot" />
+          <span className="voice-recorder-time">{formatVoiceTime(recordElapsed)}</span>
+          {/* Живой индикатор громкости — единственная обратная связь, по
+              которой видно, что микрофон вообще что-то слышит. */}
+          <span className="voice-recorder-level">
+            <span
+              className="voice-recorder-level-fill"
+              style={{ width: `${Math.min(100, micLevel)}%` }}
+            />
+          </span>
+          <span className="voice-recorder-hint">Запись…</span>
+          <button
+            type="button"
+            className="voice-recorder-send"
+            title="Отправить голосовое"
+            onClick={() => void finishVoice()}
+          >
+            <Check size={17} />
+          </button>
+        </div>
+      )}
+
+      <form
+        className={`message-input ${recording ? 'hidden-by-recorder' : ''}`}
+        onSubmit={submit}
+      >
         {/* В режиме редактирования прикреплять нечего — состав вложений
             изменить нельзя (см. submit). */}
         {!editTarget && (
@@ -831,9 +975,27 @@ export default function MessageInput({
         >
           <Smile size={18} />
         </button>
+        {/* Микрофон последний в ряду — как в Telegram и WhatsApp, где он
+            стоит на месте «отправить». Нет права или браузер не умеет
+            записывать — кнопки нет вовсе: кнопка, которая на нажатие отвечает
+            отказом, хуже отсутствующей. В режиме правки чужого текста
+            голосовому тоже не место — оно уходит отдельным сообщением. */}
+        {!editTarget && canSendVoice && canRecordVoice() && (
+          <button
+            type="button"
+            className="composer-btn"
+            title="Записать голосовое"
+            disabled={voiceSending}
+            onClick={() => void startVoice()}
+          >
+            <Mic size={18} />
+          </button>
+        )}
       </form>
 
       {uploading && <div className="composer-hint">Файлы загружаются…</div>}
+      {voiceSending && <div className="composer-hint">Голосовое отправляется…</div>}
+      {voiceError && <div className="composer-hint composer-hint-error">{voiceError}</div>}
 
       {emojiAnchor && (
         <EmojiPicker

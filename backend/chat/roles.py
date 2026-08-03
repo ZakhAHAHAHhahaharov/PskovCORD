@@ -44,6 +44,9 @@ PERMISSION_FIELDS = [
     ("send_messages", "Отправка сообщений", "text", ""),
     ("attach_files", "Прикреплять файлы",
      "text", "Позволяет прикреплять картинки, файлы и прочее к сообщениям."),
+    ("send_voice_messages", "Отправление голосовых сообщений",
+     "text", "Позволяет записывать и отправлять голосовые сообщения. "
+             "Без этого права кнопка микрофона в канале не появляется."),
     ("add_reactions", "Добавлять реакции", "text", ""),
     ("use_external_emojis", "Использовать внешние эмодзи",
      "text", "Позволяет использовать эмодзи, созданные на других серверах."),
@@ -116,7 +119,8 @@ PERMISSION_NAMES = [field for field, _label, _group, _hint in PERMISSION_FIELDS]
 BASE_MEMBER_PERMISSIONS = {
     "view_channels",
     "create_invites", "change_nickname",
-    "send_messages", "attach_files", "add_reactions", "read_message_history",
+    "send_messages", "attach_files", "send_voice_messages", "add_reactions",
+    "read_message_history",
     "use_external_emojis", "use_external_stickers",
     "connect", "speak", "video", "start_mute_vote", "request_screen_share",
 }

@@ -117,6 +117,11 @@ class Role(models.Model):
     # --- права текстового канала ---
     send_messages = models.BooleanField(default=True)
     attach_files = models.BooleanField(default=True)
+    # Записывать и отправлять голосовые (Attachment.voice). Отдельно от
+    # attach_files намеренно: «не засоряйте канал файлами» и «не наговаривайте
+    # голосом вместо текста» — совершенно разные пожелания, и в каналах, где
+    # запрещают второе, первое обычно как раз нужно.
+    send_voice_messages = models.BooleanField(default=True)
     add_reactions = models.BooleanField(default=True)
     # Удалять/откреплять чужие сообщения («Управление сообщениями» в UI).
     delete_messages = models.BooleanField(default=False)
@@ -661,6 +666,16 @@ ATTACHMENT_SUBDIR = "attachments"
 MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024
 # Сколько файлов можно повесить на одно сообщение — как в Discord.
 MAX_ATTACHMENTS_PER_MESSAGE = 10
+
+# --- голосовые сообщения ---
+# Потолок длительности. Не про диск (его стережёт MAX_ATTACHMENT_BYTES, и 10
+# минут opus'а в него укладываются с запасом), а про жанр: голосовое — это
+# реплика вместо печати, а не подкаст, который никто не станет слушать.
+MAX_VOICE_MS = 10 * 60 * 1000
+# Сколько столбиков в дорожке. 64 — ровно столько, чтобы рисунок читался и на
+# узком мобильном пузыре; больше значило бы гонять в каждом сообщении массив,
+# который всё равно негде показать.
+MAX_WAVEFORM_POINTS = 64
 # Сколько РАЗНЫХ эмодзи может висеть на одном сообщении. Ограничение на
 # сообщение, а не на пользователя: один человек волен поставить все 20 сразу.
 MAX_REACTIONS_PER_MESSAGE = 20
@@ -716,6 +731,20 @@ class Attachment(models.Model):
     # до его загрузки и не дёргать вёрстку уже прочитанного чата.
     width = models.PositiveIntegerField(null=True, blank=True)
     height = models.PositiveIntegerField(null=True, blank=True)
+    # Голосовое сообщение — записанное прямо в клиенте, а не выбранное файлом.
+    # Отдельный флаг, а не «догадка по content_type»: обычный присланный mp3 —
+    # это вложение, которое открывают плеером, а голосовое рисуется дорожкой во
+    # всю ширину сообщения и режется собственным правом (send_voice_messages).
+    voice = models.BooleanField(default=False)
+    # Длительность в миллисекундах — чтобы показать «00:41» ДО того, как
+    # браузер скачает и распарсит сам файл (у webm из MediaRecorder
+    # длительность в контейнере вообще часто не проставлена, и <audio>
+    # сообщает Infinity, пока не доиграет до конца).
+    duration_ms = models.PositiveIntegerField(null=True, blank=True)
+    # Пики громкости 0..100 — та самая «дорожка» столбиками. Считает клиент при
+    # записи (см. web/src/voiceRecorder.ts): у бэкенда нет декодера звука, а
+    # у браузера он встроенный.
+    waveform = models.JSONField(default=list, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     message = models.ForeignKey(

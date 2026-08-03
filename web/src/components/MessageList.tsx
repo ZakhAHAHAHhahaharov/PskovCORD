@@ -21,6 +21,15 @@ import MessageReactions from './MessageReactions'
 import ServerInviteCard from './ServerInviteCard'
 import { ProfilePopupUser } from './MiniProfilePopup'
 
+/** Насколько близко к низу нужно стоять, чтобы ЧУЖОЕ сообщение утащило ленту
+ * вниз. В пикселях, а не в долях: смысл здесь «мы фактически внизу», и он не
+ * зависит от того, насколько длинная история выше. */
+const OTHERS_BOTTOM_PX = 150
+
+/** До какой доли прокрутки СВОЁ отправленное сообщение всё ещё утаскивает
+ * ленту вниз (0.3 = промотано вверх не больше чем на 30%). */
+const MINE_SCROLLED_UP_MAX = 0.3
+
 /** Сколько времени у только что подтверждённого удаления остаётся кнопка
  * "Отменить" — после этого DELETE уходит на сервер по-настоящему и отмены
  * уже не будет (см. startPendingDelete). */
@@ -356,17 +365,38 @@ export default function MessageList({
   // статичным кадром.
   const [hoveredAuthorRow, setHoveredAuthorRow] = useState<string | number | null>(null)
 
-  // Автопрокрутка вниз — только если мы и так стояли внизу. Раньше список
-  // прыгал к последнему сообщению безусловно, и читать историю во время
-  // живой переписки было невозможно: каждое чужое сообщение утаскивало вниз.
+  // Автопрокрутка вниз. Раньше список прыгал к последнему сообщению
+  // безусловно, и читать историю во время живой переписки было невозможно:
+  // каждое чужое сообщение утаскивало вниз. Поэтому правил два, и они разные:
+  //
+  //   * ЧУЖОЕ сообщение утаскивает вниз, только если мы и так стояли у низа
+  //     (в пределах OTHERS_BOTTOM_PX) — то есть читали живую переписку, а не
+  //     листали историю;
+  //   * СВОЁ — если лента промотана вверх меньше чем на MINE_SCROLLED_UP_MAX
+  //     от всей высоты прокрутки. Порог здесь мягче осознанно: отправляя
+  //     сообщение, человек хочет его увидеть, и «отправил, а оно улетело
+  //     куда-то вверх» — это ровно то, чего он не ждёт. Но если он ушёл
+  //     читать историю по-настоящему далеко, дёргать его не надо и тут:
+  //     сообщение никуда не денется.
   useEffect(() => {
     const el = listRef.current
     if (!el) return
     const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
-    if (distanceFromBottom < 150) {
+    if (distanceFromBottom < OTHERS_BOTTOM_PX) {
+      bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+      return
+    }
+    const last = messages[messages.length - 1]
+    if (!last || last.author.id !== currentUserId) return
+    // Доля прокрутки, а не пиксели: «на 30% вверх» в ленте на два экрана и в
+    // ленте на сорок — совершенно разные расстояния, и постоянный порог в
+    // одной из них означал бы «никогда».
+    const scrollable = el.scrollHeight - el.clientHeight
+    if (scrollable <= 0) return
+    if (distanceFromBottom / scrollable <= MINE_SCROLLED_UP_MAX) {
       bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
     }
-  }, [messages])
+  }, [messages, currentUserId])
 
   // Сообщение, для которого открыт DeleteMessageModal (обычный клик по
   // корзине — см. requestDelete). Shift+клик минует его — requestDelete

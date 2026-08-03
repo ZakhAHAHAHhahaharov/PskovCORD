@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Download, FileText, X } from 'lucide-react'
 import { Attachment, mediaUrl } from '../api'
+import VoiceMessage from './VoiceMessage'
 
 /**
  * Отрисовка вложений сообщения.
@@ -100,6 +101,15 @@ export default function MessageAttachments({ attachments }: { attachments: Attac
           return (
             <video key={a.id} className="attachment-video" src={url} controls preload="metadata" />
           )
+        }
+
+        // Голосовое — свой плеер с дорожкой; обычный присланный аудиофайл —
+        // штатные controls браузера. Различает их флаг voice, проставленный
+        // при загрузке (см. backend AttachmentUpload), а не content_type:
+        // и то, и другое — audio/*, но ведут себя они по-разному, и голосовое
+        // вдобавок режется собственным правом.
+        if (a.voice) {
+          return <VoiceMessage key={a.id} attachment={a} />
         }
 
         if (a.content_type.startsWith('audio/')) {
