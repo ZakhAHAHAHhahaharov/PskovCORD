@@ -487,6 +487,39 @@ class Message(models.Model):
         return f"{self.author}: {self.content[:30]}"
 
 
+class ChannelReadState(models.Model):
+    """До какого сообщения участник дочитал этот текстовый канал.
+
+    Курсор — «открыть канал там, где остановился» (см. chat.views
+    ChannelReadStateView): при заходе в канал клиент сравнивает
+    last_read_message_id с самым свежим сообщением и либо прокручивает в
+    самый низ (всё видено), либо догружает и показывает то, что пропущено.
+
+    last_read_message_id хранится КАК ЕСТЬ, без FK на Message: сообщение,
+    на которое он указывает, к этому моменту могло быть удалено, а курсор
+    должен пережить удаление ровно как переживают его id в токенах реакций и
+    эмодзи (см. chat.emoji) — сравнения "message.id > last_read_message_id"
+    работают одинаково, есть объект за этим id или нет.
+    """
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+        related_name="channel_read_states")
+    channel = models.ForeignKey(
+        Channel, on_delete=models.CASCADE, related_name="read_states")
+    last_read_message_id = models.BigIntegerField(null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["user", "channel"], name="unique_channel_read_state"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.user} @ {self.channel}: {self.last_read_message_id}"
+
+
 _DM_ROOM_PREFIX = "dm_"
 
 

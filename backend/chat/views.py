@@ -25,7 +25,7 @@ from .models import (
     Attachment, Channel, Conversation, ConversationMessage,
     ConversationParticipant, FriendNickname, Membership, Message, ProfileNote, Role, Server,
     ServerBan, ServerEmoji, ServerInvite, ServerJoinRequest, Sticker, StickerPack,
-    UserRelationState,
+    ChannelReadState, UserRelationState,
     MAX_ATTACHMENT_BYTES, MAX_EMOJI_BYTES, MAX_EMOJI_PER_SERVER,
     MAX_VOICE_MS, MAX_WAVEFORM_POINTS,
     MAX_STICKER_NAME_LEN, MAX_STICKER_PACK_NAME_LEN, MAX_STICKER_PACKS_PER_SERVER,
@@ -1969,6 +1969,57 @@ class ChannelMessages(APIView):
         qs = _hide_old_history(request, channel.server, qs)
         messages = _paginate_messages(request, qs)
         return Response(MessageSerializer(messages, many=True).data)
+
+
+class ChannelReadStateView(APIView):
+    """GET — где я остановился в этом канале; POST {"message_id"?} —
+    продвинуть курсор вперёд (без message_id — до самого свежего сообщения).
+
+    Курсор двигается только ВПЕРЁД (max с уже сохранённым): открытые в
+    нескольких вкладках/устройствах клиенты присылают отметки не по порядку
+    (например, вкладка, простоявшая свёрнутой на старом сообщении, ответит
+    позже вкладки, которая уже прочитала всё), и без max более старая отметка
+    откатила бы курсор назад, заставив клиент при следующем заходе решить,
+    что свежие сообщения снова непрочитаны.
+    """
+
+    def get(self, request, channel_id):
+        channel = get_object_or_404(Channel, id=channel_id)
+        denied = _require_channel_access(request, channel)
+        if denied:
+            return denied
+        state = ChannelReadState.objects.filter(
+            user=request.user, channel=channel).first()
+        return Response({
+            "last_read_message_id": state.last_read_message_id if state else None,
+        })
+
+    def post(self, request, channel_id):
+        channel = get_object_or_404(Channel, id=channel_id)
+        denied = _require_channel_access(request, channel)
+        if denied:
+            return denied
+
+        raw = request.data.get("message_id")
+        if raw is None:
+            # Без message_id — «прочитано всё, что есть сейчас».
+            message_id = channel.messages.order_by("-id").values_list(
+                "id", flat=True).first()
+            if message_id is None:
+                return Response({"last_read_message_id": None})
+        else:
+            try:
+                message_id = int(raw)
+            except (TypeError, ValueError):
+                return Response(
+                    {"detail": "message_id должен быть числом."}, status=400)
+
+        state, _created = ChannelReadState.objects.get_or_create(
+            user=request.user, channel=channel)
+        if state.last_read_message_id is None or message_id > state.last_read_message_id:
+            state.last_read_message_id = message_id
+            state.save(update_fields=["last_read_message_id", "updated_at"])
+        return Response({"last_read_message_id": state.last_read_message_id})
 
 
 class ChannelPins(APIView):

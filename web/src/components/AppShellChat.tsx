@@ -152,6 +152,12 @@ export default function AppShellChat({
                 onAcceptServerInvite={inviteLinks.handleAcceptServerInvite}
                 onDeclineServerInvite={inviteLinks.handleDeclineServerInvite}
                 onOpenInvitedServer={inviteLinks.handleOpenInvitedServer}
+                // Курсор прочтения персистится только для серверных каналов
+                // (см. AppShellChat ниже и useChannelMessages) — в личке/
+                // группе кнопка «вниз» и автопрокрутка работают как обычно,
+                // просто без сохранения позиции между заходами: scrollAnchor
+                // здесь только сбрасывает прокрутку на низ при смене диалога.
+                scrollAnchor={{ key: `dm-${activeConversation.id}`, target: 'bottom' }}
               />
               <MessageInput
                 key={`dm-${activeConversation.id}`}
@@ -249,6 +255,8 @@ export default function AppShellChat({
               onRetry={(nonce) => outbox.retry(nonce)}
               onDiscard={(nonce) => outbox.discard(nonce)}
               onTogglePin={canDeleteMessages ? channelMessages.handleTogglePin : undefined}
+              scrollAnchor={channelMessages.scrollAnchor}
+              onReachedBottom={channelMessages.handleReachedBottom}
             />
             <MessageInput
               key={`channel-${currentChannel.id}`}
