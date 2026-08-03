@@ -102,9 +102,14 @@ export default function MessageContextMenu({
     const onMouseDown = (e: MouseEvent) => {
       if (e.button !== 0) return
       if (ref.current?.contains(e.target as Node)) return
-      // Полный пикер — отдельный DOM-узел (портала нет, но рисуется как
-      // сосед этого меню, а не внутри него) — клик внутри НЕГО не должен
-      // закрывать это меню, иначе выбор эмодзи там долетал бы до пустоты.
+      // Флайаут и полный пикер — отдельные DOM-узлы (портала нет, но рисуются
+      // соседями этого меню, а не внутри него, см. ReactionFlyout ниже и
+      // EmojiPicker). Клик внутри НИХ не должен закрывать это меню — иначе
+      // mousedown срывал бы меню (а вместе с ним и флайаут/пикер из DOM) ещё
+      // ДО того, как за ним придёт click с самим выбором, и реакция/«показать
+      // больше» долетали бы до уже снесённой кнопки.
+      const flyoutEl = document.querySelector('.message-ctx-flyout')
+      if (flyoutEl?.contains(e.target as Node)) return
       const pickerEl = document.querySelector('.emoji-picker')
       if (pickerEl?.contains(e.target as Node)) return
       onClose()
