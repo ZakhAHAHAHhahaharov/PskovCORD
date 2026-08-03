@@ -532,3 +532,30 @@ export function emojiIdsInText(content: string): number[] {
   for (const match of content.matchAll(EMOJI_TOKEN_RE)) ids.push(Number(match[3]))
   return ids
 }
+
+// --- стикер внутри текста сообщения -----------------------------------------
+// "<sticker:42>" — форма повторяет backend chat/emoji.py STICKER_TOKEN_RE, там
+// же она и охраняется правами (sanitize_content).
+//
+// Имени внутри токена, в отличие от эмодзи, нет: стикер рисуется целиком и
+// подписи в сыром тексте ему не нужно, зато без имени в токене само имя
+// стикера свободно от алфавитных ограничений и может быть кириллицей.
+//
+// Отдельного поля у сообщения под стикер нет намеренно — токеном он проходит
+// весь путь (канал, личка, правка, превью ответа) через уже существующий
+// content, не требуя ни новых полей в двух моделях, ни ветвлений в отправке.
+
+export const STICKER_TOKEN_RE = /<sticker:(\d{1,18})>/g
+
+/** Текст сообщения, которым отправляется стикер. */
+export function stickerToken(stickerId: number): string {
+  return `<sticker:${stickerId}>`
+}
+
+/** id всех стикеров, упомянутых в тексте. */
+export function stickerIdsInText(content: string): number[] {
+  if (!content.includes('<')) return []
+  const ids: number[] = []
+  for (const match of content.matchAll(STICKER_TOKEN_RE)) ids.push(Number(match[1]))
+  return ids
+}

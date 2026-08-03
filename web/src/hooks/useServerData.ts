@@ -5,6 +5,7 @@ import {
 import { customEmojiStore, loadMyEmoji } from '../customEmoji'
 import { isMentioned } from '../mentions'
 import { presenceStore } from '../presence'
+import { loadMyStickers } from '../stickers'
 
 /** Серверы/каналы/участники/роли — весь "серверный" домен AppShell: список
  * серверов и выбранного сервера/канала, ростер и роли (свои и фоновых
@@ -29,12 +30,13 @@ export function useServerData(userRef: RefObject<Me | null>) {
   const serversRef = useRef<Server[]>([])
   serversRef.current = servers
 
-  // --- кастомные эмодзи ----------------------------------------------------
+  // --- кастомные эмодзи и стикеры ------------------------------------------
   // Наборы грузятся один раз на сессию: они нужны не только пикеру, но и
   // отрисовке уже пришедших сообщений, то есть практически сразу и везде
-  // (см. customEmoji.ts).
+  // (см. customEmoji.ts, stickers.ts).
   useEffect(() => {
     void loadMyEmoji()
+    void loadMyStickers()
   }, [])
 
   // Каталог серверов для пикера — порядок вкладок, значки и права добавлять/

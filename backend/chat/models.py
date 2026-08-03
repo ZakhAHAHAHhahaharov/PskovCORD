@@ -108,10 +108,9 @@ class Role(models.Model):
     create_invites = models.BooleanField(default=True)
 
     # --- средства выражения эмоций (кастомные эмодзи/стикеры/звуки) ---------
-    # Эмодзи (ServerEmoji) уже настоящие: create_expressions пускает загружать
-    # новые, manage_expressions — переименовывать и удалять чужие. Стикеров и
-    # звуков ещё нет, поэтому use_external_stickers ниже остаётся в
-    # chat.roles.UPCOMING_PERMISSIONS с пометкой «скоро».
+    # Эмодзи (ServerEmoji) и стикеры (Sticker) уже настоящие, и права на них
+    # общие: create_expressions пускает загружать новые, manage_expressions —
+    # переименовывать и удалять чужие. Звуковой доски ещё нет.
     create_expressions = models.BooleanField(default=False)
     manage_expressions = models.BooleanField(default=False)
 
@@ -132,8 +131,11 @@ class Role(models.Model):
     # сервера доступны всем его участникам всегда и этим правом не режутся —
     # режется только «принёс со стороны» (см. chat.emoji.usable_ids).
     use_external_emojis = models.BooleanField(default=True)
-    # Стикеров в проекте ещё нет — право заведено заранее, см. «скоро» в
-    # chat.roles.UPCOMING_PERMISSIONS.
+    # То же самое для стикеров ДРУГИХ серверов. Отдельное право, а не общее с
+    # эмодзи: стикер крупный и заметный, и «чужие эмодзи можно, чужие стикеры
+    # нельзя» — вполне осмысленная настройка (см.
+    # chat.emoji.usable_sticker_ids). Базовые наборы (StickerPack без сервера)
+    # им не режутся — они ничьи.
     use_external_stickers = models.BooleanField(default=True)
 
     # --- права голосового канала ---
@@ -910,6 +912,154 @@ def _cleanup_emoji_files(sender, instance, **kwargs):
     """Тот же приём, что и у вложений (см. _cleanup_attachment_file): сигнал, а
     не override delete(), — иначе удаление сервера каскадом унесло бы строки,
     оставив файлы лежать навсегда."""
+    for field in (instance.file, instance.static_file):
+        if field:
+            field.delete(save=False)
+
+
+STICKER_SUBDIR = "stickers"
+
+# Потолок на один готовый стикер. Вдвое больше эмодзи и по обратной причине:
+# стикер рисуется КРУПНО (см. STICKER_SIDE) и по одному на сообщение, а не
+# десятками разом, поэтому лишние килобайты здесь не размножаются по экрану.
+MAX_STICKER_BYTES = 512 * 1024
+# Что вообще имеет смысл принять НА ВХОД: исходник ужимается до
+# MAX_STICKER_BYTES уже здесь, на сервере (см. chat.stickers), так что
+# входной файл заведомо крупнее результата. Больше 8 МБ — это уже не стикер,
+# а видео, и читать его в память незачем.
+MAX_STICKER_SOURCE_BYTES = 8 * 1024 * 1024
+# Сторона готового стикера. 320, как у Discord/Telegram: крупнее его нигде не
+# рисуют, а вес растёт квадратом стороны.
+STICKER_SIDE = 320
+# Сколько стикеров влезает в один набор и сколько наборов бывает у сервера.
+# Ограничения ровно того же смысла, что MAX_EMOJI_PER_SERVER: ответ
+# /api/stickers грузится клиентом целиком при старте.
+MAX_STICKERS_PER_PACK = 120
+MAX_STICKER_PACKS_PER_SERVER = 8
+
+MAX_STICKER_NAME_LEN = 32
+MIN_STICKER_NAME_LEN = 1
+MAX_STICKER_PACK_NAME_LEN = 48
+
+# Форматы, в которых стикер лежит на диске. Расширение здесь решает вопрос
+# безопасности ровно так же, как у эмодзи (см. emoji_upload_to): под /media/
+# файлы отдаёт nginx, и Content-Type он выбирает по расширению.
+#
+#   webp  — и статичный, и растровая анимация: всё, что пришло картинкой,
+#           пережимается сюда (chat.stickers.prepare).
+#   json  — Lottie: векторная анимация, которая весит килобайты вместо сотен
+#           килобайт и не мылится ни на каком размере.
+#   webm  — растровое видео с альфой: принимается как есть, перекодировать
+#           его нечем (ffmpeg на бэкенде нет и заводить его ради стикеров
+#           дороже, чем оно стоит).
+STICKER_FORMATS = {
+    "webp": "image/webp",
+    "lottie": "application/json",
+    "webm": "video/webm",
+}
+STICKER_EXTENSIONS = {"webp", "json", "webm"}
+
+
+def sticker_upload_to(instance, filename: str) -> str:
+    """MEDIA_ROOT/stickers/<токен>/<sticker|static>.<webp|json|webm>.
+
+    Всё то же самое и по тем же причинам, что и у эмодзи (см.
+    emoji_upload_to): каталог на стикер, неугадываемый токен в пути, имя файла
+    собирается здесь целиком и никогда не приходит от клиента.
+    """
+    stem = "static" if filename.startswith("static") else "sticker"
+    ext = filename.rpartition(".")[2].lower()
+    if ext not in STICKER_EXTENSIONS:
+        ext = "webp"
+    return f"{STICKER_SUBDIR}/{instance.file_token.hex}/{stem}.{ext}"
+
+
+class StickerPack(models.Model):
+    """Набор стикеров — то, что в пикере становится отдельной вкладкой.
+
+    Набор, а не «стикеры сервера», как у эмодзи, по двум причинам сразу.
+    Во-первых, базовые наборы (server=None) вообще ничьи: они видны всем и
+    всегда, и привязывать их к какому-то одному серверу было бы неправдой.
+    Во-вторых, стикеров на сервере бывает не «пачка», а несколько тематических
+    наборов — в отличие от эмодзи, где вкладкой служит сам сервер.
+    """
+
+    # None — базовый набор: доступен всем и везде, заводится администрацией
+    # (см. manage.py import_stickers), а не участниками.
+    server = models.ForeignKey(
+        Server, null=True, blank=True, on_delete=models.CASCADE,
+        related_name="sticker_packs")
+    name = models.CharField(max_length=MAX_STICKER_PACK_NAME_LEN)
+    # Порядок среди базовых наборов; серверные идут за ними в порядке рейла.
+    sort_order = models.PositiveSmallIntegerField(default=0)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True,
+        on_delete=models.SET_NULL, related_name="created_sticker_packs")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["sort_order", "name", "id"]
+        constraints = [
+            # Имя уникально в пределах сервера (и среди базовых наборов —
+            # там server_id один и тот же NULL... а NULL в UniqueConstraint не
+            # сравнивается, поэтому базовые прикрыты отдельным условным
+            # индексом ниже).
+            models.UniqueConstraint(
+                fields=["server", "name"], name="unique_server_sticker_pack"),
+            models.UniqueConstraint(
+                fields=["name"], condition=models.Q(server__isnull=True),
+                name="unique_default_sticker_pack"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.name} ({'базовый' if self.server_id is None else self.server_id})"
+
+
+class Sticker(models.Model):
+    """Один стикер.
+
+    Целочисленный первичный ключ по той же причине, что у ServerEmoji: id
+    уезжает в текст сообщения токеном "<sticker:42>" (см. chat.emoji
+    STICKER_TOKEN_RE) и хранится в БД по строке на каждую отправку.
+
+    Имя, в отличие от эмодзи, ничем не ограничено по алфавиту: оно НЕ попадает
+    в токен (там только id), а служит подписью и словом для поиска — и «кот»
+    кириллицей здесь куда полезнее, чем «kot».
+
+    static_file — первый кадр растровой анимации; показывается в сетке пикера
+    и в ленте, пока на стикер не навели. У Lottie и WebM его нет: первый кадр
+    у них умеет показать сам клиент (lottie-web остановленный на нулевом кадре
+    и <video> без autoplay), и гонять ради этого отдельный файл незачем.
+    """
+
+    pack = models.ForeignKey(
+        StickerPack, on_delete=models.CASCADE, related_name="stickers")
+    name = models.CharField(max_length=MAX_STICKER_NAME_LEN)
+    file_token = models.UUIDField(default=uuid.uuid4, editable=False)
+    file = models.FileField(upload_to=sticker_upload_to, max_length=300)
+    static_file = models.FileField(
+        upload_to=sticker_upload_to, max_length=300, blank=True)
+    # Ключ STICKER_FORMATS — по нему клиент выбирает, чем рисовать.
+    format = models.CharField(max_length=8, default="webp")
+    animated = models.BooleanField(default=False)
+    content_type = models.CharField(max_length=100)
+    size = models.PositiveIntegerField()
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True,
+        on_delete=models.SET_NULL, related_name="created_stickers")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["id"]
+
+    def __str__(self) -> str:
+        return f"{self.name} @ {self.pack_id}"
+
+
+@receiver(post_delete, sender=Sticker)
+def _cleanup_sticker_files(sender, instance, **kwargs):
+    """Сигнал, а не override delete(), — иначе удаление набора каскадом унесло
+    бы строки, оставив файлы лежать навсегда (см. _cleanup_emoji_files)."""
     for field in (instance.file, instance.static_file):
         if field:
             field.delete(save=False)

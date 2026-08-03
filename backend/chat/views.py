@@ -4,6 +4,7 @@ from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
 from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.core.files.base import ContentFile
 from django.db import IntegrityError, transaction
 from django.db.models import Count, F, Max, Q
 from django.shortcuts import get_object_or_404
@@ -18,12 +19,15 @@ from rest_framework.views import APIView
 from accounts.models import Friendship
 from accounts.serializers import UserSerializer
 
-from . import emoji as emoji_keys, presence, roles, sfu, uploads
+from . import emoji as emoji_keys, presence, roles, sfu, stickers as sticker_files, uploads
 from .models import (
     Attachment, Channel, Conversation, ConversationMessage,
     ConversationParticipant, FriendNickname, Membership, Message, ProfileNote, Role, Server,
-    ServerBan, ServerEmoji, ServerInvite, ServerJoinRequest, UserRelationState,
+    ServerBan, ServerEmoji, ServerInvite, ServerJoinRequest, Sticker, StickerPack,
+    UserRelationState,
     MAX_ATTACHMENT_BYTES, MAX_EMOJI_BYTES, MAX_EMOJI_PER_SERVER,
+    MAX_STICKER_NAME_LEN, MAX_STICKER_PACK_NAME_LEN, MAX_STICKER_PACKS_PER_SERVER,
+    MAX_STICKER_SOURCE_BYTES, MAX_STICKERS_PER_PACK, MIN_STICKER_NAME_LEN,
     _invite_code, dm_room,
 )
 from .permissions import (
@@ -35,7 +39,7 @@ from .serializers import (
     RoleSerializer, ServerBanSerializer, ServerEmojiSerializer,
     ServerInviteLinkSerializer, ServerInviteSerializer,
     ServerJoinRequestSerializer, ServerSerializer, ServerUpdateSerializer,
-    membership_settings_payload,
+    StickerPackSerializer, StickerSerializer, membership_settings_payload,
 )
 
 User = get_user_model()
@@ -2210,6 +2214,213 @@ class MyEmoji(APIView):
         queryset = queryset.select_related("server").order_by(
             "server_id", "name", "id")
         return Response(ServerEmojiSerializer(queryset, many=True).data)
+
+
+# --- стикеры -----------------------------------------------------------------
+# Устройство почти повторяет эмодзи (см. выше), с двумя отличиями по существу:
+#
+#   1. вкладка пикера — это НАБОР (StickerPack), а не сервер: у сервера их
+#      бывает несколько тематических, а базовые наборы вообще ничьи;
+#   2. файл не сохраняется как прислали — он приводится к webp/lottie/webm и
+#      ужимается до лимита прямо здесь (chat.stickers.prepare).
+
+
+def _sticker_packs_payload(server):
+    return StickerPackSerializer(
+        server.sticker_packs.prefetch_related("stickers"), many=True).data
+
+
+def _broadcast_sticker_update(server):
+    """Разослать участникам сервера актуальные наборы стикеров — целиком, по
+    той же причине, что и у эмодзи (см. _broadcast_emoji_update)."""
+    channel_layer = get_channel_layer()
+    async_to_sync(channel_layer.group_send)(
+        f"server_{server.id}", {"type": "broadcast", "payload": {
+            "op": "server_stickers",
+            "server_id": server.id,
+            "packs": _sticker_packs_payload(server),
+        }})
+
+
+def _validate_sticker_name(raw):
+    """(имя, None) либо (None, Response с ошибкой).
+
+    Алфавит не ограничен, в отличие от эмодзи: имя стикера не попадает в токен
+    внутри текста (там только id — см. chat.emoji.STICKER_TOKEN_RE), поэтому
+    кириллица, пробелы и что угодно ещё разбор ничему не мешают. Убираются
+    только угловые скобки — чтобы имя нельзя было выдать за токен в тех местах,
+    где оно показывается рядом с текстом.
+    """
+    name = " ".join((raw or "").split()).replace("<", "").replace(">", "")
+    if not (MIN_STICKER_NAME_LEN <= len(name) <= MAX_STICKER_NAME_LEN):
+        return None, Response(
+            {"detail": f"Название стикера — от {MIN_STICKER_NAME_LEN} до "
+                       f"{MAX_STICKER_NAME_LEN} символов."},
+            status=400)
+    return name, None
+
+
+class ServerStickerList(APIView):
+    """GET — наборы стикеров сервера, POST — загрузить стикер.
+
+    Загрузка идёт multipart'ом и требует того же права, что и эмодзи
+    («Создавать средства выражения эмоций»): и то, и другое — средство
+    выражения, разделять их правами значило бы плодить настройки на ровном
+    месте. Поля: `file` — сам стикер, `name` — подпись, `pack` — название
+    набора (необязательно; по умолчанию — название сервера).
+
+    Первый кадр для анимации, в отличие от эмодзи, КЛИЕНТ не присылает: файл
+    здесь всё равно перекодируется целиком, и вырезать кадр заодно дешевле,
+    чем гонять его по сети (см. chat.stickers.prepare).
+    """
+
+    parser_classes = [MultiPartParser, FormParser]
+
+    def get(self, request, server_id):
+        server = get_object_or_404(Server, id=server_id)
+        if not is_member(request.user, server):
+            return Response({"detail": "Вы не участник сервера."}, status=403)
+        return Response(_sticker_packs_payload(server))
+
+    def post(self, request, server_id):
+        server = get_object_or_404(Server, id=server_id)
+        denied = _require_permission(request, server, "create_expressions")
+        if denied:
+            return denied
+
+        uploaded = request.FILES.get("file")
+        if uploaded is None or uploaded.size == 0:
+            return Response({"detail": "Нужен файл в поле file."}, status=400)
+        if uploaded.size > MAX_STICKER_SOURCE_BYTES:
+            return Response(
+                {"detail": f"Файл слишком большой (макс. "
+                           f"{MAX_STICKER_SOURCE_BYTES // (1024 * 1024)} МБ до "
+                           "обработки)."},
+                status=400)
+
+        name, denied = _validate_sticker_name(request.data.get("name"))
+        if denied:
+            return denied
+
+        pack, denied = self._resolve_pack(request, server)
+        if denied:
+            return denied
+        if pack.stickers.count() >= MAX_STICKERS_PER_PACK:
+            return Response(
+                {"detail": f"В наборе «{pack.name}» уже "
+                           f"{MAX_STICKERS_PER_PACK} стикеров — заведите новый "
+                           "набор или удалите ненужные."},
+                status=400)
+
+        uploaded.seek(0)
+        try:
+            prepared = sticker_files.prepare(uploaded.read())
+        except sticker_files.StickerError as err:
+            return Response({"detail": str(err)}, status=400)
+
+        sticker = Sticker(
+            pack=pack, name=name, format=prepared.format,
+            animated=prepared.animated, content_type=prepared.content_type,
+            size=len(prepared.data), created_by=request.user,
+        )
+        # Имя файла собирается из ОПОЗНАННОГО формата, а не из uploaded.name —
+        # см. sticker_upload_to, там подробно, чем это грозит.
+        extension = "json" if prepared.format == "lottie" else prepared.format
+        sticker.file.save(
+            f"sticker.{extension}", ContentFile(prepared.data), save=False)
+        if prepared.static:
+            sticker.static_file.save(
+                "static.webp", ContentFile(prepared.static), save=False)
+        sticker.save()
+        _broadcast_sticker_update(server)
+        return Response(StickerSerializer(sticker).data, status=201)
+
+    def _resolve_pack(self, request, server):
+        """(набор, None) либо (None, Response с ошибкой). Набор с таким именем
+        либо находится, либо заводится — отдельной ручки «создать набор» нет:
+        она всегда была бы обязательным первым шагом перед загрузкой и ничего
+        бы к ней не добавляла."""
+        raw = " ".join((request.data.get("pack") or "").split())
+        name = raw[:MAX_STICKER_PACK_NAME_LEN] or server.name[:MAX_STICKER_PACK_NAME_LEN]
+        existing = server.sticker_packs.filter(name=name).first()
+        if existing:
+            return existing, None
+        if server.sticker_packs.count() >= MAX_STICKER_PACKS_PER_SERVER:
+            return None, Response(
+                {"detail": f"На сервере уже {MAX_STICKER_PACKS_PER_SERVER} "
+                           "наборов стикеров."},
+                status=400)
+        return StickerPack.objects.create(
+            server=server, name=name, created_by=request.user), None
+
+
+class ServerStickerDetail(APIView):
+    """PATCH — переименовать, DELETE — удалить. По manage_expressions, ровно
+    как у эмодзи (см. ServerEmojiDetail)."""
+
+    def patch(self, request, server_id, sticker_id):
+        server = get_object_or_404(Server, id=server_id)
+        denied = _require_permission(request, server, "manage_expressions")
+        if denied:
+            return denied
+        sticker = get_object_or_404(
+            Sticker, id=sticker_id, pack__server=server)
+        name, denied = _validate_sticker_name(request.data.get("name"))
+        if denied:
+            return denied
+        sticker.name = name
+        sticker.save(update_fields=["name"])
+        _broadcast_sticker_update(server)
+        return Response(StickerSerializer(sticker).data)
+
+    def delete(self, request, server_id, sticker_id):
+        server = get_object_or_404(Server, id=server_id)
+        denied = _require_permission(request, server, "manage_expressions")
+        if denied:
+            return denied
+        sticker = get_object_or_404(
+            Sticker, id=sticker_id, pack__server=server)
+        pack = sticker.pack
+        # Токены "<sticker:id>" в старых сообщениях остаются и превращаются в
+        # заглушку — переписывать чужую переписку мы не беремся (та же логика,
+        # что при удалении эмодзи).
+        sticker.delete()
+        # Опустевший набор уносим следом: вкладка, за которой ничего нет,
+        # только занимала бы место в ленте пикера.
+        if not pack.stickers.exists():
+            pack.delete()
+        _broadcast_sticker_update(server)
+        return Response(status=204)
+
+
+class MyStickers(APIView):
+    """GET /api/stickers — все наборы, доступные мне: базовые плюс наборы моих
+    серверов.
+
+    ?ids=1,2,3 — метаданные конкретных стикеров БЕЗ проверки членства, для
+    ЧТЕНИЯ: в личку могли прислать стикер сервера, где меня нет, и без этого у
+    меня на его месте была бы вечная заглушка. Ограничивается ОТПРАВКА, и
+    делает это chat.emoji.usable_sticker_ids — ровно как с эмодзи (см.
+    MyEmoji, там же почему это не дыра).
+    """
+
+    MAX_RESOLVE_IDS = 100
+
+    def get(self, request):
+        raw_ids = request.query_params.get("ids")
+        if raw_ids:
+            ids = []
+            for chunk in raw_ids.split(",")[:self.MAX_RESOLVE_IDS]:
+                chunk = chunk.strip()
+                if chunk.isdigit():
+                    ids.append(int(chunk))
+            return Response(StickerSerializer(
+                Sticker.objects.filter(id__in=ids), many=True).data)
+
+        packs = StickerPack.objects.filter(
+            Q(server__isnull=True) | Q(server__memberships__user=request.user)
+        ).distinct().prefetch_related("stickers").select_related("server")
+        return Response(StickerPackSerializer(packs, many=True).data)
 
 
 class AttachmentUpload(APIView):

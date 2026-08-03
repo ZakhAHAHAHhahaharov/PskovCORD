@@ -13,6 +13,10 @@ urlpatterns = [
     # метаданных чужих, см. MyEmoji); управление — внутри своего сервера.
     path("emoji", views.MyEmoji.as_view(), name="my-emoji"),
 
+    # Стикеры. /api/stickers — все доступные наборы (базовые + моих серверов),
+    # ?ids= — метаданные конкретных, см. MyStickers.
+    path("stickers", views.MyStickers.as_view(), name="my-stickers"),
+
     path("servers", views.ServerListCreate.as_view(), name="server-list"),
     path("servers/discover", views.ServerDiscover.as_view(), name="server-discover"),
     path("servers/<int:server_id>", views.ServerDetail.as_view(), name="server-detail"),
@@ -39,6 +43,11 @@ urlpatterns = [
          name="server-emoji"),
     path("servers/<int:server_id>/emoji/<int:emoji_id>",
          views.ServerEmojiDetail.as_view(), name="server-emoji-detail"),
+
+    path("servers/<int:server_id>/stickers", views.ServerStickerList.as_view(),
+         name="server-stickers"),
+    path("servers/<int:server_id>/stickers/<int:sticker_id>",
+         views.ServerStickerDetail.as_view(), name="server-sticker-detail"),
 
     path("servers/<int:server_id>/roles", views.ServerRoles.as_view(),
          name="server-roles"),
