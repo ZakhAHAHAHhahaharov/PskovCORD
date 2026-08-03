@@ -1,9 +1,10 @@
 import {
-  Fragment, ReactNode, useCallback, useEffect, useRef, useState,
+  Fragment, ReactNode, useCallback, useEffect, useLayoutEffect, useRef, useState,
   MouseEvent as ReactMouseEvent,
 } from 'react'
 import {
-  AlertCircle, Check, Clock, Pin, PinOff, Reply, Pencil, RotateCw, SmilePlus, Trash2,
+  AlertCircle, Check, ChevronDown, Clock, Pin, PinOff, Reply, Pencil, RotateCw, SmilePlus,
+  Trash2,
 } from 'lucide-react'
 import { ChatMessageBase, MentionCandidate } from '../api'
 import { escapeRegExp, WORD_CHAR } from '../mentions'
@@ -296,6 +297,8 @@ export default function MessageList({
   onDeclineServerInvite,
   onOpenInvitedServer,
   onTogglePin,
+  scrollAnchor,
+  onReachedBottom,
 }: {
   messages: ListMessage[]
   currentUserId: number
@@ -330,6 +333,19 @@ export default function MessageList({
    * так это выключено и в личке/группе (там закреплений нет вовсе), и у
    * тех, у кого нет права модерации сообщений (см. canModerate в AppShell). */
   onTogglePin?: (messageId: number, pinned: boolean) => void
+  /** Куда встать прокрутке при следующем изменении `key` — на низ либо на
+   * конкретное сообщение (id ищется через data-message-id ниже). Не задан —
+   * список ведёт себя как раньше, чисто по эвристике «мы и так внизу» (см.
+   * автопрокрутку ниже); задан — при смене key позиционируется явно, один раз.
+   * Держит канал/диалог, для которого его посчитали (см. useChannelMessages
+   * ScrollAnchor) — только код, который умеет считать «докуда дочитано»,
+   * знает, когда именно этот расчёт готов. */
+  scrollAnchor?: { key: string; target: 'bottom' | { messageId: number } } | null
+  /** Лента фактически докручена до последнего сообщения — либо явной
+   * прокруткой (кнопка «вниз»), либо автопрокруткой вслед за новым. Не задан —
+   * фича недоступна (у диалогов/групп курсор прочтения не персистится, см.
+   * AppShellChat). */
+  onReachedBottom?: (messageId: number) => void
 }) {
   const bottomRef = useRef<HTMLDivElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
@@ -365,6 +381,56 @@ export default function MessageList({
   // статичным кадром.
   const [hoveredAuthorRow, setHoveredAuthorRow] = useState<string | number | null>(null)
 
+  /** id последнего НАСТОЯЩЕГО сообщения в ленте — курсор прочтения (см.
+   * onReachedBottom) может указывать только на то, что реально есть в БД, а
+   * не на только что отправленное и ещё не подтверждённое (отрицательный id,
+   * см. ListMessage). Неподтверждённые лежат в хвосте массива (дописывает
+   * AppShellChat), поэтому достаточно поискать с конца. */
+  const lastRealMessageId = useCallback((): number | null => {
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      if (!messages[i].pendingNonce) return messages[i].id
+    }
+    return null
+  }, [messages])
+
+  // Промотана ли лента дальше OTHERS_BOTTOM_PX от низа — только этим
+  // управляется видимость круглой кнопки «вниз» (см. JSX). wasAtBottomRef
+  // хранит то же самое булевым флагом в ref: эффекту ниже и обработчику
+  // скролла нужно не текущее значение, а именно ПЕРЕХОД false → true, чтобы
+  // не слать отметку «прочитано» на каждый пиксель скролла, а только один
+  // раз — в момент, когда низ действительно достигнут.
+  const [pastBottom, setPastBottom] = useState(false)
+  const wasAtBottomRef = useRef(true)
+
+  /** Достигли низа (программно или руками) — синхронизирует pastBottom,
+   * гасит кнопку и, если это НОВОЕ достижение (не были там мгновение назад),
+   * продвигает курсор прочтения. Общая точка для всех путей «мы внизу»:
+   * автопрокрутки за новым сообщением, ручного скролла и клика по кнопке. */
+  const notifyAtBottom = useCallback(
+    (fresh: boolean) => {
+      setPastBottom(false)
+      if (fresh && !wasAtBottomRef.current) {
+        const id = lastRealMessageId()
+        if (id != null) onReachedBottom?.(id)
+      }
+      wasAtBottomRef.current = true
+    },
+    [lastRealMessageId, onReachedBottom],
+  )
+
+  const handleScroll = useCallback(() => {
+    const el = listRef.current
+    if (!el) return
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
+    const atBottom = distanceFromBottom < OTHERS_BOTTOM_PX
+    if (atBottom) {
+      notifyAtBottom(true)
+    } else {
+      setPastBottom(true)
+      wasAtBottomRef.current = false
+    }
+  }, [notifyAtBottom])
+
   // Автопрокрутка вниз. Раньше список прыгал к последнему сообщению
   // безусловно, и читать историю во время живой переписки было невозможно:
   // каждое чужое сообщение утаскивало вниз. Поэтому правил два, и они разные:
@@ -384,6 +450,7 @@ export default function MessageList({
     const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
     if (distanceFromBottom < OTHERS_BOTTOM_PX) {
       bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+      notifyAtBottom(true)
       return
     }
     const last = messages[messages.length - 1]
@@ -395,8 +462,37 @@ export default function MessageList({
     if (scrollable <= 0) return
     if (distanceFromBottom / scrollable <= MINE_SCROLLED_UP_MAX) {
       bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+      notifyAtBottom(true)
     }
-  }, [messages, currentUserId])
+  }, [messages, currentUserId, notifyAtBottom])
+
+  // Прокрутка сразу после открытия канала/диалога — на низ или на конкретное
+  // сообщение (см. ScrollAnchor у useChannelMessages). appliedAnchorKeyRef не
+  // даёт сработать повторно на КАЖДОЕ следующее изменение messages (эффект
+  // всё равно перезапускается: живое сообщение меняет ссылку на массив) —
+  // позиционирование одноразовое, ровно на смену anchor.key.
+  //
+  // useLayoutEffect, а не useEffect: скачок к произвольному сообщению должен
+  // произойти ДО того, как браузer покажет кадр — иначе на миг мелькнёт низ
+  // ленты, а потом дёрнется наверх, к настоящей цели.
+  const appliedAnchorKeyRef = useRef<string | null>(null)
+  useLayoutEffect(() => {
+    if (!scrollAnchor || appliedAnchorKeyRef.current === scrollAnchor.key) return
+    appliedAnchorKeyRef.current = scrollAnchor.key
+    if (scrollAnchor.target === 'bottom') {
+      bottomRef.current?.scrollIntoView({ block: 'end' })
+    } else {
+      const el = listRef.current
+      const target = el?.querySelector<HTMLElement>(
+        `[data-message-id="${scrollAnchor.target.messageId}"]`,
+      )
+      // Сообщение почему-то не нашлось (удалили ровно то, докуда дочитали, и
+      // при этом не осталось контекста рядом) — не зависать посреди пустоты.
+      if (target) target.scrollIntoView({ block: 'center' })
+      else bottomRef.current?.scrollIntoView({ block: 'end' })
+    }
+    handleScroll()
+  }, [scrollAnchor, messages, handleScroll])
 
   // Сообщение, для которого открыт DeleteMessageModal (обычный клик по
   // корзине — см. requestDelete). Shift+клик минует его — requestDelete
@@ -459,7 +555,7 @@ export default function MessageList({
   }
 
   return (
-    <div className="message-list" ref={listRef}>
+    <div className="message-list" ref={listRef} onScroll={handleScroll}>
       {messages.length === 0 && (
         <div className="message-empty">Пока нет сообщений. Напиши первым!</div>
       )}
@@ -497,6 +593,11 @@ export default function MessageList({
             } ${m.deliveryStatus === 'failed' ? 'message-failed' : ''} ${
               mobileActiveKey === rowKey ? 'mobile-actions-active' : ''
             }`}
+            // Точка входа для scrollAnchor (см. useLayoutEffect выше) — у
+            // неподтверждённых (pending, отрицательный id) атрибут тоже
+            // проставлен, просто querySelector по такому id никогда не ищут:
+            // курсор прочтения ссылается только на настоящие id из БД.
+            data-message-id={m.id}
             onDoubleClick={() => setMobileActiveKey((prev) => (prev === rowKey ? null : rowKey))}
           >
             <button
@@ -703,6 +804,28 @@ export default function MessageList({
           </Fragment>
         )
       })}
+      {/* Круглая кнопка «вниз» — sticky-элемент нулевой высоты в самом конце
+          ленты (см. .jump-to-bottom-wrap): не занимает места в потоке (не
+          сбивает scrollHeight, которым считается distanceFromBottom выше), а
+          пока лента промотана дальше своей естественной позиции внизу —
+          липнет к нижнему краю видимой области. Видна только когда есть
+          смысл — pastBottom, а не всегда: кнопка «вернуться» на месте, где ты
+          и так стоишь, только шумит. */}
+      {pastBottom && (
+        <div className="jump-to-bottom-wrap">
+          <button
+            type="button"
+            className="jump-to-bottom-btn"
+            title="Прокрутить вниз"
+            onClick={() => {
+              bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+              notifyAtBottom(true)
+            }}
+          >
+            <ChevronDown size={20} />
+          </button>
+        </div>
+      )}
       <div ref={bottomRef} />
 
       {reactionPicker && (

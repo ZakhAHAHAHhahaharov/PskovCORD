@@ -42,6 +42,7 @@ from .models import (
     MAX_REACTIONS_PER_MESSAGE,
     FriendNickname, Membership, Message, ProfileNote, Reaction, Role, Server, ServerBan,
     ServerEmoji, ServerInvite, ServerJoinRequest, Sticker, StickerPack,
+    ChannelReadState,
     MAX_STICKER_BYTES, MAX_VOICE_MS, MAX_WAVEFORM_POINTS, STICKER_SIDE, dm_room,
 )
 from .permissions import can_dm
@@ -4787,6 +4788,80 @@ class ReadMessageHistoryTests(APITestCase):
         presence.user_connected(self.member.id)
         resp = self.client.get("/api/channels/{}/pins".format(self.channel.id))
         self.assertEqual(list(resp.data), [])
+
+
+class ChannelReadStateTests(APITestCase):
+    """GET/POST /api/channels/<id>/read — курсор «докуда я дочитал канал»."""
+
+    def setUp(self):
+        self.owner = User.objects.create_user(username="rs_owner", password="pw12345")
+        self.member = User.objects.create_user(username="rs_member", password="pw12345")
+        self.stranger = User.objects.create_user(username="rs_stranger", password="pw12345")
+        self.server = Server.objects.create(name="s", owner=self.owner)
+        roles.create_default_role(self.server)
+        Membership.objects.create(user=self.owner, server=self.server)
+        Membership.objects.create(user=self.member, server=self.server)
+        self.channel = Channel.objects.create(
+            server=self.server, name="general", kind=Channel.TEXT)
+        self.m1 = Message.objects.create(
+            channel=self.channel, author=self.owner, content="раз")
+        self.m2 = Message.objects.create(
+            channel=self.channel, author=self.owner, content="два")
+        self.client.force_authenticate(self.member)
+
+    def _url(self):
+        return f"/api/channels/{self.channel.id}/read"
+
+    def test_get_defaults_to_null(self):
+        resp = self.client.get(self._url())
+        self.assertEqual(resp.status_code, 200)
+        self.assertIsNone(resp.data["last_read_message_id"])
+
+    def test_post_with_message_id_sets_cursor(self):
+        resp = self.client.post(self._url(), {"message_id": self.m1.id}, format="json")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data["last_read_message_id"], self.m1.id)
+        self.assertEqual(
+            self.client.get(self._url()).data["last_read_message_id"], self.m1.id)
+
+    def test_post_without_message_id_marks_latest(self):
+        resp = self.client.post(self._url(), {}, format="json")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data["last_read_message_id"], self.m2.id)
+
+    def test_cursor_never_moves_backward(self):
+        """Несколько вкладок отвечают не по порядку — более старая отметка не
+        должна откатить курсор назад (см. докстринг ChannelReadStateView)."""
+        self.client.post(self._url(), {"message_id": self.m2.id}, format="json")
+        resp = self.client.post(self._url(), {"message_id": self.m1.id}, format="json")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data["last_read_message_id"], self.m2.id)
+
+    def test_invalid_message_id_rejected(self):
+        resp = self.client.post(self._url(), {"message_id": "not-a-number"}, format="json")
+        self.assertEqual(resp.status_code, 400)
+
+    def test_non_member_denied(self):
+        self.client.force_authenticate(self.stranger)
+        self.assertEqual(self.client.get(self._url()).status_code, 403)
+        self.assertEqual(self.client.post(self._url(), {}, format="json").status_code, 403)
+
+    def test_cursor_is_per_user(self):
+        self.client.post(self._url(), {"message_id": self.m2.id}, format="json")
+        self.client.force_authenticate(self.owner)
+        self.assertIsNone(self.client.get(self._url()).data["last_read_message_id"])
+
+    def test_deleted_message_does_not_break_the_cursor(self):
+        """last_read_message_id хранится как обычное число, а не FK — курсор
+        должен пережить удаление сообщения, на которое указывал."""
+        deleted_id = self.m2.id
+        self.client.post(self._url(), {"message_id": deleted_id}, format="json")
+        # .delete() обнуляет self.m2.id на самом инстансе — id запоминаем
+        # заранее, сравниваем со снятой копией.
+        self.m2.delete()
+        resp = self.client.get(self._url())
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data["last_read_message_id"], deleted_id)
 
 
 class InviteAndBanPermissionTests(APITestCase):

@@ -1380,6 +1380,22 @@ export const api = {
    * от ленты: закреплённое может лежать сколь угодно далеко в истории. */
   channelPins: (channelId: number): Promise<Message[]> =>
     req(`/api/channels/${channelId}/pins`),
+  /** Докуда я дочитал канал — курсор для «открыть там, где остановился»
+   * (см. useChannelMessages). null — ни разу не отмечался (новый канал или
+   * первый визит). */
+  channelReadState: (channelId: number): Promise<{ last_read_message_id: number | null }> =>
+    req(`/api/channels/${channelId}/read`),
+  /** Продвинуть курсор прочтения. Без messageId — «прочитано всё, что есть
+   * сейчас» (сервер сам возьмёт id самого свежего сообщения). Курсор
+   * двигается только вперёд — см. backend ChannelReadStateView. */
+  markChannelRead: (
+    channelId: number,
+    messageId?: number,
+  ): Promise<{ last_read_message_id: number | null }> =>
+    req(`/api/channels/${channelId}/read`, {
+      method: 'POST',
+      body: JSON.stringify(messageId != null ? { message_id: messageId } : {}),
+    }),
   voiceCredentials: (
     channelId: number,
   ): Promise<{ sfu_url: string; sfu_token: string; ttl: number }> =>

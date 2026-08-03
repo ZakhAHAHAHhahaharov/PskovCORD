@@ -14,8 +14,19 @@ import { formatVoiceTime } from '../voiceRecorder'
  *
  * По той же причине здесь не спрашивают длительность у <audio>: у webm из
  * MediaRecorder она в контейнере обычно не проставлена, и audio.duration
- * остаётся Infinity, пока запись не доиграет до конца. Настоящий источник —
- * attachment.duration_ms, снятый секундомером во время записи.
+ * остаётся Infinity, иногда так и не узнавая себя до конца жизни элемента
+ * (известная особенность Chrome с потоковыми/бесконечными webm). Настоящий
+ * источник ОБЩЕЙ длительности — attachment.duration_ms, снятый секундомером
+ * во время записи, а ТЕКУЩАЯ позиция считается через audio.currentTime,
+ * который идёт корректно вне зависимости от того, известна ли браузеру полная
+ * длительность файла. Старый код делил currentTime на audio.duration — при
+ * Infinity результат всегда 0, то есть бегунок замирал намертво, хотя звук
+ * честно играл (ровно тот баг «иногда вообще не бежит»).
+ *
+ * Плавность — отдельный вопрос: событие timeupdate браузер шлёт всего
+ * несколько раз в секунду, и на короткой дорожке это заметно как рывки. Пока
+ * идёт воспроизведение, позицию опрашивает requestAnimationFrame — 60 кадров
+ * в секунду вместо четырёх.
  *
  * Перемотка сделана на указателе (pointer events), а не на <input range>:
  * дорожка — это и шкала, и картинка одновременно, и класть поверх неё
@@ -52,13 +63,33 @@ export default function VoiceMessage({ attachment }: { attachment: Attachment })
 
   const seekTo = useCallback(
     (fraction: number) => {
+      const clamped = Math.min(1, Math.max(0, fraction))
+      const ms = clamped * durationMs
+      setPositionMs(ms)
       const audio = audioRef.current
-      setPositionMs(fraction * durationMs)
-      if (!audio || !Number.isFinite(audio.duration)) return
-      audio.currentTime = fraction * audio.duration
+      // currentTime, а не audio.duration * fraction: у файла без известной
+      // длительности duration это Infinity, и умножение на него дало бы
+      // NaN — перемотка молча ничего не делала бы. durationMs у нас уже
+      // есть (секундомер записи), и currentTime считается прямо от него.
+      if (audio) audio.currentTime = ms / 1000
     },
     [durationMs],
   )
+
+  // Пока играет — гоним позицию requestAnimationFrame'ом, а не только
+  // редкими timeupdate: 60 кадров в секунду вместо четырёх и есть разница
+  // между «бегунок ползёт» и «бегунок дёргается».
+  useEffect(() => {
+    if (!playing || scrubbing) return
+    let frame: number
+    const tick = () => {
+      const audio = audioRef.current
+      if (audio) setPositionMs(audio.currentTime * 1000)
+      frame = requestAnimationFrame(tick)
+    }
+    frame = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(frame)
+  }, [playing, scrubbing])
 
   // Перетаскивание слушаем на окне, а не на самой дорожке: палец уезжает за
   // её пределы на первом же резком движении, и на элементе события бы
@@ -161,15 +192,11 @@ export default function VoiceMessage({ attachment }: { attachment: Attachment })
         }}
         onTimeUpdate={(e) => {
           if (scrubbing) return
-          const audio = e.currentTarget
-          // Считаем от ДОЛИ проигранного, а не от currentTime напрямую: шкала
-          // у нас в duration_ms, и у файла без длительности в контейнере
-          // (обычное дело для webm из MediaRecorder) currentTime сам по себе
-          // ни с чем не соотносится.
-          const fraction = Number.isFinite(audio.duration) && audio.duration > 0
-            ? audio.currentTime / audio.duration
-            : 0
-          setPositionMs(fraction * durationMs)
+          // Подстраховка на моменты, когда rAF-цикл ещё не запущен (буферизация
+          // перед стартом) или уже остановлен (пауза сразу после перемотки —
+          // браузер иногда доводит currentTime до ближайшего кейфрейма webm
+          // уже ПОСЛЕ события seeked, и этот кадр её подхватывает).
+          setPositionMs(e.currentTarget.currentTime * 1000)
         }}
       />
     </div>
