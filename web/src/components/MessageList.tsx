@@ -6,19 +6,23 @@ import {
   AlertCircle, Check, ChevronDown, Clock, Pin, PinOff, Reply, Pencil, RotateCw, SmilePlus,
   Trash2,
 } from 'lucide-react'
-import { ChatMessageBase, MentionCandidate } from '../api'
+import { ChatMessageBase, Conversation, MentionCandidate, Server } from '../api'
 import { escapeRegExp, WORD_CHAR } from '../mentions'
 import { styledNameProps } from '../nameStyle'
 import { displayNameOf, useNicknamesVersion } from '../nicknames'
-import { DeliveryStatus, DELIVERY_STATUS_PRESENTATION } from '../outbox'
+import { DeliveryStatus, DELIVERY_STATUS_PRESENTATION, outbox } from '../outbox'
 import { EMOJI_TOKEN_RE, QUICK_REACTIONS, STICKER_TOKEN_RE, customEmojiKey } from '../emoji'
+import { recordReactionUse } from '../reactionFrequency'
 import Avatar from './Avatar'
 import CustomEmojiImage from './CustomEmojiImage'
 import StickerImage from './StickerImage'
 import DeleteMessageModal from './DeleteMessageModal'
 import EmojiPicker, { EmojiPickerAnchor } from './EmojiPicker'
+import ForwardMessageModal from './ForwardMessageModal'
 import MessageAttachments from './MessageAttachments'
+import MessageContextMenu from './MessageContextMenu'
 import MessageReactions from './MessageReactions'
+import MessageReactionsModal from './MessageReactionsModal'
 import ServerInviteCard from './ServerInviteCard'
 import { ProfilePopupUser } from './MiniProfilePopup'
 
@@ -299,6 +303,8 @@ export default function MessageList({
   onTogglePin,
   scrollAnchor,
   onReachedBottom,
+  servers,
+  conversations,
 }: {
   messages: ListMessage[]
   currentUserId: number
@@ -346,9 +352,27 @@ export default function MessageList({
    * фича недоступна (у диалогов/групп курсор прочтения не персистится, см.
    * AppShellChat). */
   onReachedBottom?: (messageId: number) => void
+  /** Мои серверы (с каналами) и диалоги/группы — список получателей в
+   * модалке «Переслать» (см. ForwardMessageModal). Тот же набор, что и в
+   * AppShell целиком: список не завязан на то, что открыто СЕЙЧАС — можно
+   * переслать в канал другого сервера, который прямо сейчас не выбран. */
+  servers: Server[]
+  conversations: Conversation[]
 }) {
   const bottomRef = useRef<HTMLDivElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
+
+  /** Единственная точка, через которую идёт ЛЮБОЙ способ поставить/снять
+   * реакцию — быстрые кнопки в ховер-панели, «+»-пикер, пилюли под
+   * сообщением, новое контекстное меню и его флайаут. Оборачивает
+   * onToggleReaction ради одного: учёта «часто используемых» (см.
+   * reactionFrequency.ts) — только при ДОБАВЛЕНИИ (!mine), не при снятии,
+   * иначе статистика росла бы и от того, что человек передумал. */
+  const handleReact = (messageId: number, emoji: string, mine: boolean) => {
+    if (!mine) recordReactionUse(emoji)
+    onToggleReaction(messageId, emoji, mine)
+  }
+
   // Какому сообщению сейчас выбирают реакцию: id + якорь для пикера.
   const [reactionPicker, setReactionPicker] = useState<{
     messageId: number
@@ -366,8 +390,24 @@ export default function MessageList({
     const mine = !!message?.reactions.some(
       (r) => r.emoji === emoji && r.user_ids.includes(currentUserId),
     )
-    onToggleReaction(reactionPicker.messageId, emoji, mine)
+    handleReact(reactionPicker.messageId, emoji, mine)
   }
+
+  // Правый клик по сообщению — контекстное меню (см. MessageContextMenu).
+  // «Показать реакции»/«Переслать» открывают СВОИ модалки уже после того, как
+  // это меню закрылось (messageId, а не всё сообщение целиком — к моменту
+  // открытия модалки нужна АКТУАЛЬНАЯ версия сообщения из messages, а не
+  // снимок на момент правого клика: реакции могли обновиться, пока модалка
+  // ещё не открылась).
+  const [contextMenu, setContextMenu] = useState<{
+    message: ListMessage
+    x: number
+    y: number
+  } | null>(null)
+  const [reactionsModalId, setReactionsModalId] = useState<number | null>(null)
+  const [forwardMessageId, setForwardMessageId] = useState<number | null>(null)
+  const reactionsModalMessage = messages.find((m) => m.id === reactionsModalId) ?? null
+  const forwardMessage = messages.find((m) => m.id === forwardMessageId) ?? null
   // Панель действий (реакции/ответ/редактировать/удалить) на десктопе
   // видна по :hover — на тач-устройстве такого нет вообще, а показывать её
   // сразу под КАЖДЫМ сообщением слишком шумно. Двойной тап по конкретному
@@ -599,6 +639,14 @@ export default function MessageList({
             // курсор прочтения ссылается только на настоящие id из БД.
             data-message-id={m.id}
             onDoubleClick={() => setMobileActiveKey((prev) => (prev === rowKey ? null : rowKey))}
+            onContextMenu={(e) => {
+              // Неотправленное/в окне отмены — действовать через контекстное
+              // меню (ответить, переслать, реакция) не над чем: у него ещё
+              // нет настоящего id, либо оно вот-вот исчезнет само.
+              if (pending || pendingDelete) return
+              e.preventDefault()
+              setContextMenu({ message: m, x: e.clientX, y: e.clientY })
+            }}
           >
             <button
               type="button"
@@ -696,7 +744,7 @@ export default function MessageList({
                     reactions={m.reactions}
                     currentUserId={currentUserId}
                     resolveUsername={resolveUsername}
-                    onToggle={(emoji, mine) => onToggleReaction(m.id, emoji, mine)}
+                    onToggle={(emoji, mine) => handleReact(m.id, emoji, mine)}
                     onOpenPicker={(rect) =>
                       setReactionPicker({ messageId: m.id, anchor: { rect } })
                     }
@@ -740,7 +788,7 @@ export default function MessageList({
                     className="message-action message-action-emoji"
                     title={`Реакция ${emoji}`}
                     onClick={() =>
-                      onToggleReaction(
+                      handleReact(
                         m.id,
                         emoji,
                         m.reactions.some(
@@ -849,6 +897,68 @@ export default function MessageList({
             startPendingDelete(confirmingDelete.id)
             setConfirmingDelete(null)
           }}
+        />
+      )}
+
+      {contextMenu && (
+        <MessageContextMenu
+          message={contextMenu.message}
+          x={contextMenu.x}
+          y={contextMenu.y}
+          currentUserId={currentUserId}
+          canPin={Boolean(onTogglePin)}
+          onClose={() => setContextMenu(null)}
+          onToggleReaction={(emoji, mine) => handleReact(contextMenu.message.id, emoji, mine)}
+          onReply={() => onReply(contextMenu.message)}
+          onTogglePin={
+            onTogglePin
+              ? () => onTogglePin(contextMenu.message.id, !contextMenu.message.pinned)
+              : undefined
+          }
+          onRequestShowReactions={() => {
+            setReactionsModalId(contextMenu.message.id)
+            setContextMenu(null)
+          }}
+          onRequestForward={() => {
+            setForwardMessageId(contextMenu.message.id)
+            setContextMenu(null)
+          }}
+        />
+      )}
+
+      {reactionsModalMessage && (
+        <MessageReactionsModal
+          reactions={reactionsModalMessage.reactions}
+          currentUserId={currentUserId}
+          resolveUsername={resolveUsername}
+          mentionCandidates={mentionCandidates}
+          onClose={() => setReactionsModalId(null)}
+        />
+      )}
+
+      {forwardMessage && (
+        <ForwardMessageModal
+          content={forwardMessage.content}
+          attachments={forwardMessage.attachments}
+          servers={servers}
+          conversations={conversations}
+          onForward={(targets, comment) => {
+            for (const target of targets) {
+              // Пустой content (чисто голосовое/файл) пересылать нечем —
+              // вложения физически не переезжают (см. докстринг модалки),
+              // а пустое сообщение backend всё равно отклонит.
+              if (forwardMessage.content) {
+                outbox.enqueue({ target, content: forwardMessage.content })
+              }
+              // Комментарий уезжает ВТОРЫМ, отдельным сообщением — так на
+              // приёмной стороне видно и то, что переслали, и что к этому
+              // добавили, а не одну слипшуюся реплику.
+              if (comment) {
+                outbox.enqueue({ target, content: comment })
+              }
+            }
+          }}
+          onClose={() => setForwardMessageId(null)}
         />
       )}
     </div>

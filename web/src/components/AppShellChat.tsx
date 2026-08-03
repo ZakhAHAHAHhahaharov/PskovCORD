@@ -147,6 +147,8 @@ export default function AppShellChat({
                     : activeConversation.participants.find((p) => p.id === id)?.username
                 }
                 mentionCandidates={[user, ...activeConversation.participants]}
+                servers={server.servers}
+                conversations={conv.conversations}
                 onRetry={(nonce) => outbox.retry(nonce)}
                 onDiscard={(nonce) => outbox.discard(nonce)}
                 onAcceptServerInvite={inviteLinks.handleAcceptServerInvite}
@@ -257,6 +259,8 @@ export default function AppShellChat({
               onTogglePin={canDeleteMessages ? channelMessages.handleTogglePin : undefined}
               scrollAnchor={channelMessages.scrollAnchor}
               onReachedBottom={channelMessages.handleReachedBottom}
+              servers={server.servers}
+              conversations={conv.conversations}
             />
             <MessageInput
               key={`channel-${currentChannel.id}`}

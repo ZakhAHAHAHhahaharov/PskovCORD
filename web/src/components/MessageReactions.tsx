@@ -24,7 +24,7 @@ export const MAX_REACTIONS = 20
  * анимация запускается НАЖАТИЕМ, а не ховером — мышь проходит по пилюлям
  * транзитом, и к чужой реакции подводят, чтобы прочитать подсказку «кто
  * поставил» (см. CustomEmojiImage). */
-function EmojiGlyph({ emoji, playing }: { emoji: string; playing: boolean }) {
+export function EmojiGlyph({ emoji, playing }: { emoji: string; playing: boolean }) {
   const parsed = parseEmojiKey(emoji)
   if (parsed.kind === 'custom') {
     return (
