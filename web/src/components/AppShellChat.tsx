@@ -30,6 +30,9 @@ interface AppShellChatProps {
   goBackMobile: () => void
   activeConversation: Conversation | null
   canDeleteMessages: boolean
+  /** Право «Отправление голосовых сообщений» на ТЕКУЩЕМ сервере. В личке и
+   * группе не спрашивается — ролей там нет (см. AppShell). */
+  canSendVoiceMessages: boolean
   pendingChannelMessages: PendingMessage[]
   pendingDmMessages: PendingMessage[]
   loadDraft: (key: string) => ComposerDraft | undefined
@@ -51,6 +54,7 @@ interface AppShellChatProps {
 export default function AppShellChat({
   server, conv, voice, participant, channelMessages, inviteLinks,
   user, isMobile, goBackMobile, activeConversation, canDeleteMessages,
+  canSendVoiceMessages,
   pendingChannelMessages, pendingDmMessages, loadDraft, saveDraft,
   showMembersList, setShowMembersList, openProfilePopup, handleToggleDmReaction,
   mentionPrefill, blockedUserIds,
@@ -260,6 +264,7 @@ export default function AppShellChat({
               onSaveEdit={channelMessages.handleSaveEdit}
               onCancelEdit={() => channelMessages.setEditTargetTracked(null)}
               prefill={mentionPrefill}
+              canSendVoice={canSendVoiceMessages}
             />
           </>
         ) : (

@@ -1,3 +1,4 @@
+import json
 from datetime import timedelta
 
 from asgiref.sync import async_to_sync
@@ -26,6 +27,7 @@ from .models import (
     ServerBan, ServerEmoji, ServerInvite, ServerJoinRequest, Sticker, StickerPack,
     UserRelationState,
     MAX_ATTACHMENT_BYTES, MAX_EMOJI_BYTES, MAX_EMOJI_PER_SERVER,
+    MAX_VOICE_MS, MAX_WAVEFORM_POINTS,
     MAX_STICKER_NAME_LEN, MAX_STICKER_PACK_NAME_LEN, MAX_STICKER_PACKS_PER_SERVER,
     MAX_STICKER_SOURCE_BYTES, MAX_STICKERS_PER_PACK, MIN_STICKER_NAME_LEN,
     _invite_code, dm_room,
@@ -2461,9 +2463,23 @@ class AttachmentUpload(APIView):
 
         self._sweep_orphans(request.user)
 
-        # Тип определяем по содержимому и «обеззараживаем» — см. chat.uploads,
-        # там же про то, почему заголовку Content-Type верить нельзя.
-        content_type, width, height = uploads.sniff(uploaded)
+        voice = str(request.data.get("voice", "")).lower() in ("1", "true")
+        if voice:
+            # У голосового свой разбор: тип берётся по сигнатуре контейнера, а
+            # не по расширению (его у записи из браузера нет вовсе), и
+            # неопознанное отклоняется, а не превращается в «файл на
+            # скачивание» — см. uploads.sniff_voice.
+            content_type = uploads.sniff_voice(uploaded)
+            if content_type is None:
+                return Response(
+                    {"detail": "Это не похоже на запись голоса."}, status=400)
+            width = height = None
+        else:
+            # Тип определяем по содержимому и «обеззараживаем» — см.
+            # chat.uploads, там же про то, почему заголовку Content-Type
+            # верить нельзя.
+            content_type, width, height = uploads.sniff(uploaded)
+
         attachment = Attachment(
             uploaded_by=request.user,
             original_name=(uploaded.name or "file")[:255],
@@ -2471,10 +2487,55 @@ class AttachmentUpload(APIView):
             size=uploaded.size,
             width=width,
             height=height,
+            voice=voice,
+            duration_ms=self._read_duration(request.data) if voice else None,
+            waveform=self._read_waveform(request.data) if voice else [],
         )
         attachment.file.save(uploaded.name or "file", uploaded, save=False)
         attachment.save()
         return Response(AttachmentSerializer(attachment).data, status=201)
+
+    @staticmethod
+    def _read_duration(data):
+        """Длительность голосового в миллисекундах — или None.
+
+        Значение приходит от клиента и ничем не подтверждается: у webm из
+        MediaRecorder длительность в контейнере часто не проставлена вовсе, и
+        считать её на сервере было бы нечем (декодера звука у нас нет).
+        Поэтому оно не «правда», а подпись под дорожкой — и обрезается по
+        MAX_VOICE_MS, чтобы не превратиться в «99:99» на ровном месте.
+        """
+        try:
+            value = int(data.get("duration_ms") or 0)
+        except (TypeError, ValueError):
+            return None
+        if value <= 0:
+            return None
+        return min(value, MAX_VOICE_MS)
+
+    @staticmethod
+    def _read_waveform(data):
+        """Пики громкости 0..100 — то, что рисуется столбиками.
+
+        Приходят строкой JSON (обычное поле multipart-формы). Всё, что не
+        разобралось, — пустой список: дорожка тогда рисуется ровной, и это
+        куда лучше, чем отказ принять уже записанное сообщение.
+        """
+        raw = data.get("waveform")
+        if not raw:
+            return []
+        try:
+            values = json.loads(raw)
+        except (TypeError, ValueError):
+            return []
+        if not isinstance(values, list):
+            return []
+        peaks = []
+        for value in values[:MAX_WAVEFORM_POINTS]:
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                continue
+            peaks.append(max(0, min(100, int(value))))
+        return peaks
 
     def _sweep_orphans(self, user):
         # Поштучно, а не queryset.delete(): файлы с диска убирает post_delete

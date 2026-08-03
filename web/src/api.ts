@@ -182,6 +182,7 @@ export type ServerPermission =
   | 'manage_expressions'
   | 'send_messages'
   | 'attach_files'
+  | 'send_voice_messages'
   | 'add_reactions'
   | 'use_external_emojis'
   | 'use_external_stickers'
@@ -376,6 +377,16 @@ export interface Attachment {
   /** Только у картинок — чтобы зарезервировать место под превью. */
   width: number | null
   height: number | null
+  /** Голосовое сообщение — записано в клиенте, а не выбрано файлом. Рисуется
+   * дорожкой во всю ширину (см. VoiceMessage) и режется собственным правом
+   * send_voice_messages. */
+  voice: boolean
+  /** Длительность записи. Замерена секундомером при записи, а не взята из
+   * файла: у webm из MediaRecorder длительности в контейнере обычно нет. */
+  duration_ms: number | null
+  /** Пики громкости 0..100 — та самая дорожка столбиками. Пустой массив, если
+   * посчитать не удалось: плеер тогда рисует ровную полосу. */
+  waveform: number[]
 }
 
 /** Кастомный эмодзи сервера (backend chat.models.ServerEmoji).
@@ -960,6 +971,32 @@ export function uploadAttachment(file: File, opts: UploadOptions = {}): Promise<
   return postForm<Attachment>('/api/attachments', form, opts)
 }
 
+/** Загрузка записанного голосового сообщения.
+ *
+ * Тот же эндпоинт, что и у обычных вложений, — голосовое и есть вложение,
+ * просто с флагом и дорожкой. Отдельной ручки нет намеренно: вся механика
+ * (прогресс, отмена, привязка к сообщению при отправке, уборка неотправленных)
+ * у них общая и повторять её ради одного поля незачем.
+ *
+ * duration_ms и waveform считает клиент при записи (см. voiceRecorder.ts) —
+ * сервер их только проверяет и обрезает. */
+export function uploadVoiceMessage(
+  blob: Blob,
+  durationMs: number,
+  waveform: number[],
+  opts: UploadOptions = {},
+): Promise<Attachment> {
+  const form = new FormData()
+  // Имя файла не значит ничего: тип бэкенд определяет по сигнатуре
+  // контейнера (chat/uploads.py sniff_voice), а показывать голосовому нечего —
+  // у него нет «исходного имени» в принципе.
+  form.append('file', blob, 'voice')
+  form.append('voice', '1')
+  form.append('duration_ms', String(Math.round(durationMs)))
+  form.append('waveform', JSON.stringify(waveform))
+  return postForm<Attachment>('/api/attachments', form, opts)
+}
+
 /** Загрузка кастомного эмодзи на сервер (нужно право create_expressions).
  *
  * static — первый кадр анимированного эмодзи, вырезанный КЛИЕНТОМ (см.
@@ -989,13 +1026,17 @@ export function uploadEmoji(
 export function uploadSticker(
   serverId: number,
   name: string,
-  file: File,
+  file: Blob,
   pack?: string,
   opts: UploadOptions = {},
 ): Promise<Sticker> {
   const form = new FormData()
   form.append('name', name)
-  form.append('file', file, file.name)
+  // Blob, а не только File: из редактора уезжает собранная на canvas
+  // картинка, у которой имени нет вовсе. Имя тут ни на что и не влияет —
+  // формат бэкенд определяет по содержимому и сам решает, во что его
+  // перекодировать (см. chat/stickers.py).
+  form.append('file', file, file instanceof File ? file.name : 'sticker')
   if (pack) form.append('pack', pack)
   return postForm<Sticker>(`/api/servers/${serverId}/stickers`, form, opts)
 }

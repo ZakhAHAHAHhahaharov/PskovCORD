@@ -124,7 +124,7 @@ export default function AppShell() {
   const activeConversation = conversations.find((c) => c.id === activeConversationId) || null
 
   const voiceCall = useVoiceCall(
-    gateway, user, members, channels, conversations, activeConversation,
+    gateway, user, members, setMembers, channels, conversations, activeConversation,
     setChannelId, setServerId, setActiveConversationId,
   )
   const {
@@ -220,6 +220,10 @@ export default function AppShell() {
   const pendingDmMessages = usePendingMessages(conversationTarget)
   // Модерация чата — по праву роли (владельцу chat/roles.py выдаёт всё).
   const canDeleteMessages = !!currentServer?.my_permissions?.delete_messages
+  // Голосовые в канале сервера — по праву; в личке и группе ролей нет вовсе,
+  // ограничивать нечем, поэтому там можно всегда (тот же принцип, что у
+  // кастомных эмодзи, см. chat.emoji.usable_ids).
+  const canSendVoiceMessages = !!currentServer?.my_permissions?.send_voice_messages
 
   useGatewayEvents({
     gateway, channelId, serverId, activeConversationId,
@@ -298,6 +302,7 @@ export default function AppShell() {
         goBackMobile={goBackMobile}
         activeConversation={activeConversation}
         canDeleteMessages={canDeleteMessages}
+        canSendVoiceMessages={canSendVoiceMessages}
         pendingChannelMessages={pendingChannelMessages}
         pendingDmMessages={pendingDmMessages}
         loadDraft={loadDraft}

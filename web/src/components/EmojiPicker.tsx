@@ -8,8 +8,8 @@ import { stickerStore, useStickerPacks } from '../stickers'
 import CustomEmojiImage from './CustomEmojiImage'
 import EmojiEditorModal from './EmojiEditorModal'
 import EmojiTabStrip from './EmojiTabStrip'
+import StickerEditorModal from './StickerEditorModal'
 import StickerImage from './StickerImage'
-import StickerUploadModal from './StickerUploadModal'
 
 /**
  * Пикер выражений. Один на всё приложение: и для вставки в текст сообщения
@@ -617,9 +617,12 @@ export default function EmojiPicker({
       )}
 
       {stickerUploadOpen && (
-        <StickerUploadModal
+        <StickerEditorModal
           targets={uploadTargets}
           onClose={() => setStickerUploadOpen(false)}
+          // Только что собранный стикер сразу отправляем туда, ради чего пикер
+          // и открывали, — как редактор эмодзи вставляет свой результат.
+          onCreated={(sticker) => onPickSticker?.(sticker)}
         />
       )}
     </div>

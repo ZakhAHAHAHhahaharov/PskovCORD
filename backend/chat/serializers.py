@@ -388,7 +388,7 @@ class AttachmentSerializer(serializers.ModelSerializer):
     class Meta:
         model = Attachment
         fields = ["id", "url", "original_name", "content_type", "size",
-                  "width", "height"]
+                  "width", "height", "voice", "duration_ms", "waveform"]
 
     def get_url(self, obj):
         """Путь относительно корня (`/media/...`), а не абсолютный URL.

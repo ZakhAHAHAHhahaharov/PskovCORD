@@ -1,5 +1,6 @@
 import {
-  MouseEvent as ReactMouseEvent, useCallback, useEffect, useMemo, useRef, useState,
+  Dispatch, MouseEvent as ReactMouseEvent, SetStateAction,
+  useCallback, useEffect, useMemo, useRef, useState,
 } from 'react'
 import { api, Channel, Conversation, Member, Me, NameEffect } from '../api'
 import type { VoiceState } from '../components/AppShell'
@@ -45,6 +46,9 @@ export function useVoiceCall(
   gateway: ReturnType<typeof useGateway>,
   user: Me | null,
   members: Member[],
+  /** Нужен, чтобы двигать СВОЮ строку в ростере сразу по клику, не дожидаясь
+   * ответа сервера — см. moveMyselfInRoster. */
+  setMembers: Dispatch<SetStateAction<Member[]>>,
   channels: Channel[],
   conversations: Conversation[],
   activeConversation: Conversation | null,
@@ -116,12 +120,48 @@ export function useVoiceCall(
     return channels.find((c) => c.id === Number(voice.room.id))?.topic ?? null
   }, [voice, channels])
 
+  /** Переставить СВОЮ строку в ростере сервера немедленно, не дожидаясь
+   * ответа сервера.
+   *
+   * Ростер (members[].voice_channel) наполняется broadcast'ом
+   * voice_state_update, и до этой правки собственная иконка появлялась под
+   * каналом только после полного круга: запрос за SFU-токеном → gateway
+   * voice_join → рассылка → setMembers. На живом сервере это полсекунды и
+   * больше, и клик по каналу выглядел как «ничего не произошло», а
+   * перетаскивание себя из канала в канал — как будто не сработало.
+   *
+   * Сервер всё равно пришлёт своё состояние следом и, если разошлось (не
+   * пустили по правам, канал заполнен), молча перепишет наше предположение —
+   * то есть это именно оптимистичное предположение, а не второй источник
+   * правды. Ошибку самого подключения откатываем явно (см. catch в
+   * handleJoinVoice).
+   *
+   * null — «нигде»: выход из голоса. */
+  const moveMyselfInRoster = useCallback(
+    (channelId: number | null) => {
+      const myId = user?.id
+      if (myId == null) return
+      setMembers((prev) =>
+        prev.map((m) =>
+          m.id === myId
+            ? { ...m, voice_channel: channelId === null ? null : String(channelId) }
+            : m,
+        ),
+      )
+    },
+    [user?.id, setMembers],
+  )
+
   // useCallback (раньше был обычной функцией, пересоздающейся на каждый
   // рендер): handleJoinVoiceById/handleMoveVoiceUser ниже держат её в своих
   // зависимостях, и нестабильная ссылка пересоздавала бы уже ИХ на каждый
   // рендер тоже.
   const handleJoinVoice = useCallback(
     async (ch: Channel) => {
+      // Иконку переставляем ПЕРВЫМ делом — до похода за токеном: именно этот
+      // запрос и создавал задержку, из-за которой клик выглядел
+      // непроглотившимся.
+      moveMyselfInRoster(ch.id)
       try {
         const { sfu_url, sfu_token } = await api.voiceCredentials(ch.id)
         setVoiceStatus('connecting')
@@ -139,10 +179,17 @@ export function useVoiceCall(
         // на VoiceStage этого канала.
         setChannelId(ch.id)
       } catch (e) {
+        // Откатываем иконку туда, где мы на самом деле остались: в прежнем
+        // канале, если он был, иначе — никуда. voiceRef, а не voice: см.
+        // комментарий у самого ref'а про StrictMode и чистоту апдейтеров.
+        const current = voiceRef.current
+        moveMyselfInRoster(
+          current?.room.kind === 'channel' ? Number(current.room.id) : null,
+        )
         alert('Не удалось подключиться к голосу: ' + (e as Error).message)
       }
     },
-    [gateway, setChannelId],
+    [gateway, setChannelId, moveMyselfInRoster],
   )
 
   /** Тот же handleJoinVoice, но по id канала — нужен там, где под рукой нет
@@ -175,6 +222,9 @@ export function useVoiceCall(
     // Свой собственный звук выхода — здесь и только здесь (см. комментарий
     // у эффекта звуков ростера ниже).
     playLeaveSound()
+    // Иконка уходит из-под канала сразу по нажатию «Отключиться», не дожидаясь
+    // рассылки, — симметрично входу (см. moveMyselfInRoster).
+    moveMyselfInRoster(null)
     gateway.voiceLeave()
     setVoice(null)
     // Ростер звонка в личке/группе — чисто клиентский стейт, который никто не
@@ -183,7 +233,7 @@ export function useVoiceCall(
     // входе только ДОБАВЛЯЕТ пиров к прежнему объекту. Без сброса следующий
     // звонок открывался со всеми, кто был в комнате на момент нашего выхода.
     setDmCallParticipants({})
-  }, [gateway])
+  }, [gateway, moveMyselfInRoster])
 
   // Единая точка входа для просмотра демонстрации экрана — используется и
   // кликом по бейджу «демка» в сайдбаре (для ЛЮБОГО голосового канала на
@@ -302,6 +352,9 @@ export function useVoiceCall(
       if (!current) return
       gateway.voiceLeave()
       setVoice(null)
+      // Подключиться так и не вышло — убираем свою иконку из-под канала,
+      // куда её оптимистично поставил handleJoinVoice.
+      moveMyselfInRoster(null)
       // 'failed' сюда долетает только с самого первого коннекта (ни разу не
       // подключились) — если связь обрывается ПОСЛЕ успешного коннекта,
       // voice.ts бесконечно восстанавливается сам, без алертов и выкидывания
@@ -311,7 +364,7 @@ export function useVoiceCall(
           'Проверь интернет-соединение (возможна блокировка WebRTC/UDP на твоей сети/VPN) и попробуй зайти снова.',
       )
     },
-    [gateway],
+    [gateway, moveMyselfInRoster],
   )
 
   // Если подключение зависло дольше 15с — считаем его неудавшимся.

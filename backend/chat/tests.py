@@ -42,7 +42,7 @@ from .models import (
     MAX_REACTIONS_PER_MESSAGE,
     FriendNickname, Membership, Message, ProfileNote, Reaction, Role, Server, ServerBan,
     ServerEmoji, ServerInvite, ServerJoinRequest, Sticker, StickerPack,
-    MAX_STICKER_BYTES, STICKER_SIDE, dm_room,
+    MAX_STICKER_BYTES, MAX_VOICE_MS, MAX_WAVEFORM_POINTS, STICKER_SIDE, dm_room,
 )
 from .permissions import can_dm
 from .serializers import RoleSerializer
@@ -2779,6 +2779,83 @@ class AttachmentUploadTests(APITestCase):
         self.assertEqual(resp.status_code, 401)
 
 
+class VoiceMessageUploadTests(APITestCase):
+    """Загрузка голосового: тип по сигнатуре контейнера, длительность и
+    дорожка."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(username="voicer", password="pw12345")
+        self.client.force_authenticate(self.user)
+
+    @staticmethod
+    def _webm(payload=b"\0" * 64):
+        # Заголовок EBML — то, с чего начинается запись MediaRecorder в Chrome.
+        return b"\x1a\x45\xdf\xa3" + payload
+
+    def _upload(self, data=None, **extra):
+        payload = {
+            "file": SimpleUploadedFile(
+                "voice", data if data is not None else self._webm(),
+                content_type="application/octet-stream"),
+            "voice": "1",
+            **extra,
+        }
+        return self.client.post("/api/attachments", payload, format="multipart")
+
+    def test_webm_recognised_as_voice(self):
+        resp = self._upload(duration_ms="4200", waveform="[0, 50, 100]")
+        self.assertEqual(resp.status_code, 201, resp.data)
+        self.assertTrue(resp.data["voice"])
+        self.assertEqual(resp.data["content_type"], "audio/webm")
+        self.assertEqual(resp.data["duration_ms"], 4200)
+        self.assertEqual(resp.data["waveform"], [0, 50, 100])
+
+    def test_ogg_and_mp4_recognised(self):
+        ogg = self._upload(data=b"OggS" + b"\0" * 32)
+        self.assertEqual(ogg.data["content_type"], "audio/ogg")
+        mp4 = self._upload(data=b"\0\0\0\x20ftypM4A " + b"\0" * 32)
+        self.assertEqual(mp4.data["content_type"], "audio/mp4")
+
+    def test_non_audio_rejected_as_voice(self):
+        """voice=1 — заявление клиента, и оно проверяется: у сообщения с этим
+        флагом своя отрисовка и своё право, пускать туда что попало незачем."""
+        resp = self._upload(data=b"<html>not a voice at all</html>")
+        self.assertEqual(resp.status_code, 400)
+
+    def test_duration_is_clamped_and_waveform_sanitised(self):
+        resp = self._upload(
+            duration_ms=str(MAX_VOICE_MS * 5),
+            # Мусор вперемешку со значениями и с выходом за 0..100 — всё это
+            # приходит от клиента и не должно ни падать, ни доезжать как есть.
+            waveform=json.dumps([-40, 5, "х", None, 300, 7] + [1] * 200),
+        )
+        self.assertEqual(resp.status_code, 201, resp.data)
+        self.assertEqual(resp.data["duration_ms"], MAX_VOICE_MS)
+        peaks = resp.data["waveform"]
+        self.assertLessEqual(len(peaks), MAX_WAVEFORM_POINTS)
+        self.assertTrue(all(0 <= p <= 100 for p in peaks))
+        # -40 → 0, 5 → 5, "х" и None выброшены, 300 → 100, 7 остаётся собой.
+        self.assertEqual(peaks[:4], [0, 5, 100, 7])
+
+    def test_broken_waveform_becomes_empty(self):
+        """Отказать из-за дорожки нельзя: сообщение уже записано, а ровная
+        полоска вместо рисунка — не потеря."""
+        resp = self._upload(waveform="{это не json")
+        self.assertEqual(resp.status_code, 201)
+        self.assertEqual(resp.data["waveform"], [])
+
+    def test_plain_upload_is_not_voice(self):
+        resp = self.client.post(
+            "/api/attachments",
+            {"file": SimpleUploadedFile(
+                "note.txt", b"hello", content_type="text/plain")},
+            format="multipart")
+        self.assertEqual(resp.status_code, 201)
+        self.assertFalse(resp.data["voice"])
+        self.assertIsNone(resp.data["duration_ms"])
+        self.assertEqual(resp.data["waveform"], [])
+
+
 class CustomEmojiUploadTests(APITestCase):
     """Загрузка кастомных эмодзи сервера: право, лимиты и формат."""
 
@@ -3550,6 +3627,69 @@ class ReactionAndDeliveryTests(TransactionTestCase):
         second = await self._send(
             ws, "два", attachment_ids=[str(attachment.id)], nonce="a2")
         self.assertEqual(second["message"]["attachments"], [])
+        await ws.disconnect()
+
+    # --- голосовые сообщения ---
+    @database_sync_to_async
+    def _make_voice(self, user):
+        payload = b"\x1a\x45\xdf\xa3" + b"\0" * 32
+        attachment = Attachment(
+            uploaded_by=user, original_name="voice", content_type="audio/webm",
+            size=len(payload), voice=True, duration_ms=3000, waveform=[10, 90])
+        attachment.file.save(
+            "voice.webm", SimpleUploadedFile("voice.webm", payload), save=False)
+        attachment.save()
+        return attachment
+
+    @database_sync_to_async
+    def _set_default_role(self, **flags):
+        """Завести роль по умолчанию и выставить в ней флаги.
+
+        Заводить приходится здесь: setUp создаёт сервер напрямую, без роли, и
+        права тогда берутся из запасного BASE_MEMBER_PERMISSIONS (см.
+        chat.roles) — снять в нём что-либо невозможно в принципе.
+        """
+        role = (Role.objects.filter(server=self.server, is_default=True).first()
+                or roles.create_default_role(self.server))
+        for name, value in flags.items():
+            setattr(role, name, value)
+        role.save()
+
+    async def test_voice_message_is_sent_with_permission(self):
+        voice = await self._make_voice(self.member)
+        ws = await self._connect(self.member)
+        echo = await self._send(ws, "", attachment_ids=[str(voice.id)])
+        attachment = echo["message"]["attachments"][0]
+        self.assertTrue(attachment["voice"])
+        self.assertEqual(attachment["duration_ms"], 3000)
+        self.assertEqual(attachment["waveform"], [10, 90])
+        await ws.disconnect()
+
+    async def test_voice_message_denied_by_its_own_permission(self):
+        """send_voice_messages режет ТОЛЬКО голосовые: обычные файлы в том же
+        канале по-прежнему прикрепляются."""
+        await self._set_default_role(send_voice_messages=False)
+        voice = await self._make_voice(self.member)
+        ws = await self._connect(self.member)
+        await ws.send_json_to({
+            "op": "send_message", "channel_id": self.channel.id,
+            "content": "", "attachment_ids": [str(voice.id)], "nonce": "n-voice",
+        })
+        nack = await self._receive_until(ws, "message_nack")
+        self.assertEqual(nack["nonce"], "n-voice")
+
+        picture = await self._make_attachment(self.member)
+        echo = await self._send(ws, "", attachment_ids=[str(picture.id)])
+        self.assertEqual(len(echo["message"]["attachments"]), 1)
+        await ws.disconnect()
+
+    async def test_attach_files_does_not_block_voice(self):
+        """И наоборот: запрет на файлы не должен заодно отбирать голосовые."""
+        await self._set_default_role(attach_files=False)
+        voice = await self._make_voice(self.member)
+        ws = await self._connect(self.member)
+        echo = await self._send(ws, "", attachment_ids=[str(voice.id)])
+        self.assertEqual(len(echo["message"]["attachments"]), 1)
         await ws.disconnect()
 
     # --- реакции ---

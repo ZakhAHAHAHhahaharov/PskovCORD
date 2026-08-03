@@ -604,8 +604,11 @@ export default function EmojiEditorModal({
 
 /** Компактный выбор эмодзи для наклейки. Не EmojiPicker: тот сам умеет
  * открывать этот редактор, и вложить его сюда значило бы получить редактор
- * внутри редактора. Здесь и нужно меньше — ни вкладок, ни «+». */
-function LayerChooser({
+ * внутри редактора. Здесь и нужно меньше — ни вкладок, ни «+».
+ *
+ * Экспортируется ради редактора стикеров (StickerEditorModal): наклейки там
+ * ровно те же, и вторая копия этого списка разъезжалась бы с первой. */
+export function LayerChooser({
   onPick,
 }: {
   onPick: (payload: { emoji?: CustomEmoji; char?: string }) => void
@@ -661,7 +664,7 @@ function LayerChooser({
   )
 }
 
-function clamp(value: number, min: number, max: number): number {
+export function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value))
 }
 

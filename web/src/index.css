@@ -3808,6 +3808,99 @@ textarea.inline-editable-input {
   color: var(--text-muted);
 }
 
+.composer-hint-error {
+  color: var(--danger, #ed4245);
+}
+
+/* ---- панель записи голосового (MessageInput) ---- */
+/* Композер на время записи прячется, а НЕ размонтируется: его содержимое
+   живёт прямо в DOM contentEditable'а, и снос узла стёр бы недописанное
+   сообщение (см. MessageInput). */
+.message-input.hidden-by-recorder {
+  display: none;
+}
+
+/* Занимает место всего композера, пока идёт запись: печатать в этот момент
+   нечего, а полоса с таймером и двумя кнопками не оставляет вопросов, что
+   происходит. */
+.voice-recorder {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--input-bg);
+}
+
+.voice-recorder-dot {
+  flex-shrink: 0;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--danger, #ed4245);
+  animation: voice-rec-blink 1.1s ease-in-out infinite;
+}
+
+@keyframes voice-rec-blink {
+  50% { opacity: 0.25; }
+}
+
+/* Моноширинные цифры: без них таймер дёргается по горизонтали на каждой
+   смене секунды. */
+.voice-recorder-time {
+  font-variant-numeric: tabular-nums;
+  font-size: calc(13px * var(--font-scale, 1));
+  color: var(--text-normal);
+}
+
+.voice-recorder-level {
+  flex: 1;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--surface-2);
+  overflow: hidden;
+}
+
+.voice-recorder-level-fill {
+  display: block;
+  height: 100%;
+  background: var(--accent, #5865f2);
+  /* Плавно, но быстро: индикатор должен успевать за голосом, а не тянуться
+     за ним хвостом. */
+  transition: width 0.08s linear;
+}
+
+.voice-recorder-hint {
+  font-size: calc(12px * var(--font-scale, 1));
+  color: var(--text-muted);
+}
+
+.voice-recorder-cancel,
+.voice-recorder-send {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  color: var(--text-muted);
+}
+
+.voice-recorder-cancel:hover {
+  color: var(--danger, #ed4245);
+  background: var(--channel-hover);
+}
+
+.voice-recorder-send {
+  color: #fff;
+  background: var(--accent, #5865f2);
+}
+
+.voice-recorder-send:hover {
+  filter: brightness(1.1);
+}
+
 /* Подсветка зоны, когда над композером тащат файл. */
 .message-input-wrap.dragging::after {
   content: 'Отпусти файл, чтобы прикрепить';
@@ -6250,6 +6343,95 @@ button.settings-row-clickable:hover .settings-row-label {
   color: var(--text-normal);
 }
 
+/* ---- голосовое сообщение (VoiceMessage) ---- */
+.voice-message {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: min(340px, 100%);
+  padding: 8px 12px 8px 8px;
+  border-radius: 10px;
+  background: var(--surface-2);
+  border: 1px solid var(--surface-2-border);
+}
+
+.voice-play {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  color: #fff;
+  background: var(--accent, #5865f2);
+}
+
+.voice-play:hover {
+  filter: brightness(1.1);
+}
+
+.voice-body {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Дорожка — она же шкала перемотки: столбики и бегунок лежат в одном
+   элементе, чтобы не разъезжаться (см. VoiceMessage, почему не <input range>). */
+.voice-track {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 32px;
+  cursor: pointer;
+  /* Иначе перетаскивание бегунка выделяло бы соседний текст сообщения. */
+  user-select: none;
+  touch-action: none;
+}
+
+.voice-bar {
+  flex: 1;
+  min-width: 2px;
+  border-radius: 1px;
+  background: var(--text-muted);
+  opacity: 0.45;
+}
+
+/* Проигранная часть — цветом акцента, как заполненная часть полосы у
+   видеоплеера. */
+.voice-bar.played {
+  background: var(--accent, #5865f2);
+  opacity: 1;
+}
+
+.voice-flat {
+  flex: 1;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--text-muted);
+  opacity: 0.4;
+}
+
+.voice-knob {
+  position: absolute;
+  top: 50%;
+  width: 10px;
+  height: 10px;
+  margin-left: -5px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+
+.voice-time {
+  font-variant-numeric: tabular-nums;
+  font-size: calc(11px * var(--font-scale, 1));
+  color: var(--text-muted);
+}
+
 .attachment-file {
   display: flex;
   align-items: center;
@@ -6746,29 +6928,44 @@ button.settings-row-clickable:hover .settings-row-label {
   color: var(--text-normal);
 }
 
-/* ---- загрузка стикера (StickerUploadModal) ---- */
-.sticker-upload {
-  width: min(380px, 94vw);
+/* ---- редактор стикера (StickerEditorModal) ---- */
+/* Холст крупнее, чем у эмодзи (стикер и рисуется крупно), и на клетчатом
+   фоне: у стикера прозрачные поля, и без клетки не видно, где кончается
+   картинка, а где начинается пустое место. */
+.sticker-editor-canvas {
+  width: 240px;
+  height: 240px;
+  background-image:
+    linear-gradient(45deg, var(--surface-2) 25%, transparent 25%),
+    linear-gradient(-45deg, var(--surface-2) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, var(--surface-2) 75%),
+    linear-gradient(-45deg, transparent 75%, var(--surface-2) 75%);
+  background-size: 16px 16px;
+  background-position: 0 0, 0 8px, 8px -8px, -8px 0;
 }
 
-.sticker-upload-preview {
+/* Lottie/WebM — вместо холста: редактировать их нечем, показываем как есть. */
+.sticker-editor-raw {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.sticker-editor-raw video {
+  width: 100%;
+  max-height: 240px;
+  object-fit: contain;
+}
+
+.sticker-editor-raw-badge {
   display: flex;
   align-items: center;
   justify-content: center;
   height: 160px;
-  margin-bottom: 10px;
+  width: 100%;
   border-radius: 8px;
   background: var(--input-bg);
-}
-
-.sticker-upload-preview img,
-.sticker-upload-preview video {
-  max-width: 100%;
-  max-height: 100%;
-  object-fit: contain;
-}
-
-.sticker-upload-nopreview {
   color: var(--text-muted);
   font-size: calc(13px * var(--font-scale, 1));
 }

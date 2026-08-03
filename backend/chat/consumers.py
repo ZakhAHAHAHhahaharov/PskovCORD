@@ -1208,6 +1208,36 @@ class GatewayConsumer(AsyncWebsocketConsumer):
                 "server_id", flat=True)
         )
 
+    def _attachments_denied(self, attachment_ids, perms):
+        """Текст отказа, если этих вложений здесь прикреплять нельзя, иначе None.
+
+        Права два, и они разные: обычный файл закрыт attach_files, голосовое —
+        своим send_voice_messages (см. chat.roles: «не засоряйте канал файлами»
+        и «не наговаривайте вместо текста» — разные пожелания). Поэтому мало
+        посмотреть на список id: нужно знать, что именно за ними лежит.
+
+        Запрос идёт по СВОИМ непривязанным загрузкам — ровно по тем, которые
+        потом заберёт _bind_attachments: чужой или уже отправленный id всё
+        равно не прикрепится, и отказывать из-за него было бы неправдой.
+
+        Синхронный метод — вызывается уже внутри database_sync_to_async.
+        """
+        if not attachment_ids:
+            return None
+        kinds = set(
+            Attachment.objects.filter(
+                id__in=attachment_ids,
+                uploaded_by=self.user,
+                message__isnull=True,
+                conversation_message__isnull=True,
+            ).values_list("voice", flat=True)
+        )
+        if True in kinds and not perms.get("send_voice_messages"):
+            return "Голосовые сообщения в этом канале запрещены."
+        if False in kinds and not perms.get("attach_files"):
+            return "Нельзя прикреплять файлы в этом канале."
+        return None
+
     def _bind_attachments(self, attachment_ids, **owner):
         """Привязать ранее загруженные файлы к только что созданному сообщению.
 
@@ -1258,8 +1288,9 @@ class GatewayConsumer(AsyncWebsocketConsumer):
             return {"error": "Нет доступа к каналу."}
         if not can_see_channel(self.user, channel, perms):
             return {"error": "Нет доступа к каналу."}
-        if attachment_ids and not perms.get("attach_files"):
-            return {"error": "Нельзя прикреплять файлы в этом канале."}
+        denied = self._attachments_denied(attachment_ids, perms)
+        if denied:
+            return {"error": denied}
         wait = self._slowmode_wait(channel, perms)
         if wait:
             return {"error": f"Медленный режим: подождите {wait} с."}
