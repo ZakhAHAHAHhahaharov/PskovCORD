@@ -40,6 +40,10 @@ export interface EmojiServer {
   icon: string
   /** Есть ли у меня право «Создавать средства выражения эмоций» здесь. */
   canAdd: boolean
+  /** Есть ли у меня право «Управление выражениями» здесь — переименовывать и
+   * удалять эмодзи сервера, в том числе загруженные другими (см. правый клик
+   * по эмодзи в пикере, EmojiPicker.tsx). */
+  canManage: boolean
 }
 
 /** Набор эмодзи одного сервера — вкладка в ленте наборов пикера. */
@@ -76,6 +80,7 @@ function fallbackServer(serverId: number): EmojiServer {
     name: byServer.get(serverId)?.[0]?.server_name ?? 'Сервер',
     icon: '',
     canAdd: false,
+    canManage: false,
   }
 }
 

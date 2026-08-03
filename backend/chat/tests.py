@@ -1144,6 +1144,172 @@ class GatewayVoiceSignalingTests(TransactionTestCase):
         await bob_ws.disconnect()
 
 
+class VoiceMoveUserTests(TransactionTestCase):
+    """{"op": "voice_move_user"} — перетаскивание участника голосового канала
+    на другой канал (см. chat.consumers._handle_voice_move_user).
+
+    TransactionTestCase по той же причине, что и у GatewayVoiceSignalingTests
+    выше (database_sync_to_async и atomic-обёртка TestCase несовместимы).
+    """
+
+    def setUp(self):
+        presence._r.flushdb()
+        self.alice = User.objects.create_user(username="vm_alice", password="pw12345")  # владелец
+        self.bob = User.objects.create_user(username="vm_bob", password="pw12345")  # цель
+        self.carol = User.objects.create_user(username="vm_carol", password="pw12345")  # рядовой
+        self.server = Server.objects.create(name="s", owner=self.alice)
+        for u in (self.alice, self.bob, self.carol):
+            Membership.objects.create(user=u, server=self.server)
+        self.channel_a = Channel.objects.create(
+            server=self.server, name="a", kind=Channel.VOICE, position=0)
+        self.channel_b = Channel.objects.create(
+            server=self.server, name="b", kind=Channel.VOICE, position=1)
+        self.other_server = Server.objects.create(name="s2", owner=self.alice)
+        self.other_channel = Channel.objects.create(
+            server=self.other_server, name="c", kind=Channel.VOICE, position=0)
+
+    def tearDown(self):
+        presence._r.flushdb()
+
+    async def _connect(self, user):
+        token = str(AccessToken.for_user(user))
+        comm = WebsocketCommunicator(
+            JWTAuthMiddleware(GatewayConsumer.as_asgi()),
+            f"/ws/gateway?token={token}")
+        connected, _ = await comm.connect()
+        self.assertTrue(connected)
+        return comm
+
+    @staticmethod
+    async def _receive_until(comm, op, timeout=2, max_messages=10):
+        for _ in range(max_messages):
+            msg = await comm.receive_json_from(timeout=timeout)
+            if msg.get("op") == op:
+                return msg
+        raise AssertionError(f"op={op!r} не пришёл за {max_messages} сообщений")
+
+    @staticmethod
+    async def _assert_op_not_received(comm, op, timeout=0.3, interval=0.01):
+        start = time.monotonic()
+        while time.monotonic() - start < timeout:
+            while not comm.output_queue.empty():
+                raw = comm.output_queue.get_nowait()
+                if "text" in raw:
+                    msg = json.loads(raw["text"])
+                    if msg.get("op") == op:
+                        raise AssertionError(f"op={op!r} не должен был прийти, но пришёл: {msg}")
+            await asyncio.sleep(interval)
+
+    async def _join(self, comm, channel_id):
+        await comm.send_json_to({"op": "voice_join", "channel_id": channel_id})
+        # Дожидаемся СВОЕГО voice_state_update — гарантия, что presence уже
+        # встал на канал на сервере к моменту, когда тест продолжит (просто
+        # sleep() ничего не гарантирует: обработка op'а асинхронная).
+        await self._receive_until(comm, "voice_state_update")
+
+    async def test_owner_can_move_member_and_target_stays_put_until_it_rejoins(self):
+        """Сервер не трогает presence сам — цель остаётся В СТАРОМ канале,
+        пока её собственный клиент не обработает voice_moved настоящим
+        voice_join (см. докстринг _handle_voice_move_user)."""
+        alice_ws = await self._connect(self.alice)
+        bob_ws = await self._connect(self.bob)
+        await self._join(bob_ws, self.channel_a.id)
+
+        await alice_ws.send_json_to({
+            "op": "voice_move_user", "user_id": self.bob.id, "channel_id": self.channel_b.id,
+        })
+        moved = await self._receive_until(bob_ws, "voice_moved")
+        self.assertEqual(moved["channel_id"], self.channel_b.id)
+
+        still_old = await database_sync_to_async(presence.voice_channel)(self.bob.id)
+        self.assertEqual(still_old, str(self.channel_a.id))
+
+        # Клиент цели реагирует на voice_moved обычным voice_join — вот тут
+        # presence и переезжает по-настоящему.
+        await self._join(bob_ws, self.channel_b.id)
+        moved_now = await database_sync_to_async(presence.voice_channel)(self.bob.id)
+        self.assertEqual(moved_now, str(self.channel_b.id))
+
+        await alice_ws.disconnect()
+        await bob_ws.disconnect()
+
+    async def test_regular_member_without_manage_members_cannot_move(self):
+        carol_ws = await self._connect(self.carol)
+        bob_ws = await self._connect(self.bob)
+        await self._join(bob_ws, self.channel_a.id)
+
+        await carol_ws.send_json_to({
+            "op": "voice_move_user", "user_id": self.bob.id, "channel_id": self.channel_b.id,
+        })
+        await self._assert_op_not_received(bob_ws, "voice_moved")
+
+        await carol_ws.disconnect()
+        await bob_ws.disconnect()
+
+    async def test_cannot_move_self_via_this_op(self):
+        """Перетаскивание своей же строки клиент обрабатывает как обычный
+        voice_join локально, без этого оп'а вообще — но если он всё же
+        долетел (например, старая вкладка), сервер его молча игнорирует."""
+        alice_ws = await self._connect(self.alice)
+        await self._join(alice_ws, self.channel_a.id)
+
+        await alice_ws.send_json_to({
+            "op": "voice_move_user", "user_id": self.alice.id, "channel_id": self.channel_b.id,
+        })
+        await self._assert_op_not_received(alice_ws, "voice_moved")
+        unchanged = await database_sync_to_async(presence.voice_channel)(self.alice.id)
+        self.assertEqual(unchanged, str(self.channel_a.id))
+
+        await alice_ws.disconnect()
+
+    async def test_owner_cannot_be_moved_even_with_manage_members(self):
+        role = await database_sync_to_async(Role.objects.create)(
+            server=self.server, name="mod", position=1, manage_members=True)
+        membership = await database_sync_to_async(
+            Membership.objects.get)(user=self.carol, server=self.server)
+        await database_sync_to_async(membership.roles.add)(role)
+
+        carol_ws = await self._connect(self.carol)
+        alice_ws = await self._connect(self.alice)
+        await self._join(alice_ws, self.channel_a.id)
+
+        await carol_ws.send_json_to({
+            "op": "voice_move_user", "user_id": self.alice.id, "channel_id": self.channel_b.id,
+        })
+        await self._assert_op_not_received(alice_ws, "voice_moved")
+
+        await carol_ws.disconnect()
+        await alice_ws.disconnect()
+
+    async def test_cannot_move_across_servers(self):
+        """Канал назначения на ДРУГОМ сервере, чем текущий канал цели —
+        неоднозначно, куда «доставать» цель, игнорируем."""
+        alice_ws = await self._connect(self.alice)
+        bob_ws = await self._connect(self.bob)
+        await self._join(bob_ws, self.channel_a.id)
+
+        await alice_ws.send_json_to({
+            "op": "voice_move_user", "user_id": self.bob.id, "channel_id": self.other_channel.id,
+        })
+        await self._assert_op_not_received(bob_ws, "voice_moved")
+
+        await alice_ws.disconnect()
+        await bob_ws.disconnect()
+
+    async def test_move_to_own_current_channel_is_noop(self):
+        alice_ws = await self._connect(self.alice)
+        bob_ws = await self._connect(self.bob)
+        await self._join(bob_ws, self.channel_a.id)
+
+        await alice_ws.send_json_to({
+            "op": "voice_move_user", "user_id": self.bob.id, "channel_id": self.channel_a.id,
+        })
+        await self._assert_op_not_received(bob_ws, "voice_moved")
+
+        await alice_ws.disconnect()
+        await bob_ws.disconnect()
+
+
 class SingleDeviceVoiceTests(TransactionTestCase):
     """Один аккаунт — один голосовой звонок одновременно, будь то канал
     сервера или диалог/группа (см. chat.consumers._kick_other_devices)."""

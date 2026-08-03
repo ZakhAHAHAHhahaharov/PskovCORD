@@ -1,4 +1,6 @@
-import { MouseEvent as ReactMouseEvent, useCallback, useState } from 'react'
+import {
+  DragEvent as ReactDragEvent, MouseEvent as ReactMouseEvent, useCallback, useState,
+} from 'react'
 import {
   ChevronDown, ChevronRight, Volume2, MicOff, HeadphoneOff, Monitor, Settings,
   Pin, Timer, Lock,
@@ -18,6 +20,18 @@ import { maskName, useHiddenNames } from '../hiddenNames'
 import { nicknameStore, useNickname, useNicknamesVersion } from '../nicknames'
 
 const COLLAPSED_KEY = 'collapsedChannelCategories'
+
+/** Свой MIME в dataTransfer — переносим id участника голосового канала и
+ * канал, откуда его тащат (перетаскивание строки на другой голосовой канал,
+ * см. VoiceUserRow/voice-channel-block ниже). Собственный тип, а не
+ * text/plain: раз в dataTransfer.types есть этот тип — точно наше
+ * перетаскивание, а не, скажем, случайно принесённый файл или ссылка. */
+const VOICE_MOVE_MIME = 'application/x-pskovcord-voice-member'
+
+interface VoiceMoveData {
+  userId: number
+  fromChannelId: number
+}
 
 type ChannelKind = 'text' | 'voice'
 
@@ -110,6 +124,7 @@ function VoiceUserRow({
   muted,
   deafened,
   canOpenMenu,
+  canDrag,
   masked,
   onOpenParticipantProfile,
   onParticipantContextMenu,
@@ -121,6 +136,10 @@ function VoiceUserRow({
   muted: boolean
   deafened: boolean
   canOpenMenu: boolean
+  /** Можно ли перетащить эту строку на другой голосовой канал — своя
+   * (переключение канала, права не нужны) либо есть "manage_members" (см.
+   * ChannelSidebar). */
+  canDrag: boolean
   /** Включено «Скрыть имена» для этого канала (см. ChannelContextMenu) —
    * ник виден только себе, остальным этот же список выглядит как обычно. */
   masked: boolean
@@ -147,6 +166,16 @@ function VoiceUserRow({
     <button
       type="button"
       className="voice-user"
+      draggable={canDrag}
+      onDragStart={
+        canDrag
+          ? (e) => {
+              const data: VoiceMoveData = { userId: m.id, fromChannelId: channelId }
+              e.dataTransfer.setData(VOICE_MOVE_MIME, JSON.stringify(data))
+              e.dataTransfer.effectAllowed = 'move'
+            }
+          : undefined
+      }
       onClick={(e) => onOpenParticipantProfile?.(m, e)}
       onContextMenu={
         canOpenMenu
@@ -225,6 +254,7 @@ export default function ChannelSidebar({
   onParticipantContextMenu,
   onOpenParticipantProfile,
   onChannelContextMenu,
+  onMoveVoiceUser,
 }: {
   server: Server | null
   channels: Channel[]
@@ -263,9 +293,17 @@ export default function ChannelSidebar({
   /** Правый клик на самом голосовом канале (не на участнике) — меню
    * приглашения/закрепления/ссылки/статуса/скрытия имён, см. ChannelContextMenu. */
   onChannelContextMenu?: (channel: Channel, e: ReactMouseEvent) => void
+  /** Зажали ЛКМ на строке участника голосового канала и отпустили над
+   * другим голосовым каналом — переместить его туда (своя строка — просто
+   * переключение канала, чужая — нужно право "manage_members", проверяется
+   * на сервере, см. useVoiceCall.handleMoveVoiceUser). */
+  onMoveVoiceUser?: (userId: number, channel: Channel) => void
 }) {
   const { speakingUserIds, muted, deafened } = useVoice()
   const { isHidden } = useHiddenNames()
+  // Голосовой канал, над которым сейчас держат перетаскиваемого участника —
+  // подсветка цели drop'а (см. voice-channel-block ниже).
+  const [dragOverChannelId, setDragOverChannelId] = useState<number | null>(null)
   const { isCollapsed, toggle: toggleCategory } = useCollapsedCategories(server?.id)
   // Для себя — локальное состояние mesh'а (мгновенный отклик на клик);
   // для остальных — то, что пришло в members (видно всем, даже не
@@ -299,6 +337,9 @@ export default function ChannelSidebar({
   // Редактор сервера открывается, если есть хоть одна доступная вкладка.
   const canEditServer =
     !!perms && (perms.manage_server || perms.manage_roles || perms.manage_members)
+  // Тем же правом закрыто и «Отключить от канала» в ParticipantContextMenu —
+  // перетаскивание ЧУЖОЙ строки на другой канал того же порядка серьёзности.
+  const canManageMembers = !!perms?.manage_members
 
   return (
     <aside className="channel-sidebar">
@@ -402,9 +443,48 @@ export default function ChannelSidebar({
               const isMyVoiceChannel = voice?.room.kind === 'channel' && voice.room.id === c.id
               const isPinned = pinnedIds.includes(c.id)
               const masked = isHidden(c.id)
+              // Перетаскивание участника на этот канал — общее для свёрнутого
+              // и развёрнутого вида (drop-цель в обоих, тащить-источник —
+              // только строки в развёрнутом, их в свёрнутом просто нет).
+              const dropHandlers = onMoveVoiceUser
+                ? {
+                    onDragOver: (e: ReactDragEvent) => {
+                      if (!e.dataTransfer.types.includes(VOICE_MOVE_MIME)) return
+                      e.preventDefault()
+                      e.dataTransfer.dropEffect = 'move'
+                    },
+                    onDragEnter: (e: ReactDragEvent) => {
+                      if (!e.dataTransfer.types.includes(VOICE_MOVE_MIME)) return
+                      setDragOverChannelId(c.id)
+                    },
+                    onDragLeave: (e: ReactDragEvent) => {
+                      // Уход на дочерний элемент (аватарку, иконку) — не уход
+                      // с блока целиком, relatedTarget тогда всё ещё внутри.
+                      if (e.currentTarget.contains(e.relatedTarget as Node)) return
+                      setDragOverChannelId((prev) => (prev === c.id ? null : prev))
+                    },
+                    onDrop: (e: ReactDragEvent) => {
+                      e.preventDefault()
+                      setDragOverChannelId(null)
+                      const raw = e.dataTransfer.getData(VOICE_MOVE_MIME)
+                      if (!raw) return
+                      try {
+                        const data = JSON.parse(raw) as VoiceMoveData
+                        if (data.fromChannelId === c.id) return // уже здесь
+                        onMoveVoiceUser(data.userId, c)
+                      } catch {
+                        // Мусор в dataTransfer (не наше перетаскивание) — игнор.
+                      }
+                    },
+                  }
+                : {}
               if (voiceCollapsed) {
                 return (
-                  <div key={c.id} className="voice-channel-block">
+                  <div
+                    key={c.id}
+                    className={`voice-channel-block ${dragOverChannelId === c.id ? 'drop-target' : ''}`}
+                    {...dropHandlers}
+                  >
                     <button
                       className="channel-item active"
                       onClick={() => onJoinVoice(c)}
@@ -426,7 +506,11 @@ export default function ChannelSidebar({
                 )
               }
               return (
-                <div key={c.id} className="voice-channel-block">
+                <div
+                  key={c.id}
+                  className={`voice-channel-block ${dragOverChannelId === c.id ? 'drop-target' : ''}`}
+                  {...dropHandlers}
+                >
                   <button
                     className={`channel-item ${
                       voice?.room.id === c.id ? 'active' : ''
@@ -460,6 +544,11 @@ export default function ChannelSidebar({
                     const speaking = speakingUserIds.has(m.id)
                     const mic = micStateOf(m)
                     const canOpenMenu = m.id !== user.id && !!onParticipantContextMenu
+                    // Своя строка тащится всегда (это просто переключение
+                    // канала, права не нужны — см. handleMoveVoiceUser);
+                    // чужая — только если можно ею управлять.
+                    const canDrag =
+                      !!onMoveVoiceUser && (m.id === user.id || canManageMembers)
                     return (
                       <VoiceUserRow
                         key={m.id}
@@ -469,6 +558,7 @@ export default function ChannelSidebar({
                         muted={mic.muted}
                         deafened={mic.deafened}
                         canOpenMenu={canOpenMenu}
+                        canDrag={canDrag}
                         masked={masked}
                         onOpenParticipantProfile={onOpenParticipantProfile}
                         onParticipantContextMenu={onParticipantContextMenu}

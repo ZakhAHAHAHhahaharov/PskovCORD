@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { Plus } from 'lucide-react'
-import { CustomEmoji } from '../api'
-import { useCustomEmojiPacks, useEmojiUploadTargets } from '../customEmoji'
+import { Plus, Trash2 } from 'lucide-react'
+import { CustomEmoji, api } from '../api'
+import { customEmojiStore, useCustomEmojiPacks, useEmojiUploadTargets } from '../customEmoji'
 import { EMOJI_CATEGORIES, EmojiEntry, searchEmoji } from '../emoji'
 import CustomEmojiImage from './CustomEmojiImage'
 import EmojiEditorModal from './EmojiEditorModal'
@@ -68,6 +68,13 @@ export default function EmojiPicker({
   const [query, setQuery] = useState('')
   const [activeSection, setActiveSection] = useState(EMOJI_CATEGORIES[0].id)
   const [editorOpen, setEditorOpen] = useState(false)
+  // Правый клик по своему эмодзи — маленькое меню «Удалить» рядом с
+  // курсором. Своё состояние, а не переиспользование editorOpen: закрывается
+  // по-другому (см. эффект ниже и onClick панели) и не должно блокировать
+  // остальную панель так же, как редактор.
+  const [emojiMenu, setEmojiMenu] = useState<{ emoji: CustomEmoji; x: number; y: number } | null>(
+    null,
+  )
   const panelRef = useRef<HTMLDivElement>(null)
   const searchRef = useRef<HTMLInputElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -98,6 +105,12 @@ export default function EmojiPicker({
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         e.stopPropagation()
+        // Сначала закрываем маленькое меню «Удалить», если оно открыто —
+        // второй Esc закроет уже саму панель.
+        if (emojiMenu) {
+          setEmojiMenu(null)
+          return
+        }
         onClose()
       }
     }
@@ -108,7 +121,7 @@ export default function EmojiPicker({
       document.removeEventListener('mousedown', onMouseDown)
       document.removeEventListener('keydown', onKeyDown, true)
     }
-  }, [onClose, editorOpen])
+  }, [onClose, editorOpen, emojiMenu])
 
   useEffect(() => {
     searchRef.current?.focus()
@@ -170,6 +183,13 @@ export default function EmojiPicker({
     </button>
   )
 
+  /** Могу ли я удалить/переименовать этот конкретный эмодзи — право
+   * «Управление выражениями» на сервере, которому он принадлежит. Ищем по
+   * emoji.server, а не по активной вкладке: в поиске (customResults) эмодзи
+   * с разных серверов лежат в одной сетке вперемешку. */
+  const canManageEmoji = (emoji: CustomEmoji): boolean =>
+    packs.find((p) => p.server.id === emoji.server)?.server.canManage ?? false
+
   const renderCustom = (emoji: CustomEmoji) => (
     <button
       key={emoji.id}
@@ -177,12 +197,45 @@ export default function EmojiPicker({
       className="emoji-cell emoji-cell-custom"
       title={`:${emoji.name}:`}
       onClick={() => onPickCustom?.(emoji)}
+      onContextMenu={(e) => {
+        if (!canManageEmoji(emoji)) return
+        e.preventDefault()
+        // Прижимаем к правому/нижнему краю панели — меню маленькое (одна
+        // строка), большого запаса можно не считать через layout-эффект, как
+        // у больших контекстных меню (ParticipantContextMenu и т.п.).
+        const x = Math.min(e.clientX, window.innerWidth - 180)
+        const y = Math.min(e.clientY, window.innerHeight - 90)
+        setEmojiMenu({ emoji, x, y })
+      }}
     >
       {/* play="hover" — в сетке анимация запускается наведением: это ровно
           тот момент, когда на эмодзи смотрят и выбирают. */}
       <CustomEmojiImage id={emoji.id} emoji={emoji} size={26} />
     </button>
   )
+
+  /** Удалить эмодзи прямо из пикера — то же самое, что и вкладка «Эмодзи» в
+   * настройках сервера (ServerSettingsModal), только без похода туда:
+   * набор общий (customEmojiStore), обновление увидят все, кто открыл
+   * настройки, и наоборот. */
+  const handleDeleteEmoji = async (emoji: CustomEmoji) => {
+    setEmojiMenu(null)
+    if (!window.confirm(`Удалить :${emoji.name}:? Он пропадёт из пикера у всех.`)) {
+      return
+    }
+    try {
+      await api.deleteEmoji(emoji.server, emoji.id)
+      // Реестр обновится и событием server_emoji по WebSocket, но не ждём
+      // его — тому, кто только что удалил, эмодзи должен исчезнуть из сетки
+      // сразу, а не через сетевой круг туда-обратно.
+      const remaining = (
+        customEmojiStore.getPacks().find((p) => p.server.id === emoji.server)?.emoji ?? []
+      ).filter((e) => e.id !== emoji.id)
+      customEmojiStore.setServerEmoji(emoji.server, remaining)
+    } catch (err) {
+      alert((err as Error).message)
+    }
+  }
 
   return (
     <div
@@ -195,8 +248,14 @@ export default function EmojiPicker({
         height: PANEL_HEIGHT,
       }}
       // Панель живёт поверх сообщения: без этого клик по ней всплывал бы до
-      // обработчиков строки сообщения (открытие профиля и т.п.).
-      onClick={(e) => e.stopPropagation()}
+      // обработчиков строки сообщения (открытие профиля и т.п.). Заодно
+      // гасит маленькое меню «Удалить» при клике куда угодно ещё внутри
+      // панели — правый клик по другому эмодзи сам переставит его на новое
+      // место, так что здесь актуально только «клик мимо, но внутри».
+      onClick={(e) => {
+        e.stopPropagation()
+        setEmojiMenu(null)
+      }}
       // Основной способ закрыться: панель не закрывается сама после выбора
       // (см. докстринг onClose выше) — вместо этого закрывается, когда
       // курсор мыши её покидает. Пока открыт редактор (поверх, вне DOM
@@ -315,6 +374,28 @@ export default function EmojiPicker({
           </>
         )}
       </div>
+
+      {emojiMenu && (
+        <div
+          className="profile-popup emoji-context-menu"
+          style={{ left: emojiMenu.x, top: emojiMenu.y }}
+          // Иначе клик по «Удалить» долетел бы до onClick панели ВЫШЕ этого
+          // элемента в дереве — не страшно (та лишь погасила бы уже погашенное
+          // меню), но и не нужно.
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="profile-popup-label">:{emojiMenu.emoji.name}:</div>
+          <div className="profile-popup-menu">
+            <button
+              type="button"
+              className="profile-popup-item profile-popup-item-danger"
+              onClick={() => void handleDeleteEmoji(emojiMenu.emoji)}
+            >
+              <Trash2 size={15} /> Удалить
+            </button>
+          </div>
+        </div>
+      )}
 
       {editorOpen && (
         <EmojiEditorModal

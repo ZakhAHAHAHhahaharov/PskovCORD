@@ -133,8 +133,14 @@ export default function AppShell() {
     setIncomingCall,
     setActiveMuteVoteChannelId,
     setMuteVote,
-    handleJoinVoice, handleVoiceStatus,
+    handleJoinVoice, handleJoinVoiceById, handleVoiceStatus,
   } = voiceCall
+  // Ref, а не прямая передача в useGatewayEvents: та не держит в
+  // зависимостях большого эффекта быстро меняющиеся значения (см. комментарий
+  // там же про ignoredUserIdsRef) — handleJoinVoiceById пересоздаётся при
+  // каждом изменении channels.
+  const handleJoinVoiceByIdRef = useRef(handleJoinVoiceById)
+  handleJoinVoiceByIdRef.current = handleJoinVoiceById
 
   const participantContextMenu = useParticipantContextMenu(
     channels, currentChannel, setChannelId, setServerId, setActiveConversationId,
@@ -217,7 +223,8 @@ export default function AppShell() {
 
   useGatewayEvents({
     gateway, channelId, serverId, activeConversationId,
-    userRef, voiceRef, conversationsRef, serversRef, messagesRef, dmMessagesRef,
+    userRef, voiceRef, handleJoinVoiceByIdRef,
+    conversationsRef, serversRef, messagesRef, dmMessagesRef,
     channelServerIdRef, shouldNotifyRef, ignoredUserIdsRef, fetchedServerDataIds,
     setMessages, setMembers, setServers, setServerRoles, setServerMembersCache,
     setUnreadChannelIds, setChannelId, setServerId, setVoice, setDmCallParticipants,

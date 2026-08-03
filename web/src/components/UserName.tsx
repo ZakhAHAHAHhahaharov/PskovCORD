@@ -19,9 +19,11 @@ export interface UserNameSource extends NameStyleSource {
  * подпись служебная, и, надень она на себя чужие градиенты/неон, читалась бы
  * как второе имя.
  *
- * Пара «никнейм + подпись» часто не влезает в строку сайдбара — тогда она
- * едет бегущей строкой (см. ScrollingText), а не обрезается многоточием:
- * обрезка съела бы ровно ту подпись, ради которой всё и затевалось.
+ * Сам никнейм (то, что я поставил) никогда не обрезается и не едет бегущей
+ * строкой — это осмысленное имя, ради которого никнейм и задавали, прятать
+ * его непорядок. Бегущей строкой едет только подпись `username*`, когда ей
+ * не хватает места в остатке строки (см. ScrollingText): она справочная, и
+ * потерять из виду её меньшая беда, чем потерять сам никнейм.
  */
 export default function UserName({
   user,
@@ -43,21 +45,23 @@ export default function UserName({
   const name =
     nickname || user.server_nickname || user.display_name || user.username
 
-  const content = (
-    <>
-      <span className={`${className} ${styled.className}`} style={styled.style}>
+  const original = <span className="user-name-original">{user.username}*</span>
+
+  return (
+    <span className="user-name">
+      <span
+        className={`user-name-primary ${className} ${styled.className}`}
+        style={styled.style}
+      >
         {name}
       </span>
-      {nickname && <span className="user-name-original">{user.username}*</span>}
-    </>
-  )
-
-  if (noScroll || !nickname) {
-    return <span className="user-name">{content}</span>
-  }
-  return (
-    <ScrollingText className="user-name" measureKey={`${name}|${user.username}`}>
-      {content}
-    </ScrollingText>
+      {nickname && (noScroll ? (
+        original
+      ) : (
+        <ScrollingText className="user-name-original-scroll" measureKey={user.username}>
+          {original}
+        </ScrollingText>
+      ))}
+    </span>
   )
 }

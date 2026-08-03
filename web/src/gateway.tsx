@@ -42,6 +42,11 @@ interface GatewayCtx {
   /** Отключить участника от ЕГО текущего голосового канала — нужно право
    * "manage_members", проверяется на сервере (см. chat.consumers). */
   voiceDisconnectUser: (userId: number) => void
+  /** Переместить участника ИЗ его текущего голосового канала В указанный —
+   * перетаскивание строки участника на другой канал (см. ChannelSidebar).
+   * Нужно право "manage_members" (проверяется на сервере); себя самого этим
+   * не двигают — см. useVoiceCall.handleMoveVoiceUser. */
+  voiceMoveUser: (userId: number, channelId: number) => void
   /** Начать голосование за мут участника, который сейчас в том же голосовом
    * канале (право не нужно — может любой участник канала). */
   voiceMuteVoteStart: (targetUserId: number) => void
@@ -249,6 +254,8 @@ export function GatewayProvider({ children }: { children: ReactNode }) {
       raw({ op: 'voice_screen_share_update', sharing }),
     voiceTopicUpdate: (topic) => raw({ op: 'voice_topic_update', topic }),
     voiceDisconnectUser: (userId) => raw({ op: 'voice_disconnect_user', user_id: userId }),
+    voiceMoveUser: (userId, channelId) =>
+      raw({ op: 'voice_move_user', user_id: userId, channel_id: channelId }),
     voiceMuteVoteStart: (targetUserId) =>
       raw({ op: 'voice_mute_vote_start', target_user_id: targetUserId }),
     voiceMuteVoteCast: (forMute) => raw({ op: 'voice_mute_vote_cast', for: forMute }),

@@ -41,6 +41,11 @@ interface UseGatewayEventsParams {
   activeConversationId: number | null
   userRef: MutableRefObject<Me | null | undefined>
   voiceRef: MutableRefObject<VoiceState | null>
+  /** Актуальная handleJoinVoiceById (см. useVoiceCall) — переподключиться к
+   * SFU нового канала по его id, когда нас переместили (voice_moved). Ref, а
+   * не прямая зависимость: по той же причине, что и у остальных ref'ов
+   * здесь — не пересоздавать все ~30 подписок на каждое изменение voice. */
+  handleJoinVoiceByIdRef: MutableRefObject<(channelId: number) => void>
   conversationsRef: MutableRefObject<Conversation[]>
   serversRef: MutableRefObject<Server[]>
   messagesRef: MutableRefObject<Message[]>
@@ -83,7 +88,8 @@ interface UseGatewayEventsParams {
 export function useGatewayEvents(params: UseGatewayEventsParams) {
   const {
     gateway, channelId, serverId, activeConversationId,
-    userRef, voiceRef, conversationsRef, serversRef, messagesRef, dmMessagesRef,
+    userRef, voiceRef, handleJoinVoiceByIdRef,
+    conversationsRef, serversRef, messagesRef, dmMessagesRef,
     channelServerIdRef, shouldNotifyRef, ignoredUserIdsRef, fetchedServerDataIds,
     setMessages, setMembers, setServers, setServerRoles, setServerMembersCache,
     setUnreadChannelIds, setChannelId, setServerId, setVoice, setDmCallParticipants,
@@ -252,6 +258,15 @@ export function useGatewayEvents(params: UseGatewayEventsParams) {
       // там), иначе на кик приходилось два звука подряд.
       playLeaveSound()
       alert('Вас отключили от голосового канала.')
+    })
+    // Нас переместили в другой голосовой канал (перетащили строку в
+    // сайдбаре — см. chat.consumers._handle_voice_move_user). Сервер сам
+    // ничего не сделал с presence — реальный WebRTC-транспорт живёт у нас,
+    // и без настоящего join'а к SFU нового канала нас никто не услышит,
+    // хотя ростер сервера уже покажет новое место. handleJoinVoiceById сам
+    // ищет канал по id и делает то же самое, что обычный клик по каналу.
+    const offVoiceMoved = gateway.on('voice_moved', (d) => {
+      handleJoinVoiceByIdRef.current(d.channel_id)
     })
     // Голос начался на другом устройстве/вкладке того же аккаунта (см.
     // chat.consumers._kick_other_devices) — один аккаунт не может быть в
@@ -679,6 +694,7 @@ export function useGatewayEvents(params: UseGatewayEventsParams) {
       offMicStatus()
       offScreenShare()
       offVoiceKicked()
+      offVoiceMoved()
       offVoiceKickedOtherDevice()
       offMuteVoteStart()
       offMuteVoteResult()

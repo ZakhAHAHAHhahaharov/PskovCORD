@@ -800,6 +800,20 @@ input {
 .voice-channel-block {
   display: flex;
   flex-direction: column;
+  border-radius: 4px;
+  /* Прозрачная по умолчанию рамка — не 0, а именно прозрачная: подсветка
+     ниже (.drop-target) меняет ТОЛЬКО цвет, не толщину, иначе весь блок и
+     соседи под ним прыгали бы на пиксель при наведении перетаскиваемого. */
+  outline: 2px solid transparent;
+  outline-offset: -2px;
+  transition: outline-color 100ms ease-out;
+}
+
+/* Курсор перетаскивают НАД этим голосовым каналом (см. ChannelSidebar,
+   dragOverChannelId) — целевая подсветка отпустить строку участника именно
+   сюда. */
+.voice-channel-block.drop-target {
+  outline-color: var(--blurple);
 }
 
 /* Персистентный статус канала (правый клик → «Установить статус канала») —
@@ -827,6 +841,16 @@ input {
 
 .voice-user:hover {
   background: var(--channel-hover);
+}
+
+/* Можно перетащить на другой канал (см. VoiceUserRow.canDrag) — курсор
+   подсказывает это до того, как человек попробует зажать ЛКМ. */
+.voice-user[draggable='true'] {
+  cursor: grab;
+}
+
+.voice-user[draggable='true']:active {
+  cursor: grabbing;
 }
 
 .voice-user span.speaking {
@@ -6917,6 +6941,25 @@ button.settings-row-clickable:hover .settings-row-label {
   font-size: calc(14px * var(--font-scale, 1));
 }
 
+/* Меню «Удалить» по правому клику на своём эмодзи (EmojiPicker) — та же
+   .profile-popup, что и у остальных контекстных меню, но выше пикера
+   (z-index: 900) и ниже редактора эмодзи (950): оба разом на экране не
+   бывают, а если бы были — редактор логичнее держать поверх. */
+.emoji-context-menu {
+  position: fixed;
+  z-index: 920;
+  width: 170px;
+  padding: 6px;
+  background: var(--modal-bg);
+  border-radius: 10px;
+  box-shadow: 0 8px 16px rgba(0, 0, 0, 0.32);
+}
+
+.emoji-context-menu .profile-popup-label {
+  padding: 4px 6px 6px;
+  font-size: calc(12px * var(--font-scale, 1));
+}
+
 /* ---- статус доставки ---- */
 .msg-status {
   display: inline-flex;
@@ -8279,11 +8322,28 @@ button.settings-row-clickable:hover .settings-row-label {
   overflow: hidden;
 }
 
+/* Сам поставленный никнейм — flex-shrink: 0, никогда не ужимается и не едет
+   бегущей строкой: это то имя, ради которого никнейм и задавали, прятать
+   его непорядок (см. докстринг UserName.tsx). Ужимается вместо него подпись
+   .user-name-original-scroll ниже — вплоть до нуля, если совсем не хватает
+   места. */
+.user-name-primary {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
 .user-name-original {
   font-size: calc(12px * var(--font-scale, 1));
   font-weight: 400;
   color: var(--text-muted);
   white-space: nowrap;
+}
+
+/* Бегущая строка подписи — единственное, что ужимается в паре
+   «никнейм + подпись» (см. .user-name-primary выше). */
+.user-name-original-scroll {
+  flex: 1 1 0;
+  min-width: 0;
 }
 
 /* ---- бегущая строка (ScrollingText) ----
