@@ -628,9 +628,12 @@ export function useServerData(userRef: RefObject<Me | null>) {
     }
   }
 
-  const handleSetChannelSpoiler = async (channel: Channel, isSpoiler: boolean) => {
+  const handleSetChannelVisibility = async (
+    channel: Channel,
+    mode: 'default' | 'spoiler' | 'age_restricted',
+  ) => {
     try {
-      applyChannelUpdate(await api.setChannelSpoiler(channel.id, isSpoiler))
+      applyChannelUpdate(await api.setChannelVisibility(channel.id, mode))
     } catch (e) {
       alert('Не удалось изменить видимость контента: ' + (e as Error).message)
     }
@@ -730,7 +733,7 @@ export function useServerData(userRef: RefObject<Me | null>) {
     handleToggleIgnoreAtHere, handleToggleSuppressRoleMentions, handleLeaveServer,
     handleCreateChannel, handleTogglePinChannel, handleCopyChannelLink, handleSetChannelStatus,
     handleSetChannelSlowmode, handleSetChannelPrivacy, handleRenameChannel,
-    handleSetChannelSpoiler, handleCloneChannel, handleDeleteChannel,
+    handleSetChannelVisibility, handleCloneChannel, handleDeleteChannel,
     handleSetChannelMute, handleSetChannelNotificationLevel, handleSetChannelInvitesPaused,
     createChannelKind, setCreateChannelKind, handleCreateChannelSubmit,
   }

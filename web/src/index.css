@@ -4880,6 +4880,12 @@ textarea.inline-editable-input {
   color: var(--red);
 }
 
+/* В ChannelSettingsModal иконка корзины стоит справа от подписи (как на
+   скриншоте Discord) — раздвигаем текст и иконку по краям кнопки. */
+.settings-sidebar-pinned .settings-sidebar-item.danger {
+  justify-content: space-between;
+}
+
 .settings-sidebar-item.danger:hover {
   background: rgba(242, 63, 67, 0.12);
   color: var(--red);
@@ -7818,6 +7824,49 @@ button.settings-row-clickable:hover .settings-row-label {
 /* Та же оболочка .settings-modal/.settings-body/.settings-sidebar/
    .settings-content, что и у SettingsModal/ServerSettingsModal — здесь
    добавляется только заголовок с именем канала над списком вкладок. */
+.channel-settings-modal {
+  position: relative;
+}
+
+/* Круглая кнопка закрытия в углу — как в «настоящих» настройках Discord.
+   Отдельная от .modal-close (та — во весь ряд кнопка "Отмена" у других
+   модалок), здесь именно маленький круг с подписью ESC под ним. */
+.channel-settings-close {
+  position: absolute;
+  top: 18px;
+  right: 18px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  color: var(--text-muted);
+  z-index: 1;
+}
+
+.channel-settings-close-circle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: 2px solid var(--text-muted);
+  border-radius: 50%;
+}
+
+.channel-settings-close:hover {
+  color: var(--text-normal);
+}
+
+.channel-settings-close:hover .channel-settings-close-circle {
+  border-color: var(--text-normal);
+}
+
+.channel-settings-close-label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+}
+
 .channel-settings-header {
   padding: 4px 10px 12px;
   margin-bottom: 4px;
@@ -7837,17 +7886,77 @@ button.settings-row-clickable:hover .settings-row-label {
 .channel-settings-kind {
   display: block;
   margin-top: 2px;
-  font-size: calc(12px * var(--font-scale, 1));
-  color: var(--text-muted);
+  font-size: calc(11px * var(--font-scale, 1));
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+/* Заголовок вкладки (Обзор/Права доступа/Приглашения) над её содержимым —
+   в самом сайдбаре повторно название уже не пишем, а тут пусть будет явно,
+   как в оригинале. */
+.channel-settings-content-title {
+  margin: 4px 0 20px;
+  font-size: calc(20px * var(--font-scale, 1));
+  font-weight: 700;
+  color: var(--heading-text);
 }
 
 .channel-settings-tab {
   max-width: 460px;
 }
 
+/* Тулбар над темой канала — Ж/К/Ч/П + эмодзи слева, превью справа
+   (.channel-settings-topic-toolbar-spacer раздвигает их flex:1). */
+.channel-settings-topic-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-bottom: 6px;
+}
+
+.channel-settings-topic-toolbar button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 4px;
+  color: var(--text-muted);
+}
+
+.channel-settings-topic-toolbar button:hover:not(:disabled) {
+  background: var(--channel-hover);
+  color: var(--text-normal);
+}
+
+.channel-settings-topic-toolbar button.active {
+  color: var(--blurple);
+}
+
+.channel-settings-topic-toolbar button:disabled {
+  opacity: 0.4;
+}
+
+.channel-settings-topic-toolbar-spacer {
+  flex: 1;
+}
+
 .channel-settings-topic {
   resize: vertical;
   min-height: 72px;
+}
+
+.channel-settings-topic-preview {
+  min-height: 72px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  cursor: default;
+}
+
+.channel-settings-topic-placeholder {
+  color: var(--text-faint);
 }
 
 .channel-settings-topic-count {

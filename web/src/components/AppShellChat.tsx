@@ -8,6 +8,7 @@ import type { useParticipantContextMenu } from '../hooks/useParticipantContextMe
 import type { useServerData } from '../hooks/useServerData'
 import type { useVoiceCall } from '../hooks/useVoiceCall'
 import { conversationDisplayName } from '../conversation'
+import { renderSimpleMarkdown } from '../markdown'
 import { useNicknamesVersion } from '../nicknames'
 import { ComposerDraft } from '../drafts'
 import { outbox, pendingAsMessage, PendingMessage } from '../outbox'
@@ -216,7 +217,7 @@ export default function AppShellChat({
                 <>
                   <span className="chat-header-topic-divider" />
                   <span className="chat-header-topic" title={currentChannel.status}>
-                    {currentChannel.status}
+                    {renderSimpleMarkdown(currentChannel.status, 'chat-header-topic')}
                   </span>
                 </>
               )}

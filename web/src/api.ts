@@ -178,8 +178,13 @@ export interface Channel {
    * 0 — выключен. Обходится правом bypass_slowmode. Только для текстовых. */
   slowmode_seconds: number
   /** «Канал со спойлерами» — вход показывает предупреждение о чувствительном
-   * контенте, прежде чем открыть канал (см. AppShellNav/ChannelSidebar). */
+   * контенте, прежде чем открыть канал (см. AppShellNav/ChannelSidebar).
+   * Взаимоисключающе с age_restricted — на фронте это один radio-выбор
+   * «Видимость контента» (см. ChannelSettingsModal onSetVisibility). */
   is_spoiler: boolean
+  /** «Канал с возрастным ограничением» — пока только флаг, без применения:
+   * само ограничение доступа по возрасту заведут отдельной задачей. */
+  age_restricted: boolean
   /** Приватный канал — виден только управляющим каналами, обладателям ролей
    * из allowed_role_ids и лично допущенным allowed_user_ids; обычное
    * view_channels его не открывает. */
@@ -1406,11 +1411,20 @@ export const api = {
       method: 'PATCH',
       body: JSON.stringify({ name }),
     }),
-  /** «Канал со спойлерами» — см. Channel.is_spoiler. Нужно manage_channels. */
-  setChannelSpoiler: (channelId: number, isSpoiler: boolean): Promise<Channel> =>
+  /** Видимость контента — один radio-выбор на фронте (см.
+   * ChannelSettingsModal), а на бэке два независимых поля; отправляем оба
+   * разом, чтобы включение одного гарантированно выключало другой. Нужно
+   * manage_channels. */
+  setChannelVisibility: (
+    channelId: number,
+    mode: 'default' | 'spoiler' | 'age_restricted',
+  ): Promise<Channel> =>
     req(`/api/channels/${channelId}`, {
       method: 'PATCH',
-      body: JSON.stringify({ is_spoiler: isSpoiler }),
+      body: JSON.stringify({
+        is_spoiler: mode === 'spoiler',
+        age_restricted: mode === 'age_restricted',
+      }),
     }),
   /** Медленный режим канала в секундах (0 — выключить). Нужно manage_channels. */
   setChannelSlowmode: (channelId: number, seconds: number): Promise<Channel> =>

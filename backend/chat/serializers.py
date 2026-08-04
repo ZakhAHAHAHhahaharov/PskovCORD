@@ -41,7 +41,7 @@ class ChannelSerializer(serializers.ModelSerializer):
         model = Channel
         fields = ["id", "server", "name", "kind", "position",
                   "call_started_at", "topic", "status", "slowmode_seconds",
-                  "is_spoiler", "is_private", "allowed_role_ids",
+                  "is_spoiler", "age_restricted", "is_private", "allowed_role_ids",
                   "allowed_user_ids", "invites_paused", "my_settings"]
         read_only_fields = ["server"]
 

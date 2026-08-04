@@ -4299,6 +4299,15 @@ class ChannelStatusAndPinTests(APITestCase):
             f"/api/channels/{self.channel.id}", {"name": "   "}, format="json")
         self.assertEqual(resp.status_code, 400)
 
+    def test_age_restricted_flag(self):
+        self.client.force_authenticate(self.owner)
+        resp = self.client.patch(
+            f"/api/channels/{self.channel.id}",
+            {"age_restricted": True, "is_spoiler": False}, format="json")
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(resp.data["age_restricted"])
+        self.assertFalse(resp.data["is_spoiler"])
+
     def test_owner_can_set_channel_status(self):
         self.client.force_authenticate(self.owner)
         resp = self.client.patch(
