@@ -360,14 +360,42 @@ export function useGatewayEvents(params: UseGatewayEventsParams) {
         ),
       )
     })
-    // Статус канала подправили правым кликом → «Установить статус канала»
-    // (см. ChannelDetail.patch на бэке) — персистентное поле Channel.status,
-    // в отличие от эфемерного CallTopic (voice_call_state/CallTopic.tsx).
+    // Канал поправили («Настроить канал»/клонирование, см. ChannelDetail.patch
+    // на бэке) — персистентные поля Channel.status/is_private/…, в отличие
+    // от эфемерного CallTopic (voice_call_state/CallTopic.tsx).
+    //
+    // d.channel.my_settings — НЕ мои настройки: это один и тот же объект,
+    // разосланный ВСЕМ участникам разом (см. backend _channel_broadcast_payload),
+    // и бэкенд намеренно кладёт туда нейтральный дефолт, а не настройки того,
+    // кто редактировал канал — иначе они бы утекли остальным. Свои личные
+    // my_settings здесь поэтому сохраняем как были: событие их не несёт (а у
+    // САМОГО редактировавшего актуальное значение уже применено ответом
+    // самой ручки — см. useServerData.applyChannelUpdate, это событие до него
+    // просто доходит следом и не должно затирать то, что он только что поставил).
+    // Канал удалили (см. ChannelDetail.delete) — убираем у ВСЕХ, включая
+    // того, кто это сделал: у него локальное состояние уже обновилось прямым
+    // ответом ручки (см. useServerData.handleDeleteChannel), фильтр по id
+    // здесь просто не находит совпадения и ничего не меняет — безопасно
+    // получить это событие дважды.
+    const offChannelDelete = gateway.on('channel_delete', (d) => {
+      setServers((prev) =>
+        prev.map((s) =>
+          s.id === d.server_id
+            ? { ...s, channels: s.channels.filter((c) => c.id !== d.channel_id) }
+            : s,
+        ),
+      )
+    })
     const offChannelUpdate = gateway.on('channel_update', (d) => {
       setServers((prev) =>
         prev.map((s) =>
           s.id === d.server_id
-            ? { ...s, channels: s.channels.map((c) => (c.id === d.channel.id ? d.channel : c)) }
+            ? {
+                ...s,
+                channels: s.channels.map((c) =>
+                  c.id === d.channel.id ? { ...d.channel, my_settings: c.my_settings } : c,
+                ),
+              }
             : s,
         ),
       )
@@ -709,6 +737,7 @@ export function useGatewayEvents(params: UseGatewayEventsParams) {
       offWakeRequested()
       offProfileUpdate()
       offChannelCreate()
+      offChannelDelete()
       offChannelUpdate()
       offMemberNickname()
       offServerUpdate()

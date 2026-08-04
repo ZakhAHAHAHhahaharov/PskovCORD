@@ -22,6 +22,7 @@ import ServerContextMenu from './ServerContextMenu'
 import ServerPrivacyModal from './ServerPrivacyModal'
 import ServerInviteModal from './ServerInviteModal'
 import ChannelContextMenu from './ChannelContextMenu'
+import ChannelSettingsModal from './ChannelSettingsModal'
 import ChannelInviteModal from './ChannelInviteModal'
 import CreateChannelModal from './CreateChannelModal'
 import ConversationContextMenu from './ConversationContextMenu'
@@ -358,17 +359,52 @@ export default function AppShellOverlays({
             canManageChannels={!!server.currentServer.my_permissions?.manage_channels}
             isPinned={server.currentServer.my_settings.pinned_channel_ids.includes(menuChannel.id)}
             onClose={() => server.setChannelContextMenuId(null)}
+            onMarkRead={() => server.handleMarkChannelRead(menuChannel)}
             onInvite={() => server.setShowChannelInviteId(menuChannel.id)}
             onTogglePin={() => server.handleTogglePinChannel(server.currentServer!, menuChannel)}
             onCopyLink={() => server.handleCopyChannelLink(server.currentServer!, menuChannel)}
-            onSetStatus={(status) => server.handleSetChannelStatus(menuChannel, status)}
-            onSetSlowmode={(seconds) =>
-              void server.handleSetChannelSlowmode(menuChannel, seconds)
+            onSetMute={(minutes) => void server.handleSetChannelMute(menuChannel, minutes)}
+            onSetNotificationLevel={(level) =>
+              void server.handleSetChannelNotificationLevel(menuChannel, level)
             }
+            onOpenSettings={() => server.setShowChannelSettingsId(menuChannel.id)}
+            onCloneChannel={() => void server.handleCloneChannel(menuChannel)}
+            onRequestDelete={() => void server.handleDeleteChannel(menuChannel)}
+          />
+        )
+      })()}
+      {server.showChannelSettingsId != null && (() => {
+        const settingsChannel = server.currentServer?.channels.find(
+          (c) => c.id === server.showChannelSettingsId,
+        )
+        if (!server.currentServer) return null
+        if (!settingsChannel) return null
+        return (
+          <ChannelSettingsModal
+            channel={settingsChannel}
             roles={server.rolesForServer(server.currentServer.id)}
-            onSetPrivacy={(isPrivate, allowedRoleIds) =>
-              void server.handleSetChannelPrivacy(menuChannel, isPrivate, allowedRoleIds)
+            members={server.membersForServer(server.currentServer.id)}
+            onClose={() => server.setShowChannelSettingsId(null)}
+            onRenamed={(name) => void server.handleRenameChannel(settingsChannel, name)}
+            onSetStatus={(status) => void server.handleSetChannelStatus(settingsChannel, status)}
+            onSetSlowmode={(seconds) =>
+              void server.handleSetChannelSlowmode(settingsChannel, seconds)
             }
+            onSetSpoiler={(isSpoiler) =>
+              void server.handleSetChannelSpoiler(settingsChannel, isSpoiler)
+            }
+            onSetPrivacy={(isPrivate, allowedRoleIds, allowedUserIds) =>
+              void server.handleSetChannelPrivacy(
+                settingsChannel, isPrivate, allowedRoleIds, allowedUserIds,
+              )
+            }
+            onSetInvitesPaused={(paused) =>
+              void server.handleSetChannelInvitesPaused(settingsChannel, paused)
+            }
+            onDelete={() => {
+              server.setShowChannelSettingsId(null)
+              void server.handleDeleteChannel(settingsChannel)
+            }}
           />
         )
       })()}

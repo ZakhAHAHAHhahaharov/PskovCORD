@@ -37,7 +37,7 @@ from accounts.models import Friendship
 
 from .middleware import JWTAuthMiddleware
 from .models import (
-    Attachment, Channel, Conversation, ConversationMessage,
+    Attachment, Channel, ChannelMemberSettings, Conversation, ConversationMessage,
     ConversationParticipant, MAX_ATTACHMENT_BYTES, MAX_EMOJI_BYTES,
     MAX_REACTIONS_PER_MESSAGE,
     FriendNickname, Membership, Message, ProfileNote, Reaction, Role, Server, ServerBan,
@@ -45,7 +45,7 @@ from .models import (
     ChannelReadState,
     MAX_STICKER_BYTES, MAX_VOICE_MS, MAX_WAVEFORM_POINTS, STICKER_SIDE, dm_room,
 )
-from .permissions import can_dm
+from .permissions import can_dm, can_see_channel
 from .serializers import RoleSerializer
 
 User = get_user_model()
@@ -4243,6 +4243,34 @@ class ServerInviteTests(APITestCase):
         self.assertEqual(by_creator[self.owner.id]["uses"], 0)
 
 
+class ChannelDeleteTests(APITestCase):
+    """DELETE /api/channels/<id> — правый клик → «Удалить канал»."""
+
+    def setUp(self):
+        self.owner = User.objects.create_user(username="cd_owner", password="pw12345")
+        self.member = User.objects.create_user(username="cd_member", password="pw12345")
+        self.server = Server.objects.create(name="s", owner=self.owner)
+        roles.create_default_role(self.server)
+        Membership.objects.create(user=self.owner, server=self.server)
+        Membership.objects.create(user=self.member, server=self.server)
+        self.channel = Channel.objects.create(
+            server=self.server, name="general", kind=Channel.TEXT)
+        Message.objects.create(channel=self.channel, author=self.owner, content="привет")
+
+    def test_owner_can_delete_channel(self):
+        self.client.force_authenticate(self.owner)
+        resp = self.client.delete(f"/api/channels/{self.channel.id}")
+        self.assertEqual(resp.status_code, 204)
+        self.assertFalse(Channel.objects.filter(id=self.channel.id).exists())
+        self.assertFalse(Message.objects.filter(channel_id=self.channel.id).exists())
+
+    def test_member_without_permission_denied(self):
+        self.client.force_authenticate(self.member)
+        resp = self.client.delete(f"/api/channels/{self.channel.id}")
+        self.assertEqual(resp.status_code, 403)
+        self.assertTrue(Channel.objects.filter(id=self.channel.id).exists())
+
+
 class ChannelStatusAndPinTests(APITestCase):
     """PATCH /api/channels/<id> (статус канала) и pinned_channel_ids личных
     настроек (см. правый клик по голосовому каналу — ChannelContextMenu)."""
@@ -4258,6 +4286,19 @@ class ChannelStatusAndPinTests(APITestCase):
         self.other_channel = Channel.objects.create(
             server=self.server, name="afk", kind=Channel.VOICE, position=1)
 
+    def test_owner_can_rename_channel(self):
+        self.client.force_authenticate(self.owner)
+        resp = self.client.patch(
+            f"/api/channels/{self.channel.id}", {"name": "новое-имя"}, format="json")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data["name"], "новое-имя")
+
+    def test_empty_name_rejected(self):
+        self.client.force_authenticate(self.owner)
+        resp = self.client.patch(
+            f"/api/channels/{self.channel.id}", {"name": "   "}, format="json")
+        self.assertEqual(resp.status_code, 400)
+
     def test_owner_can_set_channel_status(self):
         self.client.force_authenticate(self.owner)
         resp = self.client.patch(
@@ -4268,12 +4309,14 @@ class ChannelStatusAndPinTests(APITestCase):
         self.assertEqual(self.channel.status, "играем в CS")
 
     def test_status_is_trimmed_and_capped(self):
+        # 1024, а не 120 — то же поле теперь служит и темой текстового
+        # канала (см. Channel.status), а её предел выше, как у Discord.
         self.client.force_authenticate(self.owner)
         resp = self.client.patch(
-            f"/api/channels/{self.channel.id}", {"status": "  " + "x" * 200 + "  "},
+            f"/api/channels/{self.channel.id}", {"status": "  " + "x" * 1100 + "  "},
             format="json")
         self.assertEqual(resp.status_code, 200)
-        self.assertEqual(len(resp.data["status"]), 120)
+        self.assertEqual(len(resp.data["status"]), 1024)
         self.assertFalse(resp.data["status"].startswith(" "))
 
     def test_regular_member_cannot_set_status(self):
@@ -4862,6 +4905,219 @@ class ChannelReadStateTests(APITestCase):
         resp = self.client.get(self._url())
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.data["last_read_message_id"], deleted_id)
+
+
+class ChannelMemberSettingsTests(APITestCase):
+    """GET/PATCH /api/channels/<id>/settings — личные уведомления/заглушение
+    ОДНОГО канала (chat.models.ChannelMemberSettings)."""
+
+    def setUp(self):
+        self.owner = User.objects.create_user(username="cms_owner", password="pw12345")
+        self.member = User.objects.create_user(username="cms_member", password="pw12345")
+        self.server = Server.objects.create(name="s", owner=self.owner)
+        roles.create_default_role(self.server)
+        Membership.objects.create(user=self.owner, server=self.server)
+        Membership.objects.create(user=self.member, server=self.server)
+        self.channel = Channel.objects.create(
+            server=self.server, name="general", kind=Channel.TEXT)
+        self.client.force_authenticate(self.member)
+
+    def _url(self):
+        return f"/api/channels/{self.channel.id}/settings"
+
+    def test_default_without_a_row(self):
+        resp = self.client.get(self._url())
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data["notification_level"], ChannelMemberSettings.NOTIFY_DEFAULT)
+        self.assertFalse(resp.data["muted"])
+        self.assertFalse(ChannelMemberSettings.objects.filter(channel=self.channel).exists())
+
+    def test_patch_notification_level(self):
+        resp = self.client.patch(
+            self._url(), {"notification_level": "mentions"}, format="json")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data["notification_level"], "mentions")
+
+    def test_mute_minutes_then_query_reports_muted(self):
+        resp = self.client.patch(self._url(), {"mute_minutes": 30}, format="json")
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(resp.data["muted"])
+        self.assertIsNotNone(resp.data["muted_until"])
+
+    def test_mute_forever_then_unmute(self):
+        self.client.patch(self._url(), {"mute_forever": True}, format="json")
+        resp = self.client.get(self._url())
+        self.assertTrue(resp.data["muted_forever"])
+        resp = self.client.patch(self._url(), {"unmute": True}, format="json")
+        self.assertFalse(resp.data["muted_forever"])
+        self.assertFalse(resp.data["muted"])
+
+    def test_two_mute_actions_at_once_rejected(self):
+        resp = self.client.patch(
+            self._url(), {"mute_minutes": 5, "mute_forever": True}, format="json")
+        self.assertEqual(resp.status_code, 400)
+
+    def test_settings_are_per_user(self):
+        self.client.patch(self._url(), {"mute_forever": True}, format="json")
+        self.client.force_authenticate(self.owner)
+        resp = self.client.get(self._url())
+        self.assertFalse(resp.data["muted"])
+
+    def test_non_member_denied(self):
+        stranger = User.objects.create_user(username="cms_stranger", password="pw12345")
+        self.client.force_authenticate(stranger)
+        self.assertEqual(self.client.get(self._url()).status_code, 403)
+
+
+class ChannelCloneTests(APITestCase):
+    """POST /api/channels/<id>/clone — точная копия настроек, без сообщений."""
+
+    def setUp(self):
+        self.owner = User.objects.create_user(username="cc_owner", password="pw12345")
+        self.member = User.objects.create_user(username="cc_member", password="pw12345")
+        self.server = Server.objects.create(name="s", owner=self.owner)
+        roles.create_default_role(self.server)
+        Membership.objects.create(user=self.owner, server=self.server)
+        Membership.objects.create(user=self.member, server=self.server)
+        self.role = Role.objects.create(server=self.server, name="staff", position=1)
+        self.channel = Channel.objects.create(
+            server=self.server, name="general", kind=Channel.TEXT,
+            status="тема", slowmode_seconds=15, is_spoiler=True, is_private=True)
+        self.channel.allowed_roles.add(self.role)
+        self.channel.allowed_users.add(self.member)
+        Message.objects.create(channel=self.channel, author=self.owner, content="привет")
+        self.client.force_authenticate(self.owner)
+
+    def test_clone_copies_settings_not_messages(self):
+        resp = self.client.post(f"/api/channels/{self.channel.id}/clone")
+        self.assertEqual(resp.status_code, 201, resp.data)
+        clone_id = resp.data["id"]
+        self.assertNotEqual(clone_id, self.channel.id)
+        self.assertIn("копия", resp.data["name"])
+        self.assertEqual(resp.data["status"], "тема")
+        self.assertEqual(resp.data["slowmode_seconds"], 15)
+        self.assertTrue(resp.data["is_spoiler"])
+        self.assertTrue(resp.data["is_private"])
+        self.assertEqual(resp.data["allowed_role_ids"], [self.role.id])
+        self.assertEqual(resp.data["allowed_user_ids"], [self.member.id])
+        clone = Channel.objects.get(id=clone_id)
+        self.assertEqual(clone.messages.count(), 0)
+
+    def test_clone_requires_manage_channels(self):
+        self.client.force_authenticate(self.member)
+        resp = self.client.post(f"/api/channels/{self.channel.id}/clone")
+        self.assertEqual(resp.status_code, 403)
+
+
+class ChannelPrivateAllowedUsersTests(APITestCase):
+    """Приватный канал: доступ по allowed_roles ИЛИ allowed_users одновременно
+    (chat.permissions.can_see_channel), редактирование — ChannelDetail.patch
+    allowed_user_ids."""
+
+    def setUp(self):
+        self.owner = User.objects.create_user(username="pu_owner", password="pw12345")
+        self.grantee = User.objects.create_user(username="pu_grantee", password="pw12345")
+        self.stranger = User.objects.create_user(username="pu_stranger", password="pw12345")
+        self.server = Server.objects.create(name="s", owner=self.owner)
+        roles.create_default_role(self.server)
+        Membership.objects.create(user=self.owner, server=self.server)
+        Membership.objects.create(user=self.grantee, server=self.server)
+        Membership.objects.create(user=self.stranger, server=self.server)
+        self.channel = Channel.objects.create(
+            server=self.server, name="private", kind=Channel.TEXT, is_private=True)
+
+    def test_no_access_by_default(self):
+        self.assertFalse(can_see_channel(self.grantee, self.channel))
+
+    def test_allowed_user_sees_channel(self):
+        self.channel.allowed_users.add(self.grantee)
+        self.assertTrue(can_see_channel(self.grantee, self.channel))
+        self.assertFalse(can_see_channel(self.stranger, self.channel))
+
+    def test_patch_sets_allowed_user_ids(self):
+        self.client.force_authenticate(self.owner)
+        resp = self.client.patch(
+            f"/api/channels/{self.channel.id}",
+            {"allowed_user_ids": [self.grantee.id]}, format="json")
+        self.assertEqual(resp.status_code, 200, resp.data)
+        self.assertEqual(resp.data["allowed_user_ids"], [self.grantee.id])
+        self.assertTrue(can_see_channel(self.grantee, self.channel))
+
+    def test_foreign_user_id_ignored(self):
+        outsider = User.objects.create_user(username="pu_outsider", password="pw12345")
+        self.client.force_authenticate(self.owner)
+        resp = self.client.patch(
+            f"/api/channels/{self.channel.id}",
+            {"allowed_user_ids": [outsider.id]}, format="json")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data["allowed_user_ids"], [])
+
+
+class ChannelInviteAndPauseTests(APITestCase):
+    """Личное приглашение в КОНКРЕТНЫЙ канал теперь работает для текстовых
+    каналов тоже (раньше — только voice), плюс invites_paused и вкладка
+    «Приглашения» (chat.views.ChannelInvitesList)."""
+
+    def setUp(self):
+        self.owner = User.objects.create_user(username="ci_owner", password="pw12345")
+        self.friend = User.objects.create_user(username="ci_friend", password="pw12345")
+        self.server = Server.objects.create(name="s", owner=self.owner)
+        roles.create_default_role(self.server)
+        Membership.objects.create(user=self.owner, server=self.server)
+        self.channel = Channel.objects.create(
+            server=self.server, name="general", kind=Channel.TEXT)
+        self.client.force_authenticate(self.owner)
+
+    def test_direct_invite_to_text_channel(self):
+        resp = self.client.post(
+            f"/api/servers/{self.server.id}/invites",
+            {"user_id": self.friend.id, "channel_id": self.channel.id}, format="json")
+        self.assertEqual(resp.status_code, 201, resp.data)
+        self.assertEqual(resp.data["channel"]["id"], self.channel.id)
+
+    def test_paused_channel_rejects_new_direct_invite(self):
+        self.channel.invites_paused = True
+        self.channel.save(update_fields=["invites_paused"])
+        resp = self.client.post(
+            f"/api/servers/{self.server.id}/invites",
+            {"user_id": self.friend.id, "channel_id": self.channel.id}, format="json")
+        self.assertEqual(resp.status_code, 400)
+
+    def test_paused_channel_still_serves_existing_link(self):
+        """Пауза останавливает НОВЫЕ личные приглашения, но не уже
+        существующую ссылку — см. докстринг ServerInviteLink.get."""
+        first = self.client.get(
+            f"/api/servers/{self.server.id}/invite-link?channel_id={self.channel.id}")
+        self.assertEqual(first.status_code, 200)
+        self.channel.invites_paused = True
+        self.channel.save(update_fields=["invites_paused"])
+        second = self.client.get(
+            f"/api/servers/{self.server.id}/invite-link?channel_id={self.channel.id}")
+        self.assertEqual(second.status_code, 200)
+        self.assertEqual(first.data["code"], second.data["code"])
+
+    def test_invites_list_and_pause_toggle(self):
+        self.client.post(
+            f"/api/servers/{self.server.id}/invites",
+            {"user_id": self.friend.id, "channel_id": self.channel.id}, format="json")
+        resp = self.client.get(f"/api/channels/{self.channel.id}/invites")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(len(resp.data), 1)
+        self.assertEqual(resp.data[0]["invited_user"]["id"], self.friend.id)
+
+        resp = self.client.patch(
+            f"/api/channels/{self.channel.id}/invites",
+            {"invites_paused": True}, format="json")
+        self.assertEqual(resp.status_code, 200)
+        self.channel.refresh_from_db()
+        self.assertTrue(self.channel.invites_paused)
+
+    def test_invites_list_requires_manage_channels(self):
+        member = User.objects.create_user(username="ci_member", password="pw12345")
+        Membership.objects.create(user=member, server=self.server)
+        self.client.force_authenticate(member)
+        self.assertEqual(
+            self.client.get(f"/api/channels/{self.channel.id}/invites").status_code, 403)
 
 
 class InviteAndBanPermissionTests(APITestCase):

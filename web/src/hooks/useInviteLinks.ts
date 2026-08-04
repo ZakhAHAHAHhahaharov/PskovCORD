@@ -2,15 +2,22 @@ import { useCallback, useEffect, useState } from 'react'
 import { api, Channel, InvitePreview, Server } from '../api'
 
 /** Ссылки-приглашения: и на сервер целиком (?invite=, редимпшен сразу), и в
- * конкретный голосовой канал (?voiceInvite=, сначала предпросмотр, вступление
- * по явному клику), плюс "Приглашение" карточкой в переписке
- * (server_invite/dm_message). `onJoinVoice` — это handleJoinVoice из
- * useVoiceCall: приглашение в голосовой канал сразу подключает к нему. */
+ * конкретный канал — текстовый или голосовой (?voiceInvite=, сначала
+ * предпросмотр, вступление по явному клику; параметр в URL остался старым
+ * именем не просто так — он появился, когда приглашать можно было только в
+ * голосовой, а переименовывать query-параметр значило бы ломать уже
+ * разосланные ссылки), плюс "Приглашение" карточкой в переписке
+ * (server_invite/dm_message).
+ *
+ * `onEnterChannel` — что значит «попасть» в приглашённый канал: для
+ * голосового это подключение (handleJoinVoice из useVoiceCall), для
+ * текстового — просто выбор его в сайдбаре (см. AppShell, там оба случая
+ * сведены в одну функцию по channel.kind). */
 export function useInviteLinks(
   servers: Server[],
   setServers: React.Dispatch<React.SetStateAction<Server[]>>,
   selectServer: (s: Server) => void,
-  onJoinVoice: (ch: Channel) => Promise<void>,
+  onEnterChannel: (ch: Channel) => void | Promise<void>,
 ) {
   const [voiceInvite, setVoiceInvite] = useState<{
     code: string
@@ -71,11 +78,11 @@ export function useInviteLinks(
       const server = await api.acceptServerInvite(inviteId)
       setServers((prev) => (prev.some((s) => s.id === server.id) ? prev : [...prev, server]))
       selectServer(server)
-      // Приглашение было в конкретный голосовой канал (см. ChannelInviteModal)
-      // — сразу заходим в него, а не просто открываем сервер.
+      // Приглашение было в конкретный канал (см. ChannelInviteModal) — сразу
+      // заходим в него, а не просто открываем сервер.
       if (server.invited_channel_id != null) {
         const ch = server.channels.find((c) => c.id === server.invited_channel_id)
-        if (ch) onJoinVoice(ch)
+        if (ch) onEnterChannel(ch)
       }
     } catch (e) {
       alert((e as Error).message)
@@ -106,7 +113,7 @@ export function useInviteLinks(
       selectServer(server)
       if (server.invited_channel_id != null) {
         const ch = server.channels.find((c) => c.id === server.invited_channel_id)
-        if (ch) onJoinVoice(ch)
+        if (ch) onEnterChannel(ch)
       }
       setVoiceInvite(null)
     } catch (e) {

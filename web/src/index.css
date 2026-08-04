@@ -3302,6 +3302,29 @@ textarea.inline-editable-input {
 .chat-header-name {
   font-weight: 700;
   color: var(--heading-text);
+  flex-shrink: 0;
+}
+
+/* Тема текстового канала (Channel.status, вкладка «Обзор» в
+   ChannelSettingsModal) — тёмным текстом справа от названия, как и
+   попросили: не жирная, не heading-цвет, и в отличие от имени канала
+   ГОТОВА сжиматься и обрезаться — тема может быть заметно длиннее самого
+   названия, а тумблеры справа (закреплённые/участники) подвинуть нельзя. */
+.chat-header-topic-divider {
+  width: 1px;
+  height: 20px;
+  flex-shrink: 0;
+  background: var(--channel-hover);
+}
+
+.chat-header-topic {
+  min-width: 0;
+  flex-shrink: 1;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--text-muted);
+  font-size: calc(14px * var(--font-scale, 1));
 }
 
 /* Тумблер видимости списка участников — справа в шапке текстового канала
@@ -4087,6 +4110,16 @@ textarea.inline-editable-input {
   gap: 4px;
   font-size: calc(12px * var(--font-scale, 1));
   color: var(--text-muted);
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+/* Кастомный эмодзи в предпросмотре последнего сообщения диалога (см.
+   HomeSidebar renderLastMessagePreview) — по высоте строки текста рядом. */
+.preview-emoji {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
 }
 
 /* ---- avatar ---- */
@@ -7717,32 +7750,57 @@ button.settings-row-clickable:hover .settings-row-label {
   margin: 4px 4px;
 }
 
-.channel-menu-status {
-  margin: 4px 10px 6px;
+.channel-context-menu .profile-popup-item.active {
+  background: var(--channel-hover);
 }
 
-.channel-menu-status .invite-link-row {
-  margin-top: 6px;
+/* Чекбокс «Скрыть имена» как обычный пункт меню, а не отдельная строка —
+   тот же .profile-popup-item, только со встроенным input[type=checkbox]
+   вместо иконки-состояния слева от подписи. */
+.channel-ctx-checkbox-item {
+  cursor: pointer;
 }
 
-/* Пресеты медленного режима — сетка кнопок вместо выпадающего списка:
-   ступеней девять, и попасть в нужную одним кликом быстрее, чем открывать
-   select ради того же выбора. */
-.channel-menu-slowmode {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 4px;
-  margin-top: 6px;
+.channel-ctx-checkbox-item input {
+  margin: 0;
 }
 
-.channel-menu-slowmode-item {
-  width: 100%;
+/* Флайаут-подменю (заглушение/параметры уведомлений) — та же плавающая
+   панель-сосед, что и .message-ctx-flyout у контекстного меню сообщения. */
+.channel-ctx-flyout {
+  position: fixed;
+  z-index: 91;
+  width: 260px;
+  padding: 4px;
+  background: var(--modal-bg);
+  border-radius: 10px;
+  box-shadow: 0 8px 16px rgba(0, 0, 0, 0.32);
+}
+
+.channel-ctx-flyout .profile-popup-menu {
+  padding: 0;
+  gap: 1px;
+}
+
+.channel-ctx-option {
+  padding: 7px 10px;
+}
+
+.channel-ctx-radio {
+  display: flex;
+  align-items: center;
   justify-content: center;
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+  border: 1.5px solid var(--text-muted);
+  border-radius: 50%;
+  color: #fff;
 }
 
-.channel-menu-slowmode-item.active {
+.channel-ctx-radio.checked {
   background: var(--brand);
-  color: #fff;
+  border-color: var(--brand);
 }
 
 /* Значки медленного режима/приватности в строке текстового канала. Первый
@@ -7756,19 +7814,132 @@ button.settings-row-clickable:hover .settings-row-label {
   margin-left: auto;
 }
 
-.channel-menu-hint {
-  margin-top: 6px;
+/* ---- «Настроить канал» (ChannelSettingsModal) ---- */
+/* Та же оболочка .settings-modal/.settings-body/.settings-sidebar/
+   .settings-content, что и у SettingsModal/ServerSettingsModal — здесь
+   добавляется только заголовок с именем канала над списком вкладок. */
+.channel-settings-header {
+  padding: 4px 10px 12px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--channel-hover);
+}
+
+.channel-settings-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: calc(15px * var(--font-scale, 1));
+  font-weight: 700;
+  color: var(--heading-text);
+  word-break: break-word;
+}
+
+.channel-settings-kind {
+  display: block;
+  margin-top: 2px;
   font-size: calc(12px * var(--font-scale, 1));
   color: var(--text-muted);
 }
 
-.channel-menu-roles {
+.channel-settings-tab {
+  max-width: 460px;
+}
+
+.channel-settings-topic {
+  resize: vertical;
+  min-height: 72px;
+}
+
+.channel-settings-topic-count {
+  display: block;
+  margin-top: 2px;
+  text-align: right;
+  font-size: calc(11px * var(--font-scale, 1));
+  color: var(--text-faint);
+}
+
+/* Радио «Видимость контента» — крупнее обычного чекбокса и с подписью в две
+   строки (заголовок + пояснение), поэтому не переиспользует
+   .server-flyout-checkbox — тот рассчитан на однострочные пункты. */
+.channel-settings-radio {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 8px 0;
+  cursor: pointer;
+}
+
+.channel-settings-radio input {
+  margin-top: 3px;
+}
+
+.channel-settings-radio-text {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  margin-top: 4px;
-  max-height: 160px;
+}
+
+.channel-settings-radio-text b {
+  font-size: calc(13px * var(--font-scale, 1));
+  color: var(--text-normal);
+}
+
+.channel-settings-radio-text small {
+  font-size: calc(12px * var(--font-scale, 1));
+  color: var(--text-muted);
+}
+
+.channel-settings-checklist {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 180px;
   overflow-y: auto;
+}
+
+/* «Кто сейчас видит канал» / «Кому отправлены приглашения» — общая строка
+   для обеих вкладок (Права доступа, Приглашения). */
+.channel-settings-viewer-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.channel-settings-viewer-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 6px;
+  border-radius: 6px;
+}
+
+.channel-settings-viewer-row:hover {
+  background: var(--channel-hover);
+}
+
+.channel-settings-viewer-via {
+  margin-left: auto;
+  font-size: calc(11px * var(--font-scale, 1));
+  color: var(--text-faint);
+}
+
+.channel-settings-invite-status {
+  margin-left: auto;
+  font-size: calc(11px * var(--font-scale, 1));
+  padding: 2px 7px;
+  border-radius: 8px;
+  background: var(--channel-hover);
+  color: var(--text-muted);
+}
+
+.channel-settings-invite-status.accepted {
+  color: var(--green);
+}
+
+.channel-settings-invite-status.declined {
+  color: var(--red);
 }
 
 /* ---- модалка создания канала ---- */

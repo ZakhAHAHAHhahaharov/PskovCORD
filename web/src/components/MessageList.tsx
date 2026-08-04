@@ -644,6 +644,14 @@ export default function MessageList({
               // меню (ответить, переслать, реакция) не над чем: у него ещё
               // нет настоящего id, либо оно вот-вот исчезнет само.
               if (pending || pendingDelete) return
+              // Аватарка и ник — не часть «сообщения» с точки зрения правого
+              // клика: там свой смысл (профиль автора), и наше меню не должно
+              // перехватывать клик, который метил именно туда. Отдаём его как
+              // есть — сработает обычное контекстное меню браузера (скопировать
+              // картинку и т.п.), а не гасим клик вовсе.
+              if ((e.target as HTMLElement).closest('.avatar-trigger, .message-author')) {
+                return
+              }
               e.preventDefault()
               setContextMenu({ message: m, x: e.clientX, y: e.clientY })
             }}

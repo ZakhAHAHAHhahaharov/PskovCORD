@@ -1,6 +1,7 @@
 import { RefObject, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  api, Channel, Me, Member, NotificationLevel, Role, Server, ServerMemberSettings,
+  api, Channel, ChannelMemberSettings, ChannelNotifyLevel, Me, Member, NotificationLevel,
+  Role, Server, ServerMemberSettings,
 } from '../api'
 import { customEmojiStore, loadMyEmoji } from '../customEmoji'
 import { isMentioned } from '../mentions'
@@ -93,6 +94,10 @@ export function useServerData(userRef: RefObject<Me | null>) {
     y: number
   } | null>(null)
   const [showChannelInviteId, setShowChannelInviteId] = useState<number | null>(null)
+  // «Настроить канал» из контекстного меню — та же логика хранения id, что и
+  // у showChannelInviteId выше (резолвим актуальный канал из currentServer
+  // при рендере, а не таскаем снимок).
+  const [showChannelSettingsId, setShowChannelSettingsId] = useState<number | null>(null)
 
   const currentServer = servers.find((s) => s.id === serverId) || null
   const channels = currentServer?.channels || []
@@ -306,7 +311,22 @@ export function useServerData(userRef: RefObject<Me | null>) {
   }, [])
 
   // --- уведомления/мьют/приватность/приглашения/выход сервера -------------
+  // «Прочитанные» предупреждения канала со спойлерами (Channel.is_spoiler,
+  // вкладка «Обзор» → «Видимость контента») — только в рамках этой сессии
+  // вкладки: спойлер предупреждает один раз за заход, а не при каждом клике
+  // по уже открытому сегодня каналу. В ref, не в state — сама по себе
+  // отметка не должна вызывать перерисовку.
+  const acknowledgedSpoilerIds = useRef<Set<number>>(new Set())
   const handleSelectChannel = useCallback((c: Channel) => {
+    if (c.is_spoiler && !acknowledgedSpoilerIds.current.has(c.id)) {
+      if (!window.confirm(
+        `«${c.name}» — канал со спойлерами: обсуждения и темы здесь могут ` +
+          'быть чувствительными. Продолжить и открыть канал?',
+      )) {
+        return
+      }
+      acknowledgedSpoilerIds.current.add(c.id)
+    }
     setChannelId(c.id)
     setUnreadChannelIds((prev) => {
       if (!prev.has(c.id)) return prev
@@ -326,6 +346,25 @@ export function useServerData(userRef: RefObject<Me | null>) {
       }
       return changed ? next : prev
     })
+  }, [])
+
+  /** «Пометить как прочитанное» из контекстного меню канала — в отличие от
+   * handleSelectChannel (тот тоже гасит бейдж, но только как побочный эффект
+   * открытия), это явное действие ещё и продвигает персистентный курсор
+   * прочтения на бэкенде (см. api.markChannelRead, PR с ChannelReadState) —
+   * иначе следующий заход в канал снова вывел бы на первое «непрочитанное»,
+   * хотя человек только что явно сказал, что прочитал всё. Не ждём ответа:
+   * бейдж гасим сразу, а неудачный запрос страшен не больше, чем если бы
+   * его не было — тогда просто следующий заход не будет учитывать эту
+   * отметку. */
+  const handleMarkChannelRead = useCallback((c: Channel) => {
+    setUnreadChannelIds((prev) => {
+      if (!prev.has(c.id)) return prev
+      const next = new Set(prev)
+      next.delete(c.id)
+      return next
+    })
+    void api.markChannelRead(c.id).catch(() => {})
   }, [])
 
   // Оптимистичный патч my_settings конкретного сервера — используется и для
@@ -457,6 +496,59 @@ export function useServerData(userRef: RefObject<Me | null>) {
     )
   }
 
+  // Оптимистичный патч my_settings ОДНОГО канала — тот же приём, что и
+  // patchServerSettings для сервера целиком, только адресован конкретному
+  // каналу внутри своего сервера.
+  const patchChannelSettings = useCallback(
+    (channelIdValue: number, patch: Partial<ChannelMemberSettings>) => {
+      setServers((prev) =>
+        prev.map((s) => ({
+          ...s,
+          channels: s.channels.map((c) =>
+            c.id === channelIdValue ? { ...c, my_settings: { ...c.my_settings, ...patch } } : c,
+          ),
+        })),
+      )
+    },
+    [],
+  )
+
+  const handleSetChannelMute = useCallback(
+    async (channel: Channel, minutes: number | 'forever' | null) => {
+      patchChannelSettings(channel.id, {
+        muted: minutes !== null,
+        muted_forever: minutes === 'forever',
+        muted_until: minutes === 'forever' || minutes === null
+          ? null
+          : channel.my_settings.muted_until,
+      })
+      try {
+        const updated =
+          minutes === null
+            ? await api.updateChannelMemberSettings(channel.id, { unmute: true })
+            : minutes === 'forever'
+              ? await api.updateChannelMemberSettings(channel.id, { mute_forever: true })
+              : await api.updateChannelMemberSettings(channel.id, { mute_minutes: minutes })
+        patchChannelSettings(channel.id, updated)
+      } catch (e) {
+        alert('Не удалось изменить заглушение канала: ' + (e as Error).message)
+      }
+    },
+    [patchChannelSettings],
+  )
+
+  const handleSetChannelNotificationLevel = useCallback(
+    async (channel: Channel, level: ChannelNotifyLevel) => {
+      patchChannelSettings(channel.id, { notification_level: level })
+      try {
+        await api.updateChannelMemberSettings(channel.id, { notification_level: level })
+      } catch (e) {
+        alert('Не удалось изменить параметры уведомлений канала: ' + (e as Error).message)
+      }
+    },
+    [patchChannelSettings],
+  )
+
   // Закрепить/открепить голосовой канал — личная настройка (Membership.
   // pinned_channel_ids), см. ChannelContextMenu «Закрепить канал вверху».
   const handleTogglePinChannel = async (server: Server, channel: Channel) => {
@@ -517,13 +609,95 @@ export function useServerData(userRef: RefObject<Me | null>) {
     channel: Channel,
     isPrivate: boolean,
     allowedRoleIds: number[],
+    allowedUserIds: number[],
   ) => {
     try {
       applyChannelUpdate(
-        await api.setChannelPrivacy(channel.id, isPrivate, allowedRoleIds),
+        await api.setChannelPrivacy(channel.id, isPrivate, allowedRoleIds, allowedUserIds),
       )
     } catch (e) {
       alert('Не удалось изменить приватность канала: ' + (e as Error).message)
+    }
+  }
+
+  const handleRenameChannel = async (channel: Channel, name: string) => {
+    try {
+      applyChannelUpdate(await api.renameChannel(channel.id, name))
+    } catch (e) {
+      alert('Не удалось переименовать канал: ' + (e as Error).message)
+    }
+  }
+
+  const handleSetChannelSpoiler = async (channel: Channel, isSpoiler: boolean) => {
+    try {
+      applyChannelUpdate(await api.setChannelSpoiler(channel.id, isSpoiler))
+    } catch (e) {
+      alert('Не удалось изменить видимость контента: ' + (e as Error).message)
+    }
+  }
+
+  /** «Приостановить приглашения» — вкладка «Приглашения» в ChannelSettingsModal.
+   * Оптимистично, как и остальные переключатели канала (см. patchChannelSettings
+   * рядом, только это не my_settings, а поле самого канала). */
+  const handleSetChannelInvitesPaused = async (channel: Channel, paused: boolean) => {
+    setServers((prev) =>
+      prev.map((s) => ({
+        ...s,
+        channels: s.channels.map((c) =>
+          c.id === channel.id ? { ...c, invites_paused: paused } : c,
+        ),
+      })),
+    )
+    try {
+      await api.setChannelInvitesPaused(channel.id, paused)
+    } catch (e) {
+      alert('Не удалось изменить паузу приглашений: ' + (e as Error).message)
+    }
+  }
+
+  /** Клонировать канал — сам клон приходит и обычным ответом ручки, и следом
+   * событием channel_create по WS (см. backend ChannelClone) — на месте
+   * применяем только ответ, событие лишь подтвердит то же самое (и не
+   * продублирует: channel_create у useGatewayEvents уже идемпотентен по id). */
+  const handleCloneChannel = async (channel: Channel) => {
+    try {
+      const clone = await api.cloneChannel(channel.id)
+      setServers((prev) =>
+        prev.map((s) =>
+          s.id === clone.server ? { ...s, channels: [...s.channels, clone] } : s,
+        ),
+      )
+      return clone
+    } catch (e) {
+      alert('Не удалось клонировать канал: ' + (e as Error).message)
+      return null
+    }
+  }
+
+  /** Удалить канал — с тем же предупреждением о необратимости и тем же
+   * приёмом мгновенного локального применения, что и у handleLeaveServer
+   * выше: не ждём WS-эха себе самому, чтобы канал не «висел» в сайдбаре ещё
+   * секунду после подтверждения. Остальным участникам его уберёт событие
+   * channel_delete (см. useGatewayEvents). */
+  const handleDeleteChannel = async (channel: Channel) => {
+    if (!window.confirm(
+      `Удалить канал «${channel.name}»? Это действие необратимо — вместе с ` +
+        'каналом пропадут все его сообщения.',
+    )) {
+      return
+    }
+    try {
+      await api.deleteChannel(channel.id)
+      setServers((prev) =>
+        prev.map((s) =>
+          s.id === channel.server
+            ? { ...s, channels: s.channels.filter((c) => c.id !== channel.id) }
+            : s,
+        ),
+      )
+      if (channelId === channel.id) setChannelId(null)
+    } catch (e) {
+      alert('Не удалось удалить канал: ' + (e as Error).message)
     }
   }
 
@@ -543,6 +717,7 @@ export function useServerData(userRef: RefObject<Me | null>) {
     showServerPrivacyId, setShowServerPrivacyId,
     channelContextMenuId, setChannelContextMenuId,
     showChannelInviteId, setShowChannelInviteId,
+    showChannelSettingsId, setShowChannelSettingsId,
     currentServer, channels, currentChannel,
     mutedServerIds, unreadServerIds,
     channelServerId, channelServerIdRef,
@@ -550,11 +725,13 @@ export function useServerData(userRef: RefObject<Me | null>) {
     isServerMutedNow, shouldNotifyForChannel, shouldNotifyRef,
     selectServer, reloadMembers, reloadRoles,
     handleCreateServer, handleJoined, handleServerUpdated,
-    handleSelectChannel, handleMarkServerRead, patchServerSettings,
+    handleSelectChannel, handleMarkServerRead, handleMarkChannelRead, patchServerSettings,
     handleMuteServer, handleUnmuteServer, handleSetNotificationLevel,
     handleToggleIgnoreAtHere, handleToggleSuppressRoleMentions, handleLeaveServer,
     handleCreateChannel, handleTogglePinChannel, handleCopyChannelLink, handleSetChannelStatus,
-    handleSetChannelSlowmode, handleSetChannelPrivacy,
+    handleSetChannelSlowmode, handleSetChannelPrivacy, handleRenameChannel,
+    handleSetChannelSpoiler, handleCloneChannel, handleDeleteChannel,
+    handleSetChannelMute, handleSetChannelNotificationLevel, handleSetChannelInvitesPaused,
     createChannelKind, setCreateChannelKind, handleCreateChannelSubmit,
   }
 }
