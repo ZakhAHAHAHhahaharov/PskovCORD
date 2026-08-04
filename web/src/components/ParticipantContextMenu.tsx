@@ -1,7 +1,8 @@
 import { useLayoutEffect, useRef } from 'react'
 import {
-  AlarmClock, AtSign, BellRing, Eye, EyeOff, Gavel, Tag, UserX, Volume2,
+  AlarmClock, AtSign, BellRing, Eye, EyeOff, Gavel, Tag, UserX, Volume2, VolumeX,
 } from 'lucide-react'
+import { useLocalMute } from '../localMute'
 import { useNickname } from '../nicknames'
 import { useUserVolume } from '../userVolume'
 import { useVoice } from '../voice'
@@ -79,11 +80,13 @@ export default function ParticipantContextMenu({
 }) {
   const ref = useRef<HTMLDivElement>(null)
   const { getUserVolume, setUserVolume } = useUserVolume()
+  const { isLocallyMuted, setLocallyMuted } = useLocalMute()
   const { blockedScreenViewerIds, blockScreenViewer } = useVoice()
   const { member } = target
   const nickname = useNickname(member.id)
   const isServerChannel = target.room.kind === 'channel'
   const volume = getUserVolume(member.id)
+  const locallyMuted = isLocallyMuted(member.id)
   const isBlocked = blockedScreenViewerIds.has(member.id)
   const disabledTitle = !voiceActionsEnabled
     ? 'Нужно быть полностью подключённым к этому голосовому каналу'
@@ -146,6 +149,15 @@ export default function ParticipantContextMenu({
       <div className="profile-popup-divider" />
 
       <div className="profile-popup-menu">
+        <button
+          type="button"
+          className="profile-popup-item"
+          onClick={() => setLocallyMuted(member.id, !locallyMuted)}
+        >
+          {locallyMuted ? <VolumeX size={15} /> : <Volume2 size={15} />}
+          {locallyMuted ? 'Включить звук участника' : 'Отключить звук участника'}
+        </button>
+
         <button type="button" className="profile-popup-item" onClick={() => onMention(member)}>
           <AtSign size={15} /> Упомянуть
         </button>
