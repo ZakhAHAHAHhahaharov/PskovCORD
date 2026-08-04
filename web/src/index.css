@@ -2147,7 +2147,9 @@ textarea.inline-editable-input {
 /* ---- mini-profile popup (клик по аватарке/нику в чате, ростере, войсе) ---- */
 .mini-profile-popup {
   position: fixed;
-  z-index: 90;
+  /* Выше .modal-overlay (100) — попап теперь открывается и из «Показать
+     реакции» (модалка), должен лечь поверх неё, а не под. */
+  z-index: 110;
   background: var(--modal-bg);
   border-radius: 10px;
   box-shadow: 0 8px 16px rgba(0, 0, 0, 0.32);
@@ -6161,7 +6163,8 @@ button.settings-row-clickable:hover .settings-row-label {
 /* ---- контекстное меню участника голосового канала (ParticipantContextMenu) ---- */
 .participant-context-menu {
   position: fixed;
-  z-index: 90;
+  /* Тот же приём, что у .mini-profile-popup — выше .modal-overlay (100). */
+  z-index: 110;
   width: 260px;
   padding: 8px;
   background: var(--modal-bg);
@@ -7735,7 +7738,10 @@ button.settings-row-clickable:hover .settings-row-label {
 /* ---- контекстное меню голосового канала (правый клик в ChannelSidebar) ---- */
 .channel-context-menu {
   position: fixed;
-  z-index: 90;
+  /* Тот же приём, что у .mini-profile-popup — выше .modal-overlay (100):
+     этим же классом рендерится и FriendContextMenu, который теперь
+     открывается из «Показать реакции» (модалка). */
+  z-index: 110;
   width: 280px;
   overflow: visible;
   background: var(--modal-bg);
@@ -9216,9 +9222,20 @@ button.settings-row-clickable:hover .settings-row-label {
   display: flex;
   align-items: center;
   gap: 8px;
+  width: 100%;
   padding: 6px 4px;
+  border-radius: 4px;
+  text-align: left;
   font-size: calc(14px * var(--font-scale, 1));
   color: var(--text-normal);
+}
+
+.reactions-modal-user:not(:disabled):hover {
+  background: var(--channel-hover);
+}
+
+.reactions-modal-user:disabled {
+  cursor: default;
 }
 
 /* ---- «Переслать» (ForwardMessageModal.tsx) ---- */

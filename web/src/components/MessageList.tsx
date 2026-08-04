@@ -945,6 +945,7 @@ export default function MessageList({
           currentUserId={currentUserId}
           resolveUsername={resolveUsername}
           mentionCandidates={mentionCandidates}
+          onOpenProfile={onOpenProfile}
           onUserContextMenu={onUserContextMenu}
           onClose={() => setReactionsModalId(null)}
         />

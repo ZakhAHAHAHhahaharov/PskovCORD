@@ -20,6 +20,7 @@ export default function MessageReactionsModal({
   currentUserId,
   resolveUsername,
   mentionCandidates,
+  onOpenProfile,
   onUserContextMenu,
   onClose,
 }: {
@@ -29,6 +30,9 @@ export default function MessageReactionsModal({
   /** Ростер сервера или участники диалога/группы — для аватарки и цвета ника
    * в списке «кто поставил». Тот же набор, что и у MessageList. */
   mentionCandidates: MentionCandidate[]
+  /** Левый клик по строке — карточка профиля (см. MiniProfilePopup), тот же
+   * коллбэк, что у клика по автору сообщения в ленте. */
+  onOpenProfile: (user: ProfilePopupUser, e: ReactMouseEvent) => void
   /** Правый клик по строке — то же меню, что у строки друга (см.
    * FriendContextMenu), человек тут может быть кем угодно, не только другом.
    * У строки «Вы» меню не открывается (см. isSelf ниже). */
@@ -82,9 +86,12 @@ export default function MessageReactionsModal({
                   : resolveUsername(id) ?? 'Участник'
               const nameStyle = candidate && !isSelf ? styledNameProps(candidate) : null
               return (
-                <div
+                <button
                   key={id}
+                  type="button"
                   className="reactions-modal-user"
+                  disabled={!candidate}
+                  onClick={candidate ? (e) => onOpenProfile(candidate, e) : undefined}
                   onContextMenu={
                     candidate && !isSelf
                       ? (e) => onUserContextMenu(candidate, e)
@@ -101,7 +108,7 @@ export default function MessageReactionsModal({
                   <span className={nameStyle?.className} style={nameStyle?.style}>
                     {name}
                   </span>
-                </div>
+                </button>
               )
             })}
           </div>
