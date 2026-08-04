@@ -41,6 +41,9 @@ interface AppShellChatProps {
   showMembersList: boolean
   setShowMembersList: (fn: (v: boolean) => boolean) => void
   openProfilePopup: (user: ProfilePopupUser, e: ReactMouseEvent) => void
+  /** Правый клик по человеку вне списка друзей — сейчас только по
+   * отреагировавшему на сообщение (см. MessageReactionsModal/MessageList). */
+  onUserContextMenu: (user: ProfilePopupUser, e: ReactMouseEvent) => void
   handleToggleDmReaction: (messageId: number, emoji: string, mine: boolean) => void
   mentionPrefill: MessageInputPrefill | null
   /** Кого я заблокировал — их сообщения в ленту не попадают. REST-историю
@@ -57,7 +60,8 @@ export default function AppShellChat({
   user, isMobile, goBackMobile, activeConversation, canDeleteMessages,
   canSendVoiceMessages,
   pendingChannelMessages, pendingDmMessages, loadDraft, saveDraft,
-  showMembersList, setShowMembersList, openProfilePopup, handleToggleDmReaction,
+  showMembersList, setShowMembersList, openProfilePopup, onUserContextMenu,
+  handleToggleDmReaction,
   mentionPrefill, blockedUserIds,
 }: AppShellChatProps) {
   const { currentServer, channels, currentChannel, serverId, members, rolesForServer } = server
@@ -141,6 +145,7 @@ export default function AppShellChat({
                 onEditRequest={conv.handleDmEditRequest}
                 onReply={conv.handleDmReplyRequest}
                 onOpenProfile={openProfilePopup}
+                onUserContextMenu={onUserContextMenu}
                 onToggleReaction={handleToggleDmReaction}
                 resolveUsername={(id) =>
                   id === user.id
@@ -260,6 +265,7 @@ export default function AppShellChat({
               onEditRequest={channelMessages.handleEditRequest}
               onReply={channelMessages.handleReplyRequest}
               onOpenProfile={openProfilePopup}
+              onUserContextMenu={onUserContextMenu}
               onToggleReaction={channelMessages.handleToggleReaction}
               resolveUsername={(id) => members.find((m) => m.id === id)?.username}
               mentionCandidates={members}

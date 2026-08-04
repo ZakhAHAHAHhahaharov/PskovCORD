@@ -292,6 +292,7 @@ export default function MessageList({
   onEditRequest,
   onReply,
   onOpenProfile,
+  onUserContextMenu,
   onToggleReaction,
   resolveUsername,
   mentionCandidates,
@@ -317,6 +318,10 @@ export default function MessageList({
   onEditRequest: (message: ChatMessageBase) => void
   onReply: (message: ChatMessageBase) => void
   onOpenProfile: (user: ProfilePopupUser, e: ReactMouseEvent) => void
+  /** Правый клик по отреагировавшему в «Показать реакции» (см.
+   * MessageReactionsModal) — то же меню, что у строки друга (см.
+   * FriendContextMenu), с человеком, кем бы он ни был. */
+  onUserContextMenu: (user: ProfilePopupUser, e: ReactMouseEvent) => void
   /** Поставить/снять реакцию. mine — стоит ли она уже от нас. */
   onToggleReaction: (messageId: number, emoji: string, mine: boolean) => void
   /** id участника → ник — для попапа со списком поставивших реакцию
@@ -940,6 +945,7 @@ export default function MessageList({
           currentUserId={currentUserId}
           resolveUsername={resolveUsername}
           mentionCandidates={mentionCandidates}
+          onUserContextMenu={onUserContextMenu}
           onClose={() => setReactionsModalId(null)}
         />
       )}

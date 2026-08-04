@@ -1,9 +1,12 @@
-import { useState } from 'react'
+import { MouseEvent as ReactMouseEvent, useState } from 'react'
 import { X } from 'lucide-react'
 import { MentionCandidate, MessageReaction } from '../api'
 import { useEscToClose } from '../modalStack'
+import { styledNameProps } from '../nameStyle'
+import { displayNameOf } from '../nicknames'
 import Avatar from './Avatar'
 import { EmojiGlyph } from './MessageReactions'
+import { ProfilePopupUser } from './MiniProfilePopup'
 
 /**
  * «Показать реакции» — модалка из контекстного меню сообщения (правый клик
@@ -17,6 +20,7 @@ export default function MessageReactionsModal({
   currentUserId,
   resolveUsername,
   mentionCandidates,
+  onUserContextMenu,
   onClose,
 }: {
   reactions: MessageReaction[]
@@ -25,6 +29,10 @@ export default function MessageReactionsModal({
   /** Ростер сервера или участники диалога/группы — для аватарки и цвета ника
    * в списке «кто поставил». Тот же набор, что и у MessageList. */
   mentionCandidates: MentionCandidate[]
+  /** Правый клик по строке — то же меню, что у строки друга (см.
+   * FriendContextMenu), человек тут может быть кем угодно, не только другом.
+   * У строки «Вы» меню не открывается (см. isSelf ниже). */
+  onUserContextMenu: (user: ProfilePopupUser, e: ReactMouseEvent) => void
   onClose: () => void
 }) {
   useEscToClose(onClose)
@@ -61,9 +69,28 @@ export default function MessageReactionsModal({
           <div className="reactions-modal-users">
             {activeReaction?.user_ids.map((id) => {
               const candidate = byId.get(id)
-              const name = id === currentUserId ? 'Вы' : resolveUsername(id) ?? candidate?.username ?? 'Участник'
+              const isSelf = id === currentUserId
+              // Ник — мой никнейм для этого человека, иначе его собственное
+              // display_name, иначе username (см. displayNameOf) — та же
+              // подмена, что уже применяется к автору сообщения в ленте.
+              // "Вы" — отдельный случай без подмены и без стиля ника: это
+              // служебное слово, а не чьё-то имя, стилизовать нечего.
+              const name = isSelf
+                ? 'Вы'
+                : candidate
+                  ? displayNameOf(candidate)
+                  : resolveUsername(id) ?? 'Участник'
+              const nameStyle = candidate && !isSelf ? styledNameProps(candidate) : null
               return (
-                <div key={id} className="reactions-modal-user">
+                <div
+                  key={id}
+                  className="reactions-modal-user"
+                  onContextMenu={
+                    candidate && !isSelf
+                      ? (e) => onUserContextMenu(candidate, e)
+                      : undefined
+                  }
+                >
                   <Avatar
                     name={name}
                     color={candidate?.avatar_color ?? '#5865f2'}
@@ -71,7 +98,9 @@ export default function MessageReactionsModal({
                     size={28}
                     userId={id}
                   />
-                  <span>{name}</span>
+                  <span className={nameStyle?.className} style={nameStyle?.style}>
+                    {name}
+                  </span>
                 </div>
               )
             })}
