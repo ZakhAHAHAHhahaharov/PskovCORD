@@ -1,9 +1,9 @@
 import { useState } from 'react'
 import { Loader2 } from 'lucide-react'
-import { User } from '../api'
 import { useEscToClose } from '../modalStack'
 import { useNickname } from '../nicknames'
 import Avatar from './Avatar'
+import { ProfilePopupUser } from './MiniProfilePopup'
 
 const NICKNAME_MAX_LENGTH = 64
 
@@ -21,7 +21,7 @@ export default function FriendNicknameModal({
   onSave,
   onClose,
 }: {
-  friend: User
+  friend: ProfilePopupUser
   /** Сохранение уже обновило общий стор — модалка только показывает ошибку. */
   onSave: (nickname: string) => Promise<void>
   onClose: () => void

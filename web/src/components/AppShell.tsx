@@ -246,6 +246,18 @@ export default function AppShell() {
     setProfilePopup({ user: popupUser, x: e.clientX, y: e.clientY })
   }, [])
 
+  // Правый клик по человеку вне списка друзей (сейчас — по отреагировавшему
+  // на сообщение, см. MessageReactionsModal) — то же меню, что и у строки
+  // друга (см. FriendContextMenu), просто с пересчитанным на лету isFriend:
+  // друзья резолвятся заново в AppShellOverlays, здесь достаточно снимка.
+  const handleUserContextMenu = useCallback(
+    (target: ProfilePopupUser, e: ReactMouseEvent) => {
+      const isFriend = conversationsData.friends.friends.some((f) => f.id === target.id)
+      friendMenu.openFriendContextMenu(target, isFriend, e)
+    },
+    [conversationsData.friends.friends, friendMenu],
+  )
+
   // Реакции переключаются по факту «стоит ли она уже у меня» — его считает
   // MessageList из user_ids, отдельно этот флаг нигде не хранится.
   const handleToggleDmReaction = useCallback(
@@ -291,7 +303,7 @@ export default function AppShell() {
         openProfilePopup={openProfilePopup}
         onOpenProfile={() => setShowProfile(true)}
         onConversationContextMenu={conversationMenu.openConversationContextMenu}
-        onFriendContextMenu={friendMenu.openFriendContextMenu}
+        onFriendContextMenu={(friend, e) => friendMenu.openFriendContextMenu(friend, true, e)}
       />
 
       <AppShellChat
@@ -314,6 +326,7 @@ export default function AppShell() {
         showMembersList={showMembersList}
         setShowMembersList={setShowMembersList}
         openProfilePopup={openProfilePopup}
+        onUserContextMenu={handleUserContextMenu}
         handleToggleDmReaction={handleToggleDmReaction}
         mentionPrefill={mentionPrefill}
         blockedUserIds={blockedUserIds}

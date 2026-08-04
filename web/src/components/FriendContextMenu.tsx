@@ -1,15 +1,18 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import {
   Ban, BellOff, Check, MessageSquare, NotebookPen, Phone, ServerIcon, Tag,
-  User as UserIcon, UserMinus,
+  User as UserIcon, UserMinus, UserPlus,
 } from 'lucide-react'
-import { api, Server, User, UserRelation } from '../api'
+import { api, Server, UserRelation } from '../api'
 import { useHoverFlyout } from '../hooks/useHoverFlyout'
 import { useNickname } from '../nicknames'
+import { ProfilePopupUser } from './MiniProfilePopup'
 import { serverInitials } from './ServerRail'
 
 /**
- * Правый клик по строке друга в списке «Друзья» (см. HomeSidebar).
+ * Правый клик по строке друга в списке «Друзья» (см. HomeSidebar) — и по
+ * любому другому человеку вне списка друзей (см. isFriend), например по
+ * отреагировавшему на сообщение (см. MessageReactionsModal).
  *
  * Позиционирование и закрытие по клику вне себя/Escape — тот же приём, что в
  * ConversationContextMenu/ChannelContextMenu. Пункты про беседу с другом
@@ -22,6 +25,7 @@ import { serverInitials } from './ServerRail'
  */
 export default function FriendContextMenu({
   friend,
+  isFriend,
   x,
   y,
   servers,
@@ -32,10 +36,14 @@ export default function FriendContextMenu({
   onAddNote,
   onSetNickname,
   onInviteToServer,
+  onAddFriend,
   onRemoveFriend,
   onRelationChange,
 }: {
-  friend: User
+  friend: ProfilePopupUser
+  /** Уже в друзьях — переключает нижний пункт между «Удалить»/«Добавить в
+   * друзья» (см. onAddFriend/onRemoveFriend). */
+  isFriend: boolean
   x: number
   y: number
   /** Мои серверы — из них выбирается, куда пригласить друга. */
@@ -49,6 +57,7 @@ export default function FriendContextMenu({
   onAddNote: () => void
   onSetNickname: () => void
   onInviteToServer: (serverId: number) => void
+  onAddFriend: () => void
   onRemoveFriend: () => void
   /** Игнор/блокировка изменились — обновить состояние снаружи (лента,
    * уведомления). */
@@ -201,7 +210,9 @@ export default function FriendContextMenu({
 
       <div className="profile-popup-divider" />
       <div className="profile-popup-menu">
-        {item(<UserMinus size={15} />, 'Удалить из друзей', onRemoveFriend)}
+        {isFriend
+          ? item(<UserMinus size={15} />, 'Удалить из друзей', onRemoveFriend)
+          : item(<UserPlus size={15} />, 'Добавить в друзья', onAddFriend)}
         <button
           type="button"
           className="profile-popup-item"

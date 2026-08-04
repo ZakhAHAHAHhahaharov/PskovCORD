@@ -570,6 +570,8 @@ export interface Member extends Omit<User, 'status' | 'dm_privacy'> {
 export interface MentionCandidate {
   id: number
   username: string
+  /** Пусто — отображается только username (см. displayNameOf в nicknames.ts). */
+  display_name?: string
   avatar_color: string
   avatar_image: string
   /** Стиль ника (см. nameStyle.ts) — клик по @упоминанию открывает

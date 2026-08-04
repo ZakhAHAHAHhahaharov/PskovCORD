@@ -174,13 +174,18 @@ export default function AppShellOverlays({
       )}
       {friendMenu.menuTarget && (() => {
         // Друга резолвим из живого списка (тот же приём, что и у беседы
-        // выше): его могли удалить из друзей прямо пока меню открыто.
+        // выше): его могли удалить из друзей (или, наоборот, добавить) прямо
+        // пока меню открыто. Цель не обязательно друг вовсе (см.
+        // FriendMenuTarget.isFriend) — тогда живого списка для неё нет,
+        // остаётся снимок на момент открытия меню.
         const target = friendMenu.menuTarget
-        const friend = conv.friends.friends.find((f) => f.id === target.friend.id)
-        if (!friend) return null
+        const liveFriend = conv.friends.friends.find((f) => f.id === target.friend.id)
+        const isFriendNow = !!liveFriend
+        const friend = liveFriend ?? target.friend
         return (
           <FriendContextMenu
             friend={friend}
+            isFriend={isFriendNow}
             x={target.x}
             y={target.y}
             servers={servers}
@@ -193,6 +198,7 @@ export default function AppShellOverlays({
             onAddNote={() => friendMenu.handleOpenProfile(friend, target.x, target.y)}
             onSetNickname={() => friendMenu.setNicknameTarget(friend)}
             onInviteToServer={(serverId) => void friendMenu.handleInviteToServer(friend, serverId)}
+            onAddFriend={() => void conv.handleMiniProfileAddFriend(friend.id)}
             onRemoveFriend={() => void friendMenu.handleRemoveFriend(friend)}
             onRelationChange={(relation) => friendMenu.handleRelationChange(friend, relation)}
           />
