@@ -275,10 +275,9 @@ export class SfuClient {
   }
 
   private onProducerClosed(producerId: string, userId: number, source: Source) {
-    if (source !== 'screen') return
-    const set = this.availableScreenProducers.get(userId)
-    set?.delete(producerId)
-    // Если этот producer сейчас смотрели — закрыть его consumer и пересчитать.
+    // Если этот producer сейчас consume'или — закрыть его consumer сразу
+    // (нужно и для mic: см. blockMicListener — заблокировавший нас владелец
+    // закрывает свой producer, а мы должны перестать его "слушать").
     for (const [cid, consumer] of this.consumers) {
       if (consumer.producerId === producerId) {
         consumer.close()
@@ -286,6 +285,12 @@ export class SfuClient {
         this.consumerMeta.delete(cid)
       }
     }
+    if (source !== 'screen') {
+      this.recomputeMicStream(userId)
+      return
+    }
+    const set = this.availableScreenProducers.get(userId)
+    set?.delete(producerId)
     if (!set || set.size === 0) {
       this.availableScreenProducers.delete(userId)
       this.cb.onScreenUnavailable(userId)
@@ -399,6 +404,13 @@ export class SfuClient {
    * consumer'ы у заблокированного зрителя). */
   blockScreenViewer(userId: number, blocked: boolean): void {
     void this.request('blockScreenViewer', { targetUserId: userId, blocked }).catch(() => {})
+  }
+
+  /** Запретить/разрешить userId слышать НАШ микрофон — тот же принцип, что
+   * blockScreenViewer, только для голоса (см. Peer.blockedMicListeners на
+   * сервере). */
+  blockMicListener(userId: number, blocked: boolean): void {
+    void this.request('blockMicListener', { targetUserId: userId, blocked }).catch(() => {})
   }
 
   private recomputeMicStream(userId: number) {

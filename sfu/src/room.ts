@@ -35,6 +35,10 @@ export class Peer {
    * source==='screen'. Не переживает переподключение (новый Peer — пустой
    * набор) — осознанно, это предпочтение на текущий звонок, см. план. */
   readonly blockedScreenViewers = new Set<number>()
+  /** userId'ы, которым ЭТОТ пир запретил слышать СВОЙ микрофон (см.
+   * signaling.ts action 'blockMicListener') — тот же принцип, что
+   * blockedScreenViewers, только для source==='mic'. */
+  readonly blockedMicListeners = new Set<number>()
 
   constructor(
     userId: number,
@@ -114,28 +118,21 @@ export class Room {
   /** Все продюсеры комнаты, кроме принадлежащих указанному пиру — screen-
    * продюсеры владельцев, заблокировавших except.userId, не отдаём вовсе
    * (у заблокированного зрителя кнопка «Смотреть» просто не должна
-   * появиться, а не тихо зависать). */
+   * появиться, а не тихо зависать); mic-продюсеры владельцев, заглушивших
+   * себя для except.userId, точно так же не отдаём (см. blockedMicListeners). */
   otherProducers(
     except: Peer,
   ): { producerId: string; userId: number; source: string }[] {
     const out: { producerId: string; userId: number; source: string }[] = []
     for (const peer of this.peers.values()) {
       if (peer.id === except.id) continue
-      if (peer.blockedScreenViewers.has(except.userId)) {
-        for (const producer of peer.producers.values()) {
-          const source = (producer.appData as { source?: string }).source ?? 'mic'
-          if (source !== 'screen') {
-            out.push({ producerId: producer.id, userId: peer.userId, source })
-          }
-        }
-        continue
-      }
+      const screenBlocked = peer.blockedScreenViewers.has(except.userId)
+      const micBlocked = peer.blockedMicListeners.has(except.userId)
       for (const producer of peer.producers.values()) {
-        out.push({
-          producerId: producer.id,
-          userId: peer.userId,
-          source: (producer.appData as { source?: string }).source ?? 'mic',
-        })
+        const source = (producer.appData as { source?: string }).source ?? 'mic'
+        if (source === 'screen' && screenBlocked) continue
+        if (source === 'mic' && micBlocked) continue
+        out.push({ producerId: producer.id, userId: peer.userId, source })
       }
     }
     return out
@@ -173,12 +170,29 @@ export class Room {
     }
   }
 
+  /** Как broadcastScreenAware, но для mic-продюсера — пиров, которых except
+   * заглушил себе, о новом микрофонном producer'е не оповещаем вовсе. */
+  broadcastMicAware(except: Peer, notification: string, data: unknown): void {
+    for (const peer of this.peers.values()) {
+      if (peer.id === except.id) continue
+      if (except.blockedMicListeners.has(peer.userId)) continue
+      peer.notify(notification, data)
+    }
+  }
+
   /** Все screen-продюсеры пира — в том виде, в каком они летят клиенту в
    * newProducer/producerClosed (см. signaling.ts). */
   screenProducersOf(peer: Peer): { producerId: string; userId: number; source: string }[] {
     return Array.from(peer.producers.values())
       .filter((p) => ((p.appData as { source?: string }).source ?? 'mic') === 'screen')
       .map((p) => ({ producerId: p.id, userId: peer.userId, source: 'screen' }))
+  }
+
+  /** Все mic-продюсеры пира — аналог screenProducersOf для микрофона. */
+  micProducersOf(peer: Peer): { producerId: string; userId: number; source: string }[] {
+    return Array.from(peer.producers.values())
+      .filter((p) => ((p.appData as { source?: string }).source ?? 'mic') === 'mic')
+      .map((p) => ({ producerId: p.id, userId: peer.userId, source: 'mic' }))
   }
 
   /** Разослать уведомление всем соединениям конкретного userId (у одного
@@ -203,6 +217,27 @@ export class Room {
       if (peer.userId !== viewerUserId) continue
       for (const [cid, consumer] of Array.from(peer.consumers)) {
         if (!ownerScreenProducerIds.has(consumer.producerId)) continue
+        consumer.close()
+        peer.consumers.delete(cid)
+        peer.notify('consumerClosed', { consumerId: cid })
+      }
+    }
+  }
+
+  /** Как closeScreenConsumersFor, но для mic-продюсеров owner — обрывает уже
+   * идущее прослушивание микрофона owner у слушателя viewerUserId сразу же
+   * при включении блокировки, а не только для будущих newProducer/consume. */
+  closeMicConsumersFor(owner: Peer, viewerUserId: number): void {
+    const ownerMicProducerIds = new Set(
+      Array.from(owner.producers.values())
+        .filter((p) => ((p.appData as { source?: string }).source ?? 'mic') === 'mic')
+        .map((p) => p.id),
+    )
+    if (ownerMicProducerIds.size === 0) return
+    for (const peer of this.peers.values()) {
+      if (peer.userId !== viewerUserId) continue
+      for (const [cid, consumer] of Array.from(peer.consumers)) {
+        if (!ownerMicProducerIds.has(consumer.producerId)) continue
         consumer.close()
         peer.consumers.delete(cid)
         peer.notify('consumerClosed', { consumerId: cid })

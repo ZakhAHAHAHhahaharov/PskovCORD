@@ -61,6 +61,10 @@ export interface VoiceMesh {
   blockScreenViewer: (userId: number, blocked: boolean) => void
   /** Кого мы сейчас заблокировали (для отображения переключателя в меню участника). */
   blockedScreenViewerIds: Set<number>
+  /** Запретить/разрешить userId слышать НАШ микрофон (см. SfuClient.blockMicListener). */
+  blockMicListener: (userId: number, blocked: boolean) => void
+  /** Кому мы сейчас заглушили себя (для отображения переключателя в меню участника). */
+  blockedMicListenerIds: Set<number>
   status: VoiceStatus
   /** Средний RTT (мс) до SFU, null пока нет данных. */
   pingMs: number | null
@@ -89,6 +93,8 @@ const EMPTY_MESH: VoiceMesh = {
   applyForcedMute: () => {},
   blockScreenViewer: () => {},
   blockedScreenViewerIds: new Set(),
+  blockMicListener: () => {},
+  blockedMicListenerIds: new Set(),
   status: 'connecting',
   pingMs: null,
   speakingUserIds: new Set(),
@@ -140,6 +146,7 @@ export function useVoiceMesh(
   const [forcedMuteUntil, setForcedMuteUntil] = useState<number | null>(null)
   const forcedMuteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [blockedScreenViewerIds, setBlockedScreenViewerIds] = useState<Set<number>>(new Set())
+  const [blockedMicListenerIds, setBlockedMicListenerIds] = useState<Set<number>>(new Set())
   // Честный статус — по факту установленного WebRTC-транспорта к SFU.
   const [status, setStatus] = useState<VoiceStatus>('connecting')
   const [pingMs, setPingMs] = useState<number | null>(null)
@@ -471,6 +478,7 @@ export function useVoiceMesh(
       forcedMuteTimerRef.current = null
       setForcedMuteUntil(null)
       setBlockedScreenViewerIds(new Set())
+      setBlockedMicListenerIds(new Set())
       setMuted(true)
       setDeafened(false)
       setIsSharingScreen(false)
@@ -664,6 +672,16 @@ export function useVoiceMesh(
     })
   }
 
+  const blockMicListener = (userId: number, blocked: boolean) => {
+    client.current?.blockMicListener(userId, blocked)
+    setBlockedMicListenerIds((prev) => {
+      const next = new Set(prev)
+      if (blocked) next.add(userId)
+      else next.delete(userId)
+      return next
+    })
+  }
+
   const stopSharing = () => {
     client.current?.stopScreen()
     displayStream.current?.getTracks().forEach((t) => t.stop())
@@ -772,6 +790,8 @@ export function useVoiceMesh(
     applyForcedMute,
     blockScreenViewer,
     blockedScreenViewerIds,
+    blockMicListener,
+    blockedMicListenerIds,
     status,
     pingMs,
     speakingUserIds,

@@ -15,6 +15,8 @@ import { Room, Peer } from './room'
  *
  * blockScreenViewer {targetUserId, blocked} — запретить/разрешить конкретному
  * userId смотреть демонстрацию экрана ЭТОГО пира (см. Room.blockedScreenViewers).
+ * blockMicListener {targetUserId, blocked} — то же самое, но для микрофона
+ * (см. Room.blockedMicListeners).
  */
 export async function handleRequest(
   room: Room,
@@ -70,7 +72,7 @@ export async function handleRequest(
       // заблокированный зритель не должен даже увидеть, что демонстрация появилась.
       const notifyData = { producerId: producer.id, userId: peer.userId, source }
       if (source === 'screen') room.broadcastScreenAware(peer, 'newProducer', notifyData)
-      else room.broadcast(peer, 'newProducer', notifyData)
+      else room.broadcastMicAware(peer, 'newProducer', notifyData)
       producer.on('transportclose', () => {
         peer.producers.delete(producer.id)
       })
@@ -115,6 +117,9 @@ export async function handleRequest(
       // Room.otherProducers/broadcastScreenAware).
       if (found && source === 'screen' && found.peer.blockedScreenViewers.has(peer.userId)) {
         throw new Error('blocked by screen share owner')
+      }
+      if (found && source === 'mic' && found.peer.blockedMicListeners.has(peer.userId)) {
+        throw new Error('blocked by mic owner')
       }
       const consumer = await transport.consume({
         producerId: data.producerId,
@@ -169,6 +174,24 @@ export async function handleRequest(
       } else {
         peer.blockedScreenViewers.delete(targetUserId)
         for (const p of screenProducers) room.notifyUser(targetUserId, 'newProducer', p)
+      }
+      return {}
+    }
+
+    case 'blockMicListener': {
+      // Запрет/разрешение конкретному userId слышать микрофон ЭТОГО пира —
+      // тот же принцип, что blockScreenViewer, только для source==='mic'
+      // (см. Room.blockedMicListeners/otherProducers/broadcastMicAware/consume).
+      const targetUserId = Number(data.targetUserId)
+      const blocked = !!data.blocked
+      const micProducers = room.micProducersOf(peer)
+      if (blocked) {
+        peer.blockedMicListeners.add(targetUserId)
+        room.closeMicConsumersFor(peer, targetUserId)
+        for (const p of micProducers) room.notifyUser(targetUserId, 'producerClosed', p)
+      } else {
+        peer.blockedMicListeners.delete(targetUserId)
+        for (const p of micProducers) room.notifyUser(targetUserId, 'newProducer', p)
       }
       return {}
     }
