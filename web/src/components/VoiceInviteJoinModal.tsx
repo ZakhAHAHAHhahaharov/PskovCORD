@@ -1,16 +1,20 @@
 import { useState } from 'react'
-import { LogIn, Volume2, Users } from 'lucide-react'
+import { Hash, LogIn, Volume2, Users } from 'lucide-react'
 import { InvitePreview } from '../api'
 import { useEscToClose } from '../modalStack'
 import Avatar from './Avatar'
 
 /**
- * Окно подтверждения по ссылке-приглашению в конкретный голосовой канал
- * (?voiceInvite=<код>, см. ChannelInviteModal/ChannelContextMenu «Копировать
- * ссылку») — в отличие от обычной ссылки сервера (которая до сих пор
- * вступает мгновенно, см. AppShell useEffect на ?invite=), здесь сначала
- * показывается предпросмотр (см. backend InvitePreview), и только явное
- * подтверждение вызывает вступление+автоподключение.
+ * Окно подтверждения по ссылке-приглашению в конкретный канал — текстовый
+ * или голосовой (?voiceInvite=<код>, имя параметра осталось от тех времён,
+ * когда приглашать в конкретный канал можно было только в голосовой — см.
+ * докстринг useInviteLinks, там же почему его не переименовали; сама
+ * возможность — ChannelInviteModal/ChannelContextMenu «Копировать ссылку»).
+ * В отличие от обычной ссылки сервера (которая до сих пор вступает мгновенно,
+ * см. AppShell useEffect на ?invite=), здесь сначала показывается
+ * предпросмотр (см. backend InvitePreview), и только явное подтверждение
+ * вызывает вступление — для голосового ещё и автоподключение, для
+ * текстового просто открывает канал (см. useInviteLinks onEnterChannel).
  */
 export default function VoiceInviteJoinModal({
   preview,
@@ -27,6 +31,7 @@ export default function VoiceInviteJoinModal({
 }) {
   useEscToClose(onClose)
   const [confirming, setConfirming] = useState(false)
+  const isVoice = preview?.channel.kind === 'voice'
 
   const confirm = async () => {
     setConfirming(true)
@@ -47,15 +52,21 @@ export default function VoiceInviteJoinModal({
             <Avatar name={preview.server.name} color="#5865f2" image={preview.server.icon} size={56} />
             <h2 className="modal-title">{preview.server.name}</h2>
             <p className="voice-invite-join-channel">
-              <Volume2 size={15} /> {preview.channel.name}
+              {isVoice ? <Volume2 size={15} /> : <Hash size={15} />} {preview.channel.name}
             </p>
-            <p className="invite-card-members">
-              <Users size={12} /> {preview.participant_count} уже в канале
-            </p>
+            {isVoice && (
+              <p className="invite-card-members">
+                <Users size={12} /> {preview.channel.participant_count} уже в канале
+              </p>
+            )}
             <p className="srv-hint">
               {preview.already_member
-                ? 'Вы уже участник этого сервера — подключение сразу к каналу.'
-                : 'Вы станете участником сервера и сразу подключитесь к этому голосовому каналу.'}
+                ? isVoice
+                  ? 'Вы уже участник этого сервера — подключение сразу к каналу.'
+                  : 'Вы уже участник этого сервера — сразу откроется канал.'
+                : isVoice
+                  ? 'Вы станете участником сервера и сразу подключитесь к этому голосовому каналу.'
+                  : 'Вы станете участником сервера, и сразу откроется этот канал.'}
             </p>
             <button
               type="button"
@@ -63,7 +74,12 @@ export default function VoiceInviteJoinModal({
               disabled={confirming}
               onClick={confirm}
             >
-              <LogIn size={15} /> {preview.already_member ? 'Перейти в канал' : 'Вступить и подключиться'}
+              <LogIn size={15} />{' '}
+              {preview.already_member
+                ? 'Перейти в канал'
+                : isVoice
+                  ? 'Вступить и подключиться'
+                  : 'Вступить и перейти'}
             </button>
           </>
         )}

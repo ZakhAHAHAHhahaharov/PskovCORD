@@ -212,6 +212,14 @@ export default function AppShellChat({
               )}
               <span className="hash">#</span>
               <span className="chat-header-name">{currentChannel.name}</span>
+              {currentChannel.status && (
+                <>
+                  <span className="chat-header-topic-divider" />
+                  <span className="chat-header-topic" title={currentChannel.status}>
+                    {currentChannel.status}
+                  </span>
+                </>
+              )}
               <div className="chat-header-pins">
                 <button
                   type="button"

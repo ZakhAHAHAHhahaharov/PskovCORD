@@ -30,15 +30,19 @@ class ChannelSerializer(serializers.ModelSerializer):
     # каналов, живут в presence (Redis), пока в канале кто-то есть.
     call_started_at = serializers.SerializerMethodField()
     topic = serializers.SerializerMethodField()
-    # Кому открыт приватный канал. Плоским списком id, а не вложенными ролями:
-    # сами роли клиент уже держит (api.roles), а тут нужна только связь.
+    # Кому открыт приватный канал. Плоским списком id, а не вложенными ролями/
+    # людьми: сами роли клиент уже держит (api.roles), участников — из ростера
+    # сервера, а тут нужна только связь.
     allowed_role_ids = serializers.SerializerMethodField()
+    allowed_user_ids = serializers.SerializerMethodField()
+    my_settings = serializers.SerializerMethodField()
 
     class Meta:
         model = Channel
         fields = ["id", "server", "name", "kind", "position",
                   "call_started_at", "topic", "status", "slowmode_seconds",
-                  "is_private", "allowed_role_ids"]
+                  "is_spoiler", "is_private", "allowed_role_ids",
+                  "allowed_user_ids", "invites_paused", "my_settings"]
         read_only_fields = ["server"]
 
     def _state(self, obj):
@@ -56,6 +60,11 @@ class ChannelSerializer(serializers.ModelSerializer):
             return []
         return [r.id for r in obj.allowed_roles.all()]
 
+    def get_allowed_user_ids(self, obj):
+        if not obj.is_private:
+            return []
+        return [u.id for u in obj.allowed_users.all()]
+
     def get_call_started_at(self, obj):
         if obj.kind != Channel.VOICE:
             return None
@@ -65,6 +74,23 @@ class ChannelSerializer(serializers.ModelSerializer):
         if obj.kind != Channel.VOICE:
             return None
         return self._state(obj)["topic"]
+
+    def get_my_settings(self, obj):
+        """Личные настройки запрашивающего для ЭТОГО канала (уведомления,
+        заглушение) — см. channel_member_settings_payload. channel_settings в
+        контексте — заранее собранный словарь {channel_id: ChannelMemberSettings}
+        (см. chat.views.server_context): без него на каждый канал в списке
+        уходил бы свой запрос."""
+        settings_map = self.context.get("channel_settings")
+        if settings_map is not None:
+            return channel_member_settings_payload(settings_map.get(obj.id))
+        request = self.context.get("request")
+        if request is None or not request.user or not request.user.is_authenticated:
+            return channel_member_settings_payload(None)
+        from .models import ChannelMemberSettings
+        found = ChannelMemberSettings.objects.filter(
+            user=request.user, channel=obj).first()
+        return channel_member_settings_payload(found)
 
 
 class RoleSerializer(serializers.ModelSerializer):
@@ -308,6 +334,45 @@ class MembershipSettingsSerializer(serializers.ModelSerializer):
         return value
 
 
+def channel_member_settings_payload(settings_obj: "ChannelMemberSettings | None") -> dict:
+    """Личные настройки уведомлений/заглушения участника для ОДНОГО канала —
+    общая форма и для ChannelSerializer.my_settings (уходит вместе со списком
+    каналов), и для ответа ChannelMemberSettingsView. Тот же приём, что и
+    membership_settings_payload у Membership, см. её докстринг.
+
+    settings_obj=None — участник для этого канала ничего не переопределял:
+    отсутствие строки в БД и есть «стандартные настройки» (см.
+    ChannelMemberSettings docstring), а не повод создавать её заранее.
+    """
+    from .models import ChannelMemberSettings
+
+    if settings_obj is None:
+        return {
+            "notification_level": ChannelMemberSettings.NOTIFY_DEFAULT,
+            "muted": False,
+            "muted_until": None,
+            "muted_forever": False,
+        }
+    return {
+        "notification_level": settings_obj.notification_level,
+        "muted": settings_obj.is_muted(),
+        "muted_until": settings_obj.muted_until,
+        "muted_forever": settings_obj.muted_forever,
+    }
+
+
+class ChannelMemberSettingsSerializer(serializers.ModelSerializer):
+    """PATCH /api/channels/<id>/settings — только notification_level; мьют —
+    ДЕЙСТВИЕ (mute_minutes/mute_forever/unmute), как и у MembershipSettingsSerializer,
+    см. её докстринг — та же причина."""
+
+    class Meta:
+        from .models import ChannelMemberSettings
+        model = ChannelMemberSettings
+        fields = ["notification_level"]
+        extra_kwargs = {"notification_level": {"required": False}}
+
+
 class ServerInviteSerializer(serializers.ModelSerializer):
     """Личное приглашение — ответ на POST /api/servers/<id>/invites и на
     GET /api/invites (см. chat.views.MyServerInvites). Ссылки (kind=LINK)
@@ -334,6 +399,18 @@ class ServerInviteSerializer(serializers.ModelSerializer):
         if obj.channel_id is None:
             return None
         return {"id": obj.channel_id, "name": obj.channel.name}
+
+
+class ChannelInviteSerializer(serializers.ModelSerializer):
+    """Одна строка вкладки «Приглашения» в ChannelSettingsModal — кому и
+    когда отправили личное приглашение именно в этот канал, и решено ли оно
+    (см. chat.views.ChannelInvitesList)."""
+
+    invited_user = UserSerializer(read_only=True)
+
+    class Meta:
+        model = ServerInvite
+        fields = ["id", "invited_user", "status", "created_at"]
 
 
 class ServerInviteLinkSerializer(serializers.ModelSerializer):

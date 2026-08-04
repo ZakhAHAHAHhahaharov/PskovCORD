@@ -65,6 +65,12 @@ urlpatterns = [
 
     path("channels/<int:channel_id>",
          views.ChannelDetail.as_view(), name="channel-detail"),
+    path("channels/<int:channel_id>/clone",
+         views.ChannelClone.as_view(), name="channel-clone"),
+    path("channels/<int:channel_id>/settings",
+         views.ChannelMemberSettingsView.as_view(), name="channel-member-settings"),
+    path("channels/<int:channel_id>/invites",
+         views.ChannelInvitesList.as_view(), name="channel-invites"),
     path("channels/<int:channel_id>/messages",
          views.ChannelMessages.as_view(), name="channel-messages"),
     path("channels/<int:channel_id>/read",

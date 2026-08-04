@@ -22,7 +22,7 @@ from accounts.serializers import UserSerializer
 
 from . import emoji as emoji_keys, presence, roles, sfu, stickers as sticker_files, uploads
 from .models import (
-    Attachment, Channel, Conversation, ConversationMessage,
+    Attachment, Channel, ChannelMemberSettings, Conversation, ConversationMessage,
     ConversationParticipant, FriendNickname, Membership, Message, ProfileNote, Role, Server,
     ServerBan, ServerEmoji, ServerInvite, ServerJoinRequest, Sticker, StickerPack,
     ChannelReadState, UserRelationState,
@@ -36,12 +36,14 @@ from .permissions import (
     are_friends, blocked_user_ids, can_dm, can_see_channel, visible_channels,
 )
 from .serializers import (
-    AttachmentSerializer, ChannelSerializer, ConversationMessageSerializer,
+    AttachmentSerializer, ChannelInviteSerializer, ChannelMemberSettingsSerializer,
+    ChannelSerializer, ConversationMessageSerializer,
     ConversationSerializer, MembershipSettingsSerializer, MessageSerializer,
     RoleSerializer, ServerBanSerializer, ServerEmojiSerializer,
     ServerInviteLinkSerializer, ServerInviteSerializer,
     ServerJoinRequestSerializer, ServerSerializer, ServerUpdateSerializer,
-    StickerPackSerializer, StickerSerializer, membership_settings_payload,
+    StickerPackSerializer, StickerSerializer, channel_member_settings_payload,
+    membership_settings_payload,
 )
 
 User = get_user_model()
@@ -182,14 +184,13 @@ def server_context(request, servers):
     во время сериализации (см. ChannelSerializer._state)."""
     if isinstance(servers, Server):
         servers = [servers]
-    voice_channel_ids = [
-        channel.id
-        for server in servers
-        for channel in server.channels.all()
-        if channel.kind == Channel.VOICE
-    ]
+    all_channels = [channel for server in servers for channel in server.channels.all()]
+    voice_channel_ids = [c.id for c in all_channels if c.kind == Channel.VOICE]
     my_memberships = {}
+    channel_settings = {}
     if request.user and request.user.is_authenticated:
+        from .models import ChannelMemberSettings
+
         # Одним запросом на весь список — без него my_settings делал бы
         # отдельный Membership.objects.filter(...) на каждый сервер
         # (см. ServerSerializer.get_my_settings).
@@ -198,10 +199,18 @@ def server_context(request, servers):
             for m in Membership.objects.filter(
                 user=request.user, server__in=servers)
         }
+        # Тот же приём для ChannelSerializer.get_my_settings — иначе на КАЖДЫЙ
+        # канал КАЖДОГО сервера в списке уходил бы свой запрос.
+        channel_settings = {
+            s.channel_id: s
+            for s in ChannelMemberSettings.objects.filter(
+                user=request.user, channel__in=all_channels)
+        }
     return {
         "request": request,
         "call_states": presence.call_states(voice_channel_ids),
         "my_memberships": my_memberships,
+        "channel_settings": channel_settings,
     }
 
 
@@ -976,8 +985,15 @@ class ServerInvites(APIView):
         channel = None
         channel_id = request.data.get("channel_id")
         if channel_id is not None:
-            channel = get_object_or_404(
-                Channel, id=channel_id, server=server, kind=Channel.VOICE)
+            # Любой вид канала — раньше сюда пускали только голосовые
+            # («Пригласить в голосовой чат»), но механика ничем не завязана
+            # на голос: тот же ServerInvite.channel заводился и для текстовых
+            # (см. правый клик по текстовому каналу → «Пригласить на канал»).
+            channel = get_object_or_404(Channel, id=channel_id, server=server)
+            if channel.invites_paused:
+                return Response(
+                    {"detail": "Приглашения в этот канал сейчас приостановлены."},
+                    status=400)
         # Пригласить в КОНКРЕТНЫЙ канал можно и уже состоящего на сервере
         # друга (позвать в голосовой чат — не то же самое, что позвать на
         # сервер) — блокируем "уже на сервере" только для общего приглашения.
@@ -1073,8 +1089,12 @@ class ServerInviteLink(APIView):
         channel = None
         channel_id = request.query_params.get("channel_id")
         if channel_id is not None:
-            channel = get_object_or_404(
-                Channel, id=channel_id, server=server, kind=Channel.VOICE)
+            # invites_paused здесь намеренно НЕ проверяется: ссылка — это
+            # постоянный адрес канала, а не активное действие «пригласить»
+            # (то останавливает только ServerInvites.post, см. там). Пауза
+            # относится к рассылке личных приглашений, а не к уже
+            # существующей/скопированной ссылке.
+            channel = get_object_or_404(Channel, id=channel_id, server=server)
         invite, _created = ServerInvite.objects.get_or_create(
             server=server, kind=ServerInvite.LINK, channel=channel,
             created_by=request.user,
@@ -1118,12 +1138,21 @@ class InvitePreview(APIView):
         server = invite.server
         if ServerBan.objects.filter(server=server, user=request.user).exists():
             return Response({"detail": "Вы забанены на этом сервере."}, status=403)
-        roster = presence.voice_member_ids(invite.channel_id)
+        channel_data = {
+            "id": invite.channel_id, "name": invite.channel.name,
+            "kind": invite.channel.kind,
+        }
+        # Число «сейчас в канале» имеет смысл только для голоса — у
+        # текстового канала нет такого понятия (участников канала как
+        # таковых не существует, только участники сервера, которым он
+        # виден).
+        if invite.channel.kind == Channel.VOICE:
+            channel_data["participant_count"] = len(
+                presence.voice_member_ids(invite.channel_id))
         return Response({
             "server": {"id": server.id, "name": server.name, "icon": server.icon},
-            "channel": {"id": invite.channel_id, "name": invite.channel.name},
+            "channel": channel_data,
             "already_member": is_member(request.user, server),
-            "participant_count": len(roster),
         })
 
 
@@ -1819,6 +1848,21 @@ def _channel_visible_user_ids(channel) -> list:
     return ids
 
 
+def _channel_broadcast_payload(channel_data: dict) -> dict:
+    """Копия сериализованного канала для WS-рассылки ВСЕМ участникам — без
+    личных my_settings того, чьё действие вызвало событие (создал/поправил/
+    склонировал канал). Тот же объект уже уходит ему одному в самом ответе
+    ручки (см. вызывающих ниже, там ChannelSerializer сериализуется С
+    контекстом request) — а вот в общей рассылке чужие уведомления/заглушение
+    для этого канала никому, кроме него самого, видны быть не должны, даже
+    мельком в сыром кадре WebSocket. Получателя это не портит: свои
+    my_settings он всё равно берёт из уже загруженного локального состояния,
+    а не из этого события (см. web useGatewayEvents channel_update)."""
+    copy = dict(channel_data)
+    copy["my_settings"] = channel_member_settings_payload(None)
+    return copy
+
+
 class ChannelCreate(APIView):
     def post(self, request, server_id):
         server = get_object_or_404(Server, id=server_id)
@@ -1845,14 +1889,14 @@ class ChannelCreate(APIView):
             slowmode_seconds=slowmode or 0,
             is_private=bool(request.data.get("is_private")),
         )
-        data = ChannelSerializer(channel).data
+        data = ChannelSerializer(channel, context={"request": request}).data
         # Живое обновление списка каналов у остальных участников сервера —
         # без этого им приходилось перезагружать страницу, чтобы увидеть
         # новый канал (тот же паттерн, что и voice_state_update).
         payload = {
             "op": "channel_create",
             "server_id": server_id,
-            "channel": data,
+            "channel": _channel_broadcast_payload(data),
         }
         channel_layer = get_channel_layer()
         if channel.is_private:
@@ -1869,18 +1913,20 @@ class ChannelCreate(APIView):
 
 
 class ChannelDetail(APIView):
-    """PATCH /api/channels/<id> {"status"?, "slowmode_seconds"?, "is_private"?,
-    "allowed_role_ids"?} — правый клик по каналу → "Установить статус канала" /
-    "Медленный режим" / "Приватный канал" (см.
-    web/src/components/ChannelContextMenu.tsx).
+    """PATCH /api/channels/<id> {"name"?, "status"?, "slowmode_seconds"?,
+    "is_spoiler"?, "is_private"?, "allowed_role_ids"?, "allowed_user_ids"?,
+    "invites_paused"?} — правый клик по каналу → «Настроить канал» (см.
+    web/src/components/ChannelSettingsModal.tsx; часть полей когда-то
+    редактировалась прямо в ChannelContextMenu, теперь только через модалку).
 
     Персистентный Channel.status, а НЕ эфемерная тема звонка
     (presence.call_topic/voice_topic_update, chat.consumers
     ._handle_voice_topic_update) — та живёт только пока в голосовом канале
     кто-то есть, эта видна всегда, пока её явно не поменяют/не очистят
-    (пустая строка). name/kind/position сюда намеренно не входят — их
-    сейчас нигде не редактируют после создания канала, расширять ручку
-    ради них незачем, пока такой возможности не попросят отдельно."""
+    (пустая строка); у текстовых каналов это же поле показывается как «тема
+    канала» (см. Channel.status). kind/position сюда не входят — их сейчас
+    нигде не редактируют после создания канала, расширять ручку ради них
+    незачем, пока такой возможности не попросят отдельно."""
 
     def patch(self, request, channel_id):
         channel = get_object_or_404(Channel, id=channel_id)
@@ -1888,16 +1934,28 @@ class ChannelDetail(APIView):
         denied = _require_permission(request, server, "manage_channels")
         if denied:
             return denied
+        name = request.data.get("name")
         status_text = request.data.get("status")
         slowmode_raw = request.data.get("slowmode_seconds")
+        is_spoiler = request.data.get("is_spoiler")
         is_private = request.data.get("is_private")
         allowed_role_ids = request.data.get("allowed_role_ids")
-        if all(v is None for v in (status_text, slowmode_raw, is_private,
-                                   allowed_role_ids)):
+        allowed_user_ids = request.data.get("allowed_user_ids")
+        invites_paused = request.data.get("invites_paused")
+        if all(v is None for v in (
+            name, status_text, slowmode_raw, is_spoiler, is_private,
+            allowed_role_ids, allowed_user_ids, invites_paused,
+        )):
             return Response({"detail": "Нечего менять."}, status=400)
         updated = []
+        if name is not None:
+            name = str(name).strip()
+            if not name:
+                return Response({"detail": "Нужно имя канала."}, status=400)
+            channel.name = name[:100]
+            updated.append("name")
         if status_text is not None:
-            channel.status = str(status_text).strip()[:120]
+            channel.status = str(status_text).strip()[:1024]
             updated.append("status")
         seconds, error = _parse_slowmode(slowmode_raw, channel.kind)
         if error:
@@ -1905,9 +1963,15 @@ class ChannelDetail(APIView):
         if seconds is not None:
             channel.slowmode_seconds = seconds
             updated.append("slowmode_seconds")
+        if is_spoiler is not None:
+            channel.is_spoiler = bool(is_spoiler)
+            updated.append("is_spoiler")
         if is_private is not None:
             channel.is_private = bool(is_private)
             updated.append("is_private")
+        if invites_paused is not None:
+            channel.invites_paused = bool(invites_paused)
+            updated.append("invites_paused")
         if updated:
             channel.save(update_fields=updated)
         if allowed_role_ids is not None:
@@ -1918,11 +1982,21 @@ class ChannelDetail(APIView):
             # ссылкой на роль чужого (тот же приём, что у mentionable_by).
             channel.allowed_roles.set(
                 Role.objects.filter(server=server, id__in=allowed_role_ids))
-        data = ChannelSerializer(channel).data
+        if allowed_user_ids is not None:
+            if not isinstance(allowed_user_ids, list):
+                return Response(
+                    {"detail": "allowed_user_ids — список id участников."}, status=400)
+            # Только участники ЭТОГО сервера — персональный допуск чужому
+            # человеку (который и так не увидит сервер) ничего не значит и
+            # только засорял бы список.
+            channel.allowed_users.set(
+                User.objects.filter(
+                    memberships__server=server, id__in=allowed_user_ids))
+        data = ChannelSerializer(channel, context={"request": request}).data
         payload = {
             "op": "channel_update",
             "server_id": server.id,
-            "channel": data,
+            "channel": _channel_broadcast_payload(data),
         }
         channel_layer = get_channel_layer()
         if channel.is_private:
@@ -1934,6 +2008,39 @@ class ChannelDetail(APIView):
             async_to_sync(channel_layer.group_send)(
                 f"server_{server.id}", {"type": "broadcast", "payload": payload})
         return Response(data)
+
+    def delete(self, request, channel_id):
+        """DELETE /api/channels/<id> — правый клик по каналу → «Удалить
+        канал» (см. web/src/components/ChannelContextMenu.tsx; фронт
+        предупреждает о необратимости сам, отдельного подтверждения бэкенд
+        не спрашивает — той же логике следуют удаление сервера/сообщения).
+
+        Каскадом уносит сообщения, вложения, реакции, закрепления, курсор
+        прочтения — всё, что ссылается на канал (см. related_name с
+        on_delete=CASCADE у соответствующих моделей)."""
+        channel = get_object_or_404(Channel, id=channel_id)
+        server = channel.server
+        denied = _require_permission(request, server, "manage_channels")
+        if denied:
+            return denied
+        # Список видящих и приватность — ДО удаления: после него разбирать,
+        # кому был открыт уже удалённый канал, будет не по чему (M2M-таблицы
+        # уйдут вместе со строкой).
+        is_private = channel.is_private
+        visible_user_ids = _channel_visible_user_ids(channel) if is_private else None
+        channel.delete()
+        payload = {
+            "op": "channel_delete", "server_id": server.id, "channel_id": channel_id,
+        }
+        channel_layer = get_channel_layer()
+        if is_private:
+            for user_id in visible_user_ids:
+                async_to_sync(channel_layer.group_send)(
+                    f"user_{user_id}", {"type": "broadcast", "payload": payload})
+        else:
+            async_to_sync(channel_layer.group_send)(
+                f"server_{server.id}", {"type": "broadcast", "payload": payload})
+        return Response(status=204)
 
 
 def _hide_old_history(request, server, qs):
@@ -1969,6 +2076,149 @@ class ChannelMessages(APIView):
         qs = _hide_old_history(request, channel.server, qs)
         messages = _paginate_messages(request, qs)
         return Response(MessageSerializer(messages, many=True).data)
+
+
+class ChannelMemberSettingsView(APIView):
+    """GET/PATCH /api/channels/<id>/settings — ЛИЧНЫЕ настройки уведомлений и
+    заглушения запрашивающего для ОДНОГО канала (правый клик → «Параметры
+    уведомлений»/«Заглушить канал», см. chat.models.ChannelMemberSettings —
+    там же почему «как на сервере» не совпадает по смыслу с дефолтом
+    Membership).
+
+    Не требует прав сверх доступа к каналу — как и MyServerSettings, это не
+    модерация, а личные предпочтения (см. _require_channel_access).
+    """
+
+    def get(self, request, channel_id):
+        channel = get_object_or_404(Channel, id=channel_id)
+        denied = _require_channel_access(request, channel)
+        if denied:
+            return denied
+        found = ChannelMemberSettings.objects.filter(
+            user=request.user, channel=channel).first()
+        return Response(channel_member_settings_payload(found))
+
+    # Та же граница, что у MyServerSettings.MAX_MUTE_MINUTES, и по тем же
+    # причинам — защита от опечатки вида mute_minutes=99999999.
+    MAX_MUTE_MINUTES = 60 * 24 * 30
+
+    def patch(self, request, channel_id):
+        channel = get_object_or_404(Channel, id=channel_id)
+        denied = _require_channel_access(request, channel)
+        if denied:
+            return denied
+        data = request.data
+
+        # Заглушение — ДЕЙСТВИЕ (одно из трёх), а не поле сериализатора — та
+        # же причина, что у MyServerSettings.patch (см. её докстринг).
+        mute_ops = [k for k in ("mute_minutes", "mute_forever", "unmute") if k in data]
+        if len(mute_ops) > 1:
+            return Response(
+                {"detail": "Укажите только одно действие с заглушением."}, status=400)
+
+        settings_obj, _created = ChannelMemberSettings.objects.get_or_create(
+            user=request.user, channel=channel)
+
+        if "mute_minutes" in data:
+            try:
+                minutes = int(data["mute_minutes"])
+            except (TypeError, ValueError):
+                return Response({"detail": "mute_minutes — целое число."}, status=400)
+            if not 0 < minutes <= self.MAX_MUTE_MINUTES:
+                return Response(
+                    {"detail": "Недопустимая длительность заглушения."}, status=400)
+            settings_obj.muted_until = timezone.now() + timedelta(minutes=minutes)
+            settings_obj.muted_forever = False
+        elif data.get("mute_forever"):
+            settings_obj.muted_forever = True
+            settings_obj.muted_until = None
+        elif "unmute" in data:
+            settings_obj.muted_forever = False
+            settings_obj.muted_until = None
+
+        serializer = ChannelMemberSettingsSerializer(settings_obj, data=data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        # save() пишет ВСЕ поля инстанса, включая muted_until/muted_forever,
+        # выставленные выше явно (тот же приём, что у MyServerSettings.patch).
+        serializer.save()
+        return Response(channel_member_settings_payload(settings_obj))
+
+
+class ChannelInvitesList(APIView):
+    """GET /api/channels/<id>/invites — личные приглашения, отправленные
+    ИМЕННО в этот канал, все статусы разом (правый клик → «Настроить канал» →
+    Приглашения). PATCH {"invites_paused"} — временно остановить НОВЫЕ личные
+    приглашения в канал (см. ServerInvites.post) — уже отправленные и решения
+    по ним не трогает.
+
+    Оба требуют manage_channels: список содержит других участников — это
+    модераторская информация, а не личная (в отличие от ChannelMemberSettingsView)."""
+
+    def get(self, request, channel_id):
+        channel = get_object_or_404(Channel, id=channel_id)
+        denied = _require_permission(request, channel.server, "manage_channels")
+        if denied:
+            return denied
+        qs = ServerInvite.objects.filter(
+            channel=channel, kind=ServerInvite.DIRECT,
+        ).select_related("invited_user")
+        return Response(ChannelInviteSerializer(qs, many=True).data)
+
+    def patch(self, request, channel_id):
+        channel = get_object_or_404(Channel, id=channel_id)
+        denied = _require_permission(request, channel.server, "manage_channels")
+        if denied:
+            return denied
+        if "invites_paused" not in request.data:
+            return Response({"detail": "Нечего менять."}, status=400)
+        channel.invites_paused = bool(request.data["invites_paused"])
+        channel.save(update_fields=["invites_paused"])
+        return Response({"invites_paused": channel.invites_paused})
+
+
+class ChannelClone(APIView):
+    """POST /api/channels/<id>/clone — точная копия канала: название, вид,
+    тема/статус, медленный режим, спойлер, приватность и допуски (роли +
+    персонально разрешённые участники) — БЕЗ единого сообщения. В этом и
+    смысл клонирования: настроенный «близнец» для новой темы, а не архив
+    переписки под новым именем (правый клик → «Клонировать канал»)."""
+
+    def post(self, request, channel_id):
+        channel = get_object_or_404(Channel, id=channel_id)
+        server = channel.server
+        denied = _require_permission(request, server, "manage_channels")
+        if denied:
+            return denied
+        last_position = server.channels.aggregate(Max("position"))["position__max"]
+        clone = Channel.objects.create(
+            server=server,
+            # (копия) — не «дай мне другое имя», а честный сигнал, что это
+            # именно клон: два канала с одинаковым названием на глаз не
+            # отличить друг от друга.
+            name=f"{channel.name} (копия)"[:100],
+            kind=channel.kind,
+            position=(last_position or 0) + 1,
+            status=channel.status,
+            slowmode_seconds=channel.slowmode_seconds,
+            is_spoiler=channel.is_spoiler,
+            is_private=channel.is_private,
+        )
+        clone.allowed_roles.set(channel.allowed_roles.all())
+        clone.allowed_users.set(channel.allowed_users.all())
+        data = ChannelSerializer(clone, context={"request": request}).data
+        payload = {
+            "op": "channel_create", "server_id": server.id,
+            "channel": _channel_broadcast_payload(data),
+        }
+        channel_layer = get_channel_layer()
+        if clone.is_private:
+            for user_id in _channel_visible_user_ids(clone):
+                async_to_sync(channel_layer.group_send)(
+                    f"user_{user_id}", {"type": "broadcast", "payload": payload})
+        else:
+            async_to_sync(channel_layer.group_send)(
+                f"server_{server.id}", {"type": "broadcast", "payload": payload})
+        return Response(data, status=201)
 
 
 class ChannelReadStateView(APIView):

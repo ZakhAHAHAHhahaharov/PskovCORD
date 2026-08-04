@@ -1,49 +1,48 @@
-import { FormEvent, useLayoutEffect, useRef, useState } from 'react'
+import { RefObject, useLayoutEffect, useRef, useState } from 'react'
 import {
-  Check, Eye, EyeOff, Link as LinkIcon, Lock, MessageSquare, Pin, Timer, UserPlus,
+  Bell, Check, CheckCheck, ChevronRight, Copy, Eye, EyeOff, Link as LinkIcon, Settings,
+  Trash2, UserPlus, Pin, Volume2, VolumeX,
 } from 'lucide-react'
+import { ChannelMemberSettings, ChannelNotifyLevel } from '../api'
 import { useHiddenNames } from '../hiddenNames'
-import ToggleSwitch from './ToggleSwitch'
 
 export interface ChannelContextMenuChannel {
   id: number
   name: string
   kind: 'text' | 'voice'
-  status: string
-  slowmode_seconds: number
-  is_private: boolean
-  allowed_role_ids: number[]
+  my_settings: ChannelMemberSettings
 }
 
-/** Пресеты медленного режима — те же ступени, что и в Discord: между 5 с и
- * 6 ч свободный ввод секунд был бы точностью, которая никому не нужна. */
-const SLOWMODE_PRESETS: { value: number; label: string }[] = [
-  { value: 0, label: 'Выкл.' },
-  { value: 5, label: '5 с' },
-  { value: 10, label: '10 с' },
-  { value: 30, label: '30 с' },
-  { value: 60, label: '1 мин' },
-  { value: 300, label: '5 мин' },
-  { value: 900, label: '15 мин' },
-  { value: 3600, label: '1 ч' },
-  { value: 21600, label: '6 ч' },
+/** Пресеты заглушения канала — сроком, плюс «Пока не включу» (мьют без
+ * срока, см. mute_forever). Меньше и грубее, чем у сервера в StatusMenu:
+ * канал заглушают на время конкретной темы, а не «пока меня нет», поэтому
+ * набор смещён к более коротким интервалам. */
+const MUTE_PRESETS: { minutes: number; label: string }[] = [
+  { minutes: 15, label: '15 минут' },
+  { minutes: 60, label: '1 час' },
+  { minutes: 180, label: '3 часа' },
+  { minutes: 480, label: '8 часов' },
+  { minutes: 1440, label: '24 часа' },
+]
+
+const NOTIFY_OPTIONS: { value: ChannelNotifyLevel; label: string }[] = [
+  { value: 'default', label: 'Использовать стандартные настройки' },
+  { value: 'all', label: 'Все сообщения' },
+  { value: 'mentions', label: 'Только @упоминания' },
+  { value: 'none', label: 'Ничего' },
 ]
 
 /**
  * Правый клик по каналу в ChannelSidebar. Позиционирование и закрытие по
- * клику вне себя/Escape — тот же приём, что в ServerContextMenu.
+ * клику вне себя/Escape — тот же приём, что в ServerContextMenu/
+ * MessageContextMenu; флайауты заглушения и уведомлений устроены как
+ * ReactionFlyout там же (отдельные плавающие панели-соседи, а не вложенные
+ * блоки внутри самого меню) — см. докстринг MessageContextMenu про то же
+ * самое решение и docstring-объяснение обработчика клика мимо ниже.
  *
- * Набор пунктов зависит от вида канала: приглашение/ссылка/статус/«скрыть
- * имена» — про голосовой, медленный режим — про текстовый (сообщений в
- * голосовом нет, ограничивать нечего, см. backend ChannelDetail.patch).
- * Всё, что меняет САМ канал, показывается только при manage_channels;
- * закрепление и «скрыть имена» — личная раскладка, доступна любому, кто
- * видит канал.
- *
- * useHiddenNames() читается прямо здесь (не пропсом) — это контекст из
- * VoiceProvider, а рендерится это меню внутри него же (см. AppShell), но САМ
- * AppShell — предок VoiceProvider, а не потомок, и не смог бы прочитать этот
- * контекст у себя в теле функции.
+ * Редактирование самого канала (название/тема/медленный режим/приватность)
+ * отсюда полностью переехало в ChannelSettingsModal («Настроить канал») —
+ * здесь остаются только однократные действия и личные переключатели.
  */
 export default function ChannelContextMenu({
   channel,
@@ -52,13 +51,15 @@ export default function ChannelContextMenu({
   canManageChannels,
   isPinned,
   onClose,
+  onMarkRead,
   onInvite,
   onTogglePin,
   onCopyLink,
-  onSetStatus,
-  onSetSlowmode,
-  roles,
-  onSetPrivacy,
+  onSetMute,
+  onSetNotificationLevel,
+  onOpenSettings,
+  onCloneChannel,
+  onRequestDelete,
 }: {
   channel: ChannelContextMenuChannel
   x: number
@@ -66,25 +67,26 @@ export default function ChannelContextMenu({
   canManageChannels: boolean
   isPinned: boolean
   onClose: () => void
+  onMarkRead: () => void
   onInvite: () => void
   onTogglePin: () => void
   onCopyLink: () => void
-  onSetStatus: (status: string) => void
-  onSetSlowmode: (seconds: number) => void
-  /** Роли сервера — из них выбирается, кому открыт приватный канал. Роль по
-   * умолчанию сюда не попадает: она есть у всех, и «приватный канал для всех»
-   * — это просто публичный канал. */
-  roles: { id: number; name: string; color: string; is_default: boolean }[]
-  onSetPrivacy: (isPrivate: boolean, allowedRoleIds: number[]) => void
+  /** minutes — на срок, 'forever' — «Пока не включу», null — снять. */
+  onSetMute: (minutes: number | 'forever' | null) => void
+  onSetNotificationLevel: (level: ChannelNotifyLevel) => void
+  onOpenSettings: () => void
+  onCloneChannel: () => void
+  onRequestDelete: () => void
 }) {
   const ref = useRef<HTMLDivElement>(null)
-  const [statusDraft, setStatusDraft] = useState(channel.status)
+  const [muteFlyoutOpen, setMuteFlyoutOpen] = useState(false)
+  const [notifyFlyoutOpen, setNotifyFlyoutOpen] = useState(false)
+  const muteBtnRef = useRef<HTMLButtonElement>(null)
+  const notifyBtnRef = useRef<HTMLButtonElement>(null)
   const { isHidden, setHidden } = useHiddenNames()
-  const hideNames = isHidden(channel.id)
   const isVoice = channel.kind === 'voice'
-  // Роль по умолчанию есть у всех — «открыть ей приватный канал» означало бы
-  // сделать его публичным окольным путём, поэтому в список не попадает.
-  const assignableRoles = roles.filter((r) => !r.is_default)
+  const hideNames = isHidden(channel.id)
+  const muted = channel.my_settings.muted
 
   useLayoutEffect(() => {
     const el = ref.current
@@ -105,9 +107,19 @@ export default function ChannelContextMenu({
     el.style.top = `${top}px`
   }, [x, y])
 
+  // Клик мимо и Esc закрывают ВСЁ меню разом, включая открытый флайаут — тот
+  // не самостоятельный попап, а часть этого же меню (см. тот же приём и его
+  // докстринг в MessageContextMenu). Флайауты — отдельные DOM-узлы (соседи, а
+  // не дети ref'а), и клик внутри НИХ не должен закрывать меню: иначе
+  // mousedown срывал бы меню (а с ним и флайаут) ещё до того, как за ним
+  // придёт click с самим выбором.
   useLayoutEffect(() => {
     const onMouseDown = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) onClose()
+      if (e.button !== 0) return
+      if (ref.current?.contains(e.target as Node)) return
+      const flyoutEl = document.querySelector('.channel-ctx-flyout')
+      if (flyoutEl?.contains(e.target as Node)) return
+      onClose()
     }
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose()
@@ -120,169 +132,64 @@ export default function ChannelContextMenu({
     }
   }, [onClose])
 
-  const submitStatus = (e: FormEvent) => {
-    e.preventDefault()
-    onSetStatus(statusDraft.trim())
+  const act = (fn: () => void) => () => {
+    fn()
     onClose()
   }
 
   return (
-    <div ref={ref} className="profile-popup channel-context-menu" style={{ left: x, top: y }}>
-      <div className="profile-popup-label">{channel.name}</div>
-
-      <div className="profile-popup-menu">
-        {isVoice && (
-          <button
-            type="button"
-            className="profile-popup-item"
-            onClick={() => {
-              onInvite()
-              onClose()
-            }}
-          >
-            <UserPlus size={15} /> Пригласить в голосовой чат
+    <>
+      <div ref={ref} className="profile-popup channel-context-menu" style={{ left: x, top: y }}>
+        <div className="profile-popup-label">{channel.name}</div>
+        <div className="profile-popup-menu">
+          <button type="button" className="profile-popup-item" onClick={act(onMarkRead)}>
+            <CheckCheck size={15} /> Пометить как прочитанное
           </button>
-        )}
-        <button
-          type="button"
-          className="profile-popup-item"
-          onClick={() => {
-            onTogglePin()
-            onClose()
-          }}
-        >
-          <Pin size={15} /> {isPinned ? 'Открепить канал' : 'Закрепить канал вверху'}
-        </button>
-        {isVoice && (
-          <button
-            type="button"
-            className="profile-popup-item"
-            onClick={() => {
-              onCopyLink()
-              onClose()
-            }}
-          >
+          <button type="button" className="profile-popup-item" onClick={act(onInvite)}>
+            <UserPlus size={15} /> {isVoice ? 'Пригласить в голосовой чат' : 'Пригласить на канал'}
+          </button>
+          <button type="button" className="profile-popup-item" onClick={act(onTogglePin)}>
+            <Pin size={15} /> {isPinned ? 'Открепить канал' : 'Закрепить канал вверху'}
+          </button>
+          <button type="button" className="profile-popup-item" onClick={act(onCopyLink)}>
             <LinkIcon size={15} /> Копировать ссылку
           </button>
-        )}
-      </div>
-
-      {isVoice && canManageChannels && (
-        <>
-          <div className="profile-popup-divider" />
-          <div className="settings-field channel-menu-status">
-            <div className="settings-field-header">
-              <span className="settings-field-label">
-                <MessageSquare size={14} /> Статус канала
-              </span>
-            </div>
-            <form className="invite-link-row" onSubmit={submitStatus}>
-              <input
-                className="field-input"
-                value={statusDraft}
-                onChange={(e) => setStatusDraft(e.target.value)}
-                placeholder="Например, играем в CS"
-                maxLength={120}
-              />
-              <button type="submit" className="btn-small" title="Сохранить статус">
-                <Check size={14} />
-              </button>
-            </form>
-          </div>
-        </>
-      )}
-
-      {!isVoice && canManageChannels && (
-        <>
-          <div className="profile-popup-divider" />
-          <div className="settings-field channel-menu-status">
-            <div className="settings-field-header">
-              <span className="settings-field-label">
-                <Timer size={14} /> Медленный режим
-              </span>
-            </div>
-            <div className="channel-menu-slowmode">
-              {SLOWMODE_PRESETS.map((preset) => (
-                <button
-                  key={preset.value}
-                  type="button"
-                  className={`btn-small channel-menu-slowmode-item ${
-                    channel.slowmode_seconds === preset.value ? 'active' : ''
-                  }`}
-                  onClick={() => {
-                    onSetSlowmode(preset.value)
-                    onClose()
-                  }}
-                >
-                  {preset.label}
-                </button>
-              ))}
-            </div>
-          </div>
-        </>
-      )}
-
-      {canManageChannels && (
-        <>
-          <div className="profile-popup-divider" />
-          <div className="settings-field channel-menu-status">
-            <div className="settings-field-header">
-              <span className="settings-field-label">
-                <Lock size={14} /> Приватный канал
-              </span>
-              <ToggleSwitch
-                checked={channel.is_private}
-                onChange={(v) => onSetPrivacy(v, channel.allowed_role_ids)}
-                ariaLabel="Приватный канал"
-              />
-            </div>
-            {channel.is_private && (
-              <>
-                <div className="channel-menu-hint">
-                  Кому открыт канал (помимо тех, кто управляет каналами):
-                </div>
-                <div className="channel-menu-roles">
-                  {assignableRoles.length === 0 && (
-                    <span className="channel-menu-hint">
-                      На сервере пока нет ролей, кроме роли по умолчанию.
-                    </span>
-                  )}
-                  {assignableRoles.map((role) => {
-                    const allowed = channel.allowed_role_ids.includes(role.id)
-                    return (
-                      <label key={role.id} className="server-flyout-checkbox">
-                        <input
-                          type="checkbox"
-                          checked={allowed}
-                          onChange={() =>
-                            onSetPrivacy(
-                              true,
-                              allowed
-                                ? channel.allowed_role_ids.filter((id) => id !== role.id)
-                                : [...channel.allowed_role_ids, role.id],
-                            )
-                          }
-                        />
-                        <span
-                          className="srv-role-dot"
-                          style={{ background: role.color }}
-                        />
-                        {role.name}
-                      </label>
-                    )
-                  })}
-                </div>
-              </>
-            )}
-          </div>
-        </>
-      )}
-
-      {isVoice && (
-        <>
-          <div className="profile-popup-divider" />
-          <div className="profile-popup-menu">
-            <label className="server-flyout-checkbox">
+          {muted ? (
+            <button
+              type="button"
+              className="profile-popup-item"
+              onClick={act(() => onSetMute(null))}
+            >
+              <Volume2 size={15} /> Включить звук
+            </button>
+          ) : (
+            <button
+              ref={muteBtnRef}
+              type="button"
+              className={`profile-popup-item ${muteFlyoutOpen ? 'active' : ''}`}
+              onClick={() => {
+                setMuteFlyoutOpen((v) => !v)
+                setNotifyFlyoutOpen(false)
+              }}
+            >
+              <VolumeX size={15} /> Заглушить канал
+              <ChevronRight size={14} className="message-ctx-chevron" />
+            </button>
+          )}
+          <button
+            ref={notifyBtnRef}
+            type="button"
+            className={`profile-popup-item ${notifyFlyoutOpen ? 'active' : ''}`}
+            onClick={() => {
+              setNotifyFlyoutOpen((v) => !v)
+              setMuteFlyoutOpen(false)
+            }}
+          >
+            <Bell size={15} /> Параметры уведомлений
+            <ChevronRight size={14} className="message-ctx-chevron" />
+          </button>
+          {isVoice && (
+            <label className="profile-popup-item channel-ctx-checkbox-item">
               <input
                 type="checkbox"
                 checked={hideNames}
@@ -290,6 +197,129 @@ export default function ChannelContextMenu({
               />
               {hideNames ? <EyeOff size={15} /> : <Eye size={15} />} Скрыть имена
             </label>
+          )}
+        </div>
+
+        {canManageChannels && (
+          <>
+            <div className="profile-popup-divider" />
+            <div className="profile-popup-menu">
+              <button type="button" className="profile-popup-item" onClick={act(onOpenSettings)}>
+                <Settings size={15} /> Настроить канал
+              </button>
+              <button type="button" className="profile-popup-item" onClick={act(onCloneChannel)}>
+                <Copy size={15} /> Клонировать канал
+              </button>
+              <button
+                type="button"
+                className="profile-popup-item profile-popup-item-danger"
+                onClick={act(onRequestDelete)}
+              >
+                <Trash2 size={15} /> Удалить канал
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+
+      {muteFlyoutOpen && (
+        <OptionFlyout
+          triggerRef={muteBtnRef}
+          options={MUTE_PRESETS.map((p) => ({ key: String(p.minutes), label: p.label }))}
+          extra={{ key: 'forever', label: 'Пока не включу' }}
+          onPick={(key) => {
+            onSetMute(key === 'forever' ? 'forever' : Number(key))
+            onClose()
+          }}
+        />
+      )}
+
+      {notifyFlyoutOpen && (
+        <OptionFlyout
+          triggerRef={notifyBtnRef}
+          options={NOTIFY_OPTIONS.map((o) => ({
+            key: o.value,
+            label: o.label,
+            selected: o.value === channel.my_settings.notification_level,
+          }))}
+          onPick={(key) => {
+            onSetNotificationLevel(key as ChannelNotifyLevel)
+            onClose()
+          }}
+        />
+      )}
+    </>
+  )
+}
+
+/** Флайаут-подменю с колонкой вариантов — заглушение и параметры уведомлений
+ * устроены одинаково (список, клик по варианту сразу применяет и закрывает
+ * всё меню), различаются только содержимым. Позиционирование — тот же
+ * приём, что у ReactionFlyout в MessageContextMenu: справа от кнопки-
+ * триггера, с прижатием к краю экрана. */
+function OptionFlyout({
+  triggerRef,
+  options,
+  extra,
+  onPick,
+}: {
+  triggerRef: RefObject<HTMLButtonElement | null>
+  options: { key: string; label: string; selected?: boolean }[]
+  /** Пункт под разделителем — «Пока не включу» у заглушения. */
+  extra?: { key: string; label: string }
+  onPick: (key: string) => void
+}) {
+  const ref = useRef<HTMLDivElement>(null)
+
+  useLayoutEffect(() => {
+    const trigger = triggerRef.current
+    const el = ref.current
+    if (!trigger || !el) return
+    const margin = 8
+    const triggerRect = trigger.getBoundingClientRect()
+    const panelRect = el.getBoundingClientRect()
+    let left = triggerRect.right + 4
+    if (left + panelRect.width > window.innerWidth - margin) {
+      left = triggerRect.left - panelRect.width - 4
+    }
+    let top = triggerRect.top
+    if (top + panelRect.height > window.innerHeight - margin) {
+      top = window.innerHeight - margin - panelRect.height
+    }
+    left = Math.max(margin, left)
+    top = Math.max(margin, top)
+    el.style.left = `${left}px`
+    el.style.top = `${top}px`
+  }, [triggerRef])
+
+  return (
+    <div ref={ref} className="profile-popup channel-ctx-flyout">
+      <div className="profile-popup-menu">
+        {options.map((o) => (
+          <button
+            key={o.key}
+            type="button"
+            className="profile-popup-item channel-ctx-option"
+            onClick={() => onPick(o.key)}
+          >
+            <span className={`channel-ctx-radio ${o.selected ? 'checked' : ''}`}>
+              {o.selected && <Check size={11} />}
+            </span>
+            {o.label}
+          </button>
+        ))}
+      </div>
+      {extra && (
+        <>
+          <div className="profile-popup-divider" />
+          <div className="profile-popup-menu">
+            <button
+              type="button"
+              className="profile-popup-item"
+              onClick={() => onPick(extra.key)}
+            >
+              {extra.label}
+            </button>
           </div>
         </>
       )}

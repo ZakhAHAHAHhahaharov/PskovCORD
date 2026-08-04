@@ -82,7 +82,9 @@ def can_see_channel(user, channel, perms=None) -> bool:
     Публичный канал — по обычному view_channels. Приватный (Channel.is_private)
     им НЕ открывается: нужен либо manage_channels (тот, кто заводит каналы,
     обязан видеть все — иначе он мог бы создать канал и тут же потерять к нему
-    доступ), либо роль из Channel.allowed_roles.
+    доступ), либо роль из Channel.allowed_roles, либо личный допуск в
+    Channel.allowed_users (см. вкладка «Права доступа» в ChannelSettingsModal —
+    доступ дают ролью И/ИЛИ конкретным человеком, это не взаимоисключающе).
 
     perms — уже посчитанные права (chat.roles.permissions_for), если они есть
     у вызывающего: эта функция зовётся в цикле по каналам сервера, и считать
@@ -98,6 +100,8 @@ def can_see_channel(user, channel, perms=None) -> bool:
     if not channel.is_private:
         return True
     if perms.get("manage_channels"):
+        return True
+    if channel.allowed_users.filter(id=user.id).exists():
         return True
     membership = Membership.objects.filter(
         user=user, server_id=channel.server_id).prefetch_related("roles").first()

@@ -419,29 +419,109 @@ class Channel(models.Model):
     # звонка (presence.call_topic/voice_topic_update): та живёт только пока
     # в голосовом канале кто-то есть и стирается вместе с последним ушедшим,
     # этот виден всегда, пока его явно не поменяют/не очистят.
-    status = models.CharField(max_length=120, blank=True, default="")
+    #
+    # То же самое поле служит и «темой канала» для ТЕКСТОВЫХ каналов (правый
+    # клик → «Настроить канал» → Обзор) — заводить для этого отдельное поле
+    # незачем: разница только в том, для канала какого вида его показывают
+    # (см. ChannelContextMenu/ChannelSettingsModal), а хранится и валидируется
+    # оно одинаково для обоих. 1024 — предел темы (как у Discord), голосовому
+    # статусу столько не нужно, но и не мешает.
+    status = models.CharField(max_length=1024, blank=True, default="")
     # Медленный режим: сколько секунд автор обязан ждать между своими
     # сообщениями в этом канале. 0 — выключен. Обходится правом
     # bypass_slowmode (см. chat.roles) — проверка живёт в
     # GatewayConsumer._create_message, где и создаётся сообщение.
     slowmode_seconds = models.PositiveIntegerField(default=0)
+    # «Канал со спойлерами» (Обзор в ChannelSettingsModal): вход в канал на
+    # фронте сначала показывает предупреждение о чувствительном контенте —
+    # чисто клиентский гейт, бэкенду достаточно знать сам флаг.
+    is_spoiler = models.BooleanField(default=False)
 
     # Приватный канал: виден только тем, у кого есть manage_channels, и
-    # обладателям ролей из allowed_roles. Обычное право view_channels на него
-    # не распространяется — в этом и смысл: «видеть каналы» даёт публичные,
-    # а к приватному нужен явный допуск (см. chat.permissions.can_see_channel).
+    # обладателям ролей из allowed_roles ЛИБО явно перечисленным в
+    # allowed_users. Обычное право view_channels на него не распространяется —
+    # в этом и смысл: «видеть каналы» даёт публичные, а к приватному нужен
+    # явный допуск (см. chat.permissions.can_see_channel).
     is_private = models.BooleanField(default=False)
     # Роли, которым открыт приватный канал. Пусто — канал виден только
     # управляющим каналами (роль «staff-only»), это осмысленное состояние по
     # умолчанию сразу после создания, а не полуфабрикат.
     allowed_roles = models.ManyToManyField(
         Role, blank=True, related_name="allowed_channels")
+    # Персонально допущенные участники — вдобавок к тем, кто попадает через
+    # allowed_roles. Нужны отдельно: вкладка «Права доступа» показывает «кто
+    # сейчас видит канал» и даёт СНЯТЬ доступ конкретному человеку — а снять
+    # роль у него на этом основании было бы не тем действием (роль может
+    # открывать ему и другие каналы). Из allowed_users убрать можно только
+    # того, кто в нём и лежит — доступ через роль отсюда не отнять, только
+    # через саму роль (см. ChannelSettingsModal, там же и обе причины
+    # видны рядом).
+    allowed_users = models.ManyToManyField(
+        settings.AUTH_USER_MODEL, blank=True, related_name="allowed_private_channels")
+    # «Приостановить приглашения» (вкладка «Приглашения»): временно не даёт
+    # заводить НОВЫЕ приглашения именно В ЭТОТ канал (chat.views.ServerInvites/
+    # ServerInviteLink) — уже разосланные и решения по ним не затрагивает.
+    invites_paused = models.BooleanField(default=False)
 
     class Meta:
         ordering = ["position", "id"]
 
     def __str__(self) -> str:
         return f"{self.server.name}#{self.name}"
+
+
+class ChannelMemberSettings(models.Model):
+    """Личные настройки уведомлений и заглушения ОДНОГО канала — тот же
+    смысл, что у Membership для сервера целиком (см. её докстринг про
+    notification_level/muted_*), только per-канал и с добавочным вариантом
+    NOTIFY_DEFAULT «как на сервере»: этими настройками можно НЕ переопределять
+    ничего, оставив решение серверному Membership.notification_level — именно
+    поэтому default тут не совпадает по смыслу ни с одним из серверных.
+
+    Строка заводится только когда участник явно что-то поменял для этого
+    канала (см. chat.views.ChannelMemberSettingsView) — «стандартные
+    настройки» сама по себе строки не требует, это и есть её отсутствие.
+    """
+
+    NOTIFY_DEFAULT = "default"
+    NOTIFY_ALL = "all"
+    NOTIFY_MENTIONS = "mentions"
+    NOTIFY_NONE = "none"
+    NOTIFY_CHOICES = [
+        (NOTIFY_DEFAULT, "Как на сервере"),
+        (NOTIFY_ALL, "Все сообщения"),
+        (NOTIFY_MENTIONS, "Только упоминания"),
+        (NOTIFY_NONE, "Ничего"),
+    ]
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+        related_name="channel_settings")
+    channel = models.ForeignKey(
+        Channel, on_delete=models.CASCADE, related_name="member_settings")
+    notification_level = models.CharField(
+        max_length=10, choices=NOTIFY_CHOICES, default=NOTIFY_DEFAULT)
+    # То же устройство заглушения, что у Membership: срок — muted_until в
+    # будущем, «пока не включу» — отдельный флаг muted_forever, а не
+    # сигнальная дата.
+    muted_until = models.DateTimeField(null=True, blank=True)
+    muted_forever = models.BooleanField(default=False)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["user", "channel"], name="unique_channel_member_settings"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.user} @ {self.channel}"
+
+    def is_muted(self, now=None) -> bool:
+        if self.muted_forever:
+            return True
+        if self.muted_until is None:
+            return False
+        return self.muted_until > (now or timezone.now())
 
 
 class Message(models.Model):

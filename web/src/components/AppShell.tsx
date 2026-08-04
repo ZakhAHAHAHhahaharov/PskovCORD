@@ -188,7 +188,11 @@ export default function AppShell() {
   const channelMessages = useChannelMessages(currentChannel, channelId, gateway, pendingEditsRef)
   const { setMessages, messagesRef } = channelMessages
 
-  const inviteLinks = useInviteLinks(servers, setServers, selectServer, handleJoinVoice)
+  // «Попасть» в приглашённый канал — по виду: голосовой подключает, текстовый
+  // просто выбирается в сайдбаре (см. докстринг useInviteLinks).
+  const inviteLinks = useInviteLinks(servers, setServers, selectServer, (ch) =>
+    ch.kind === 'voice' ? handleJoinVoice(ch) : setChannelId(ch.id),
+  )
 
   // --- очередь исходящих (статусы доставки, ретраи, черновики) -----------
   // Транспорт ставится отдельно от самой очереди: outbox живёт вне React (его

@@ -1,11 +1,13 @@
-import { useState, MouseEvent as ReactMouseEvent } from 'react'
+import { Fragment, ReactNode, useState, MouseEvent as ReactMouseEvent } from 'react'
 import { MessageCircle, Pin, Users, UserPlus, Check, X } from 'lucide-react'
 import { Conversation, FriendsState, User } from '../api'
 import { conversationDisplayName } from '../conversation'
+import { EMOJI_TOKEN_RE } from '../emoji'
 import { useNicknamesVersion } from '../nicknames'
 import { useUserStatuses } from '../presence'
 
 import Avatar from './Avatar'
+import CustomEmojiImage from './CustomEmojiImage'
 import SidebarBottomBar from './SidebarBottomBar'
 import UserName from './UserName'
 import { VoiceState } from './AppShell'
@@ -19,6 +21,46 @@ function conversationAvatar(c: Conversation): { name: string; color: string; ima
     return { name: first.username, color: first.avatar_color, image: first.avatar_image }
   }
   return { name: c.name || '#', color: '#5865f2', image: '' }
+}
+
+/** Сколько символов показывать в предпросмотре последнего сообщения — то же
+ * значение, что и раньше было в голом content.slice(0, 42). */
+const PREVIEW_MAX_CHARS = 42
+
+/** Предпросмотр последнего сообщения диалога: кастомный эмодзи — картинкой
+ * (как он и выглядит в самой переписке), а не сырым токеном "<:имя:id>";
+ * стикер — просто словом «Стикер», рисовать его целиком в компактной строке
+ * списка диалогов было бы избыточно (см. renderContent в MessageList.tsx —
+ * тот же принцип, но для полноразмерной ленты). */
+function renderLastMessagePreview(content: string): ReactNode {
+  if (content.includes('<sticker:')) return 'Стикер'
+  if (!content.includes('<')) return content.slice(0, PREVIEW_MAX_CHARS)
+
+  const matches = [...content.matchAll(EMOJI_TOKEN_RE)]
+  if (matches.length === 0) return content.slice(0, PREVIEW_MAX_CHARS)
+
+  const nodes: ReactNode[] = []
+  let charsUsed = 0
+  let lastIndex = 0
+  const pushText = (text: string, key: string) => {
+    const slice = text.slice(0, PREVIEW_MAX_CHARS - charsUsed)
+    if (slice) nodes.push(<Fragment key={key}>{slice}</Fragment>)
+    charsUsed += slice.length
+  }
+  matches.forEach((match, i) => {
+    if (charsUsed >= PREVIEW_MAX_CHARS) return
+    const start = match.index ?? 0
+    if (start > lastIndex) pushText(content.slice(lastIndex, start), `t-${i}`)
+    if (charsUsed < PREVIEW_MAX_CHARS) {
+      nodes.push(<CustomEmojiImage key={`e-${i}`} id={Number(match[3])} className="preview-emoji" />)
+      charsUsed += 1 // эмодзи в бюджете превью считается за один символ
+    }
+    lastIndex = start + match[0].length
+  })
+  if (lastIndex < content.length && charsUsed < PREVIEW_MAX_CHARS) {
+    pushText(content.slice(lastIndex), 't-last')
+  }
+  return nodes
 }
 
 /**
@@ -170,7 +212,9 @@ export default function HomeSidebar({
                 <div className="member-info">
                   <span className="member-name">{conversationDisplayName(c)}</span>
                   {c.last_message && (
-                    <span className="member-voice">{c.last_message.content.slice(0, 42)}</span>
+                    <span className="member-voice">
+                      {renderLastMessagePreview(c.last_message.content)}
+                    </span>
                   )}
                 </div>
                 {c.pinned && <Pin size={12} className="conversation-pin-mark" />}

@@ -138,6 +138,26 @@ export interface QRScanResponse {
   device: { ip_address: string | null; user_agent: string }
 }
 
+/** Уровень уведомлений — server-wide вариант (без "как на сервере": сервер
+ * сам себе и есть база отсчёта). Канальный вариант — см. ChannelNotifyLevel
+ * ниже, у него есть четвёртое значение. */
+export type NotifyLevelBase = 'all' | 'mentions' | 'none'
+/** Уровень уведомлений ОДНОГО канала — 'default' означает «как на сервере»
+ * (см. backend chat.models.ChannelMemberSettings). */
+export type ChannelNotifyLevel = 'default' | NotifyLevelBase
+
+/** Личные настройки уведомлений/заглушения ОДНОГО канала — тот же смысл, что
+ * у ServerMemberSettings для сервера целиком, но per-канал (см. backend
+ * chat.models.ChannelMemberSettings и channel_member_settings_payload). */
+export interface ChannelMemberSettings {
+  notification_level: ChannelNotifyLevel
+  /** Заглушен ПРЯМО СЕЙЧАС — как и у ServerMemberSettings, уже учитывает
+   * muted_until на момент ответа сервера. */
+  muted: boolean
+  muted_until: string | null
+  muted_forever: boolean
+}
+
 export interface Channel {
   id: number
   server: number
@@ -148,17 +168,33 @@ export interface Channel {
   call_started_at: number | null
   /** Статус звонка, который видят все; null если пусто. Только voice. */
   topic: string | null
-  /** Персистентный статус канала (правый клик → «Установить статус канала»),
-   * в отличие от эфемерного topic выше — переживает опустение канала. */
+  /** Персистентный статус канала (правый клик → «Настроить канал» → Обзор),
+   * в отличие от эфемерного topic выше — переживает опустение канала. У
+   * голосового канала это «статус» («играем в CS»), у текстового — «тема
+   * канала», показанная в шапке рядом с именем (см. AppShellChat) — то же
+   * самое поле, разная подпись в зависимости от вида канала. */
   status: string
   /** Медленный режим: сколько секунд участник ждёт между своими сообщениями.
    * 0 — выключен. Обходится правом bypass_slowmode. Только для текстовых. */
   slowmode_seconds: number
-  /** Приватный канал — виден только управляющим каналами и обладателям ролей
-   * из allowed_role_ids; обычное view_channels его не открывает. */
+  /** «Канал со спойлерами» — вход показывает предупреждение о чувствительном
+   * контенте, прежде чем открыть канал (см. AppShellNav/ChannelSidebar). */
+  is_spoiler: boolean
+  /** Приватный канал — виден только управляющим каналами, обладателям ролей
+   * из allowed_role_ids и лично допущенным allowed_user_ids; обычное
+   * view_channels его не открывает. */
   is_private: boolean
-  /** Кому открыт приватный канал. Пусто у публичного. */
+  /** Кому открыт приватный канал по роли. Пусто у публичного. */
   allowed_role_ids: number[]
+  /** Кому открыт приватный канал лично (см. вкладка «Права доступа» —
+   * снять доступ можно только отсюда, роль этим не трогается). */
+  allowed_user_ids: number[]
+  /** Личные приглашения в этот канал временно не заводятся (вкладка
+   * «Приглашения» → «Приостановить приглашения»). Уже разосланных не
+   * касается. */
+  invites_paused: boolean
+  /** Мои личные настройки уведомлений/заглушения для ЭТОГО канала. */
+  my_settings: ChannelMemberSettings
 }
 
 /** Права роли на сервере — 1:1 с булевыми полями chat.models.Role.
@@ -276,14 +312,20 @@ export interface ServerMemberSettings {
   pinned_channel_ids: number[]
 }
 
-/** Предпросмотр ссылки-приглашения в конкретный голосовой канал — БЕЗ
- * вступления на сервер (см. backend chat.views.InvitePreview). Показывается
- * в модалке подтверждения перед тем, как реально дёрнуть redeemServerInvite. */
+/** Предпросмотр ссылки-приглашения в конкретный канал — БЕЗ вступления на
+ * сервер (см. backend chat.views.InvitePreview). Показывается в модалке
+ * подтверждения перед тем, как реально дёрнуть redeemServerInvite. */
 export interface InvitePreview {
   server: { id: number; name: string; icon: string }
-  channel: { id: number; name: string }
+  channel: {
+    id: number
+    name: string
+    kind: 'text' | 'voice'
+    /** Сколько сейчас в голосовом канале — только у voice: у текстового
+     * канала нет понятия «сейчас в нём», только у кого он виден. */
+    participant_count?: number
+  }
   already_member: boolean
-  participant_count: number
 }
 
 export interface Server {
@@ -317,12 +359,21 @@ export type ServerInviteStatus = 'pending' | 'accepted' | 'declined'
 export interface ServerInviteEntry {
   id: number
   server: { id: number; name: string; icon: string }
-  /** Есть, только если приглашение — в конкретный голосовой канал (см.
+  /** Есть, только если приглашение — в конкретный канал (см.
    * ChannelInviteModal), а не на сервер целиком. */
   channel: { id: number; name: string } | null
   created_by: User
   created_at: string
   status: ServerInviteStatus
+}
+
+/** Одна строка вкладки «Приглашения» в ChannelSettingsModal — кому и когда
+ * отправили личное приглашение именно в этот канал (см. api.channelInvites). */
+export interface ChannelInviteEntry {
+  id: number
+  invited_user: User
+  status: ServerInviteStatus
+  created_at: string
 }
 
 /** Одна пригласительная ссылка участника — строка модераторского списка
@@ -1349,24 +1400,81 @@ export const api = {
       method: 'PATCH',
       body: JSON.stringify({ status }),
     }),
+  /** Переименовать канал. Нужно manage_channels. */
+  renameChannel: (channelId: number, name: string): Promise<Channel> =>
+    req(`/api/channels/${channelId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ name }),
+    }),
+  /** «Канал со спойлерами» — см. Channel.is_spoiler. Нужно manage_channels. */
+  setChannelSpoiler: (channelId: number, isSpoiler: boolean): Promise<Channel> =>
+    req(`/api/channels/${channelId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ is_spoiler: isSpoiler }),
+    }),
   /** Медленный режим канала в секундах (0 — выключить). Нужно manage_channels. */
   setChannelSlowmode: (channelId: number, seconds: number): Promise<Channel> =>
     req(`/api/channels/${channelId}`, {
       method: 'PATCH',
       body: JSON.stringify({ slowmode_seconds: seconds }),
     }),
-  /** Приватность канала и список ролей, которым он открыт. Нужно manage_channels. */
+  /** Приватность канала, роли и лично допущенные участники, которым он
+   * открыт. Нужно manage_channels. */
   setChannelPrivacy: (
     channelId: number,
     isPrivate: boolean,
     allowedRoleIds: number[],
+    allowedUserIds: number[],
   ): Promise<Channel> =>
     req(`/api/channels/${channelId}`, {
       method: 'PATCH',
       body: JSON.stringify({
         is_private: isPrivate,
         allowed_role_ids: allowedRoleIds,
+        allowed_user_ids: allowedUserIds,
       }),
+    }),
+  /** Точная копия канала (название, тема, медленный режим, приватность,
+   * спойлер), БЕЗ единого сообщения. Нужно manage_channels. */
+  cloneChannel: (channelId: number): Promise<Channel> =>
+    req(`/api/channels/${channelId}/clone`, { method: 'POST' }),
+  /** Безвозвратно удалить канал — каскадом уносит сообщения, вложения,
+   * закрепления. Нужно manage_channels. */
+  deleteChannel: (channelId: number) =>
+    req(`/api/channels/${channelId}`, { method: 'DELETE' }),
+
+  /** Мои личные настройки уведомлений/заглушения ОДНОГО канала. */
+  channelMemberSettings: (channelId: number): Promise<ChannelMemberSettings> =>
+    req(`/api/channels/${channelId}/settings`),
+  /** Заглушение — mute_minutes ИЛИ mute_forever ИЛИ unmute, ровно один из
+   * трёх (см. backend chat.views.ChannelMemberSettingsView), тот же приём,
+   * что и у updateServerSettings. */
+  updateChannelMemberSettings: (
+    channelId: number,
+    data: Partial<{
+      notification_level: ChannelNotifyLevel
+      mute_minutes: number
+      mute_forever: boolean
+      unmute: boolean
+    }>,
+  ): Promise<ChannelMemberSettings> =>
+    req(`/api/channels/${channelId}/settings`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    }),
+  /** Модераторский список личных приглашений именно в этот канал — вкладка
+   * «Приглашения» в ChannelSettingsModal. Нужно manage_channels. */
+  channelInvites: (channelId: number): Promise<ChannelInviteEntry[]> =>
+    req(`/api/channels/${channelId}/invites`),
+  /** «Приостановить приглашения» — временно не даёт заводить НОВЫЕ личные
+   * приглашения в канал; уже отправленные не трогает. Нужно manage_channels. */
+  setChannelInvitesPaused: (
+    channelId: number,
+    paused: boolean,
+  ): Promise<{ invites_paused: boolean }> =>
+    req(`/api/channels/${channelId}/invites`, {
+      method: 'PATCH',
+      body: JSON.stringify({ invites_paused: paused }),
     }),
 
   /** before — страница старше указанного сообщения (скролл вверх),
