@@ -1914,10 +1914,17 @@ class ChannelCreate(APIView):
 
 class ChannelDetail(APIView):
     """PATCH /api/channels/<id> {"name"?, "status"?, "slowmode_seconds"?,
-    "is_spoiler"?, "is_private"?, "allowed_role_ids"?, "allowed_user_ids"?,
-    "invites_paused"?} — правый клик по каналу → «Настроить канал» (см.
-    web/src/components/ChannelSettingsModal.tsx; часть полей когда-то
-    редактировалась прямо в ChannelContextMenu, теперь только через модалку).
+    "is_spoiler"?, "age_restricted"?, "is_private"?, "allowed_role_ids"?,
+    "allowed_user_ids"?, "invites_paused"?} — правый клик по каналу →
+    «Настроить канал» (см. web/src/components/ChannelSettingsModal.tsx; часть
+    полей когда-то редактировалась прямо в ChannelContextMenu, теперь только
+    через модалку).
+
+    is_spoiler и age_restricted — независимые поля, но на фронте это ОДИН
+    radio-выбор «Видимость контента» (см. ChannelSettingsModal
+    onSetVisibility) — взаимную исключаемость обеспечивает он, присылая оба
+    флага разом; сюда они приходят уже готовой парой, отдельно проверять
+    «не выставлены ли оба» не нужно.
 
     Персистентный Channel.status, а НЕ эфемерная тема звонка
     (presence.call_topic/voice_topic_update, chat.consumers
@@ -1938,13 +1945,14 @@ class ChannelDetail(APIView):
         status_text = request.data.get("status")
         slowmode_raw = request.data.get("slowmode_seconds")
         is_spoiler = request.data.get("is_spoiler")
+        age_restricted = request.data.get("age_restricted")
         is_private = request.data.get("is_private")
         allowed_role_ids = request.data.get("allowed_role_ids")
         allowed_user_ids = request.data.get("allowed_user_ids")
         invites_paused = request.data.get("invites_paused")
         if all(v is None for v in (
-            name, status_text, slowmode_raw, is_spoiler, is_private,
-            allowed_role_ids, allowed_user_ids, invites_paused,
+            name, status_text, slowmode_raw, is_spoiler, age_restricted,
+            is_private, allowed_role_ids, allowed_user_ids, invites_paused,
         )):
             return Response({"detail": "Нечего менять."}, status=400)
         updated = []
@@ -1966,6 +1974,9 @@ class ChannelDetail(APIView):
         if is_spoiler is not None:
             channel.is_spoiler = bool(is_spoiler)
             updated.append("is_spoiler")
+        if age_restricted is not None:
+            channel.age_restricted = bool(age_restricted)
+            updated.append("age_restricted")
         if is_private is not None:
             channel.is_private = bool(is_private)
             updated.append("is_private")
@@ -2201,6 +2212,7 @@ class ChannelClone(APIView):
             status=channel.status,
             slowmode_seconds=channel.slowmode_seconds,
             is_spoiler=channel.is_spoiler,
+            age_restricted=channel.age_restricted,
             is_private=channel.is_private,
         )
         clone.allowed_roles.set(channel.allowed_roles.all())

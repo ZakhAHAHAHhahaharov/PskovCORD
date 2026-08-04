@@ -1,12 +1,15 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
-  Hash, Lock, Timer, Trash2, UserMinus, Volume2,
+  Bold, Eye, EyeOff, Hash, Italic, Lock, Smile, Strikethrough, Timer, Trash2, Underline,
+  UserMinus, Volume2, X,
 } from 'lucide-react'
 import {
   api, Channel, ChannelInviteEntry, Member, Role,
 } from '../api'
 import { useEscToClose } from '../modalStack'
+import { renderSimpleMarkdown } from '../markdown'
 import Avatar from './Avatar'
+import EmojiPicker, { EmojiPickerAnchor } from './EmojiPicker'
 import ToggleSwitch from './ToggleSwitch'
 
 type TabId = 'overview' | 'access' | 'invites'
@@ -52,7 +55,7 @@ export default function ChannelSettingsModal({
   onRenamed,
   onSetStatus,
   onSetSlowmode,
-  onSetSpoiler,
+  onSetVisibility,
   onSetPrivacy,
   onSetInvitesPaused,
   onDelete,
@@ -64,7 +67,7 @@ export default function ChannelSettingsModal({
   onRenamed: (name: string) => void
   onSetStatus: (status: string) => void
   onSetSlowmode: (seconds: number) => void
-  onSetSpoiler: (isSpoiler: boolean) => void
+  onSetVisibility: (mode: 'default' | 'spoiler' | 'age_restricted') => void
   onSetPrivacy: (isPrivate: boolean, allowedRoleIds: number[], allowedUserIds: number[]) => void
   onSetInvitesPaused: (paused: boolean) => void
   onDelete: () => void
@@ -79,6 +82,11 @@ export default function ChannelSettingsModal({
         className="modal settings-modal channel-settings-modal"
         onClick={(e) => e.stopPropagation()}
       >
+        <button type="button" className="channel-settings-close" onClick={onClose} title="Закрыть">
+          <span className="channel-settings-close-circle"><X size={18} /></span>
+          <span className="channel-settings-close-label">ESC</span>
+        </button>
+
         <div className="settings-body">
           <nav className="settings-sidebar channel-settings-sidebar">
             <div className="channel-settings-header">
@@ -103,19 +111,22 @@ export default function ChannelSettingsModal({
 
             <div className="settings-sidebar-pinned">
               <button type="button" className="settings-sidebar-item danger" onClick={onDelete}>
-                <Trash2 size={15} /> Удалить канал
+                Удалить канал <Trash2 size={15} />
               </button>
             </div>
           </nav>
 
           <div className="settings-content channel-settings-content">
+            <h2 className="channel-settings-content-title">
+              {TABS.find((t) => t.id === tab)?.label}
+            </h2>
             {tab === 'overview' && (
               <OverviewTab
                 channel={channel}
                 onRenamed={onRenamed}
                 onSetStatus={onSetStatus}
                 onSetSlowmode={onSetSlowmode}
-                onSetSpoiler={onSetSpoiler}
+                onSetVisibility={onSetVisibility}
               />
             )}
             {tab === 'access' && (
@@ -136,18 +147,28 @@ export default function ChannelSettingsModal({
   )
 }
 
+/** Токен-маркер тулбара темы: (marker, чем оборачивать выделение). Порядок —
+ * тот же, что в web/src/markdown.ts (renderSimpleMarkdown должен понимать
+ * ровно то, что здесь вставляется). */
+const TOPIC_TOOLBAR: { marker: string; label: string; Icon: typeof Bold }[] = [
+  { marker: '**', label: 'Жирный', Icon: Bold },
+  { marker: '*', label: 'Курсив', Icon: Italic },
+  { marker: '__', label: 'Подчёркнутый', Icon: Underline },
+  { marker: '~~', label: 'Зачёркнутый', Icon: Strikethrough },
+]
+
 function OverviewTab({
   channel,
   onRenamed,
   onSetStatus,
   onSetSlowmode,
-  onSetSpoiler,
+  onSetVisibility,
 }: {
   channel: Channel
   onRenamed: (name: string) => void
   onSetStatus: (status: string) => void
   onSetSlowmode: (seconds: number) => void
-  onSetSpoiler: (isSpoiler: boolean) => void
+  onSetVisibility: (mode: 'default' | 'spoiler' | 'age_restricted') => void
 }) {
   // Локальный черновик только для полей, которые сохраняются по blur (имя,
   // тема) — набирать текст, отправляя PATCH на каждую букву, было бы и
@@ -155,12 +176,16 @@ function OverviewTab({
   // сразу и черновика не требуют.
   const [name, setName] = useState(channel.name)
   const [topic, setTopic] = useState(channel.status)
+  const [topicPreview, setTopicPreview] = useState(false)
+  const [emojiAnchor, setEmojiAnchor] = useState<EmojiPickerAnchor | null>(null)
+  const topicRef = useRef<HTMLTextAreaElement>(null)
   // Канал могли переключить, пока модалка открыта (правый клик по другому
   // каналу без закрытия этой — редкий, но возможный путь) — синхронизируем
   // черновик с новым каналом, а не дописываем поверх чужого имени.
   useEffect(() => {
     setName(channel.name)
     setTopic(channel.status)
+    setTopicPreview(false)
   }, [channel.id, channel.name, channel.status])
 
   const commitName = () => {
@@ -176,6 +201,40 @@ function OverviewTab({
     if (topic !== channel.status) onSetStatus(topic)
   }
 
+  // Оборачивает текущее выделение в textarea маркером разметки. Кнопки
+  // тулбара гасят mousedown (preventDefault) — иначе клик по кнопке сначала
+  // снял бы фокус с textarea (blur → commitTopic отправил бы ещё не
+  // изменённый черновик) и потерял бы selectionStart/End.
+  const wrapSelection = (marker: string) => {
+    const el = topicRef.current
+    if (!el) return
+    const start = el.selectionStart ?? topic.length
+    const end = el.selectionEnd ?? topic.length
+    const next = `${topic.slice(0, start)}${marker}${topic.slice(start, end)}${marker}${topic.slice(end)}`
+    setTopic(next)
+    requestAnimationFrame(() => {
+      el.focus()
+      el.setSelectionRange(start + marker.length, end + marker.length)
+    })
+  }
+
+  const insertAtCursor = (text: string) => {
+    const el = topicRef.current
+    const pos = el?.selectionStart ?? topic.length
+    const next = `${topic.slice(0, pos)}${text}${topic.slice(pos)}`
+    setTopic(next)
+    requestAnimationFrame(() => {
+      el?.focus()
+      el?.setSelectionRange(pos + text.length, pos + text.length)
+    })
+  }
+
+  const visibility: 'default' | 'spoiler' | 'age_restricted' = channel.is_spoiler
+    ? 'spoiler'
+    : channel.age_restricted
+      ? 'age_restricted'
+      : 'default'
+
   return (
     <div className="channel-settings-tab">
       <label className="settings-field">
@@ -190,22 +249,84 @@ function OverviewTab({
       </label>
 
       {channel.kind === 'text' && (
-        <label className="settings-field">
+        <div className="settings-field">
           <span className="settings-field-label">Тема канала</span>
-          <textarea
-            className="field-input channel-settings-topic"
-            value={topic}
-            onChange={(e) => setTopic(e.target.value)}
-            onBlur={commitTopic}
-            maxLength={1024}
-            rows={4}
-            placeholder="Расскажите участникам, как пользоваться этим каналом"
-          />
+
+          <div className="channel-settings-topic-toolbar">
+            {TOPIC_TOOLBAR.map(({ marker, label, Icon }) => (
+              <button
+                key={marker}
+                type="button"
+                title={label}
+                disabled={topicPreview}
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => wrapSelection(marker)}
+              >
+                <Icon size={15} />
+              </button>
+            ))}
+            <button
+              type="button"
+              title="Эмодзи"
+              disabled={topicPreview}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={(e) =>
+                setEmojiAnchor((prev) =>
+                  prev
+                    ? null
+                    : { rect: e.currentTarget.getBoundingClientRect(), placement: 'below' },
+                )
+              }
+            >
+              <Smile size={15} />
+            </button>
+            <div className="channel-settings-topic-toolbar-spacer" />
+            <button
+              type="button"
+              title={topicPreview ? 'Редактировать' : 'Предпросмотр'}
+              className={topicPreview ? 'active' : ''}
+              onClick={() => setTopicPreview((p) => !p)}
+            >
+              {topicPreview ? <EyeOff size={15} /> : <Eye size={15} />}
+            </button>
+          </div>
+
+          {topicPreview ? (
+            <div className="field-input channel-settings-topic channel-settings-topic-preview">
+              {topic
+                ? renderSimpleMarkdown(topic, 'channel-topic-preview')
+                : (
+                  <span className="channel-settings-topic-placeholder">
+                    Расскажите участникам, как пользоваться этим каналом
+                  </span>
+                )}
+            </div>
+          ) : (
+            <textarea
+              ref={topicRef}
+              className="field-input channel-settings-topic"
+              value={topic}
+              onChange={(e) => setTopic(e.target.value)}
+              onBlur={commitTopic}
+              maxLength={1024}
+              rows={4}
+              placeholder="Расскажите участникам, как пользоваться этим каналом"
+            />
+          )}
           <span className="channel-settings-topic-count">{topic.length}/1024</span>
           <p className="srv-hint">
-            Показывается в шапке канала рядом с его названием.
+            Показывается в шапке канала рядом с его названием. Поддерживает **жирный**,
+            *курсив*, __подчёркнутый__ и ~~зачёркнутый~~.
           </p>
-        </label>
+
+          {emojiAnchor && (
+            <EmojiPicker
+              anchor={emojiAnchor}
+              onPick={(emoji) => insertAtCursor(emoji)}
+              onClose={() => setEmojiAnchor(null)}
+            />
+          )}
+        </div>
       )}
 
       {channel.kind === 'text' && (
@@ -238,8 +359,8 @@ function OverviewTab({
             <input
               type="radio"
               name="channel-visibility"
-              checked={!channel.is_spoiler}
-              onChange={() => onSetSpoiler(false)}
+              checked={visibility === 'default'}
+              onChange={() => onSetVisibility('default')}
             />
             <span className="channel-settings-radio-text">
               <b>По умолчанию</b>
@@ -250,14 +371,29 @@ function OverviewTab({
             <input
               type="radio"
               name="channel-visibility"
-              checked={channel.is_spoiler}
-              onChange={() => onSetSpoiler(true)}
+              checked={visibility === 'spoiler'}
+              onChange={() => onSetVisibility('spoiler')}
             />
             <span className="channel-settings-radio-text">
               <b>Канал со спойлерами</b>
               <small>
                 При переходе в канал участники сначала увидят предупреждение о чувствительном
                 содержимом.
+              </small>
+            </span>
+          </label>
+          <label className="channel-settings-radio">
+            <input
+              type="radio"
+              name="channel-visibility"
+              checked={visibility === 'age_restricted'}
+              onChange={() => onSetVisibility('age_restricted')}
+            />
+            <span className="channel-settings-radio-text">
+              <b>Канал с возрастным ограничением</b>
+              <small>
+                Помечает канал как содержащий контент 18+. Само ограничение доступа появится
+                позже — пока это только отметка.
               </small>
             </span>
           </label>

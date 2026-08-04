@@ -390,8 +390,8 @@ export default function AppShellOverlays({
             onSetSlowmode={(seconds) =>
               void server.handleSetChannelSlowmode(settingsChannel, seconds)
             }
-            onSetSpoiler={(isSpoiler) =>
-              void server.handleSetChannelSpoiler(settingsChannel, isSpoiler)
+            onSetVisibility={(mode) =>
+              void server.handleSetChannelVisibility(settingsChannel, mode)
             }
             onSetPrivacy={(isPrivate, allowedRoleIds, allowedUserIds) =>
               void server.handleSetChannelPrivacy(
