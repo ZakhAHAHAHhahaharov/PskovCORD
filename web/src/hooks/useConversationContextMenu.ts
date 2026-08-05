@@ -1,5 +1,6 @@
 import { MouseEvent as ReactMouseEvent, useCallback, useState } from 'react'
 import { api, Conversation, FriendsState, UserRelation } from '../api'
+import { useContextMenuState } from '../contextMenuStack'
 
 export interface ConversationMenuTarget {
   conversation: Conversation
@@ -43,7 +44,7 @@ export function useConversationContextMenu({
    * по строке беседы, так и при «Написать сообщение» из её меню. */
   navigateToContent: () => void
 }) {
-  const [menuTarget, setMenuTarget] = useState<ConversationMenuTarget | null>(null)
+  const [menuTarget, setMenuTarget] = useContextMenuState<ConversationMenuTarget>()
   const [error, setError] = useState('')
 
   const openConversationContextMenu = useCallback(

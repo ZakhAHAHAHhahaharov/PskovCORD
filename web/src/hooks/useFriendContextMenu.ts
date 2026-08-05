@@ -1,5 +1,6 @@
 import { MouseEvent as ReactMouseEvent, useCallback, useState } from 'react'
 import { api, Conversation, FriendsState, UserRelation } from '../api'
+import { useContextMenuState } from '../contextMenuStack'
 import { nicknameStore } from '../nicknames'
 import { ProfilePopupUser } from '../components/MiniProfilePopup'
 
@@ -55,7 +56,7 @@ export function useFriendContextMenu({
   onStartCall: (conversationId: number) => void
   onOpenProfile: (friend: ProfilePopupUser, x: number, y: number) => void
 }) {
-  const [menuTarget, setMenuTarget] = useState<FriendMenuTarget | null>(null)
+  const [menuTarget, setMenuTarget] = useContextMenuState<FriendMenuTarget>()
   const [nicknameTarget, setNicknameTarget] = useState<ProfilePopupUser | null>(null)
 
   const openFriendContextMenu = useCallback(
