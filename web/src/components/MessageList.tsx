@@ -7,6 +7,7 @@ import {
   Trash2,
 } from 'lucide-react'
 import { ChatMessageBase, Conversation, MentionCandidate, Server } from '../api'
+import { useContextMenuState } from '../contextMenuStack'
 import { escapeRegExp, WORD_CHAR } from '../mentions'
 import { styledNameProps } from '../nameStyle'
 import { displayNameOf, useNicknamesVersion } from '../nicknames'
@@ -404,11 +405,11 @@ export default function MessageList({
   // открытия модалки нужна АКТУАЛЬНАЯ версия сообщения из messages, а не
   // снимок на момент правого клика: реакции могли обновиться, пока модалка
   // ещё не открылась).
-  const [contextMenu, setContextMenu] = useState<{
+  const [contextMenu, setContextMenu] = useContextMenuState<{
     message: ListMessage
     x: number
     y: number
-  } | null>(null)
+  }>()
   const [reactionsModalId, setReactionsModalId] = useState<number | null>(null)
   const [forwardMessageId, setForwardMessageId] = useState<number | null>(null)
   const reactionsModalMessage = messages.find((m) => m.id === reactionsModalId) ?? null

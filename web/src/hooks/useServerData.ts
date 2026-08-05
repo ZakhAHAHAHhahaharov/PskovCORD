@@ -3,6 +3,7 @@ import {
   api, Channel, ChannelMemberSettings, ChannelNotifyLevel, Me, Member, NotificationLevel,
   Role, Server, ServerMemberSettings,
 } from '../api'
+import { useContextMenuState } from '../contextMenuStack'
 import { customEmojiStore, loadMyEmoji } from '../customEmoji'
 import { isMentioned } from '../mentions'
 import { presenceStore } from '../presence'
@@ -77,22 +78,22 @@ export function useServerData(userRef: RefObject<Me | null>) {
   // сервера, захваченным в момент правого клика, чекбоксы после клика не
   // обновились бы, потому что patchServerSettings меняет `servers`, а не
   // этот снимок. Резолвим актуальный объект из `servers` при каждом рендере.
-  const [serverContextMenuServerId, setServerContextMenuServerId] = useState<{
+  const [serverContextMenuServerId, setServerContextMenuServerId] = useContextMenuState<{
     id: number
     x: number
     y: number
-  } | null>(null)
+  }>()
   const [showServerInviteId, setShowServerInviteId] = useState<number | null>(null)
   const [showServerPrivacyId, setShowServerPrivacyId] = useState<number | null>(null)
   // --- контекстное меню голосового канала (правый клик, см. ChannelContextMenu) ---
   // Тот же приём, что и у serverContextMenuServerId выше — храним только id
   // канала и координаты, сам канал резолвим из currentServer при рендере,
   // чтобы не работать со стухшим снимком после live-обновлений (channel_update).
-  const [channelContextMenuId, setChannelContextMenuId] = useState<{
+  const [channelContextMenuId, setChannelContextMenuId] = useContextMenuState<{
     id: number
     x: number
     y: number
-  } | null>(null)
+  }>()
   const [showChannelInviteId, setShowChannelInviteId] = useState<number | null>(null)
   // «Настроить канал» из контекстного меню — та же логика хранения id, что и
   // у showChannelInviteId выше (резолвим актуальный канал из currentServer

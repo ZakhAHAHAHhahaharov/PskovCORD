@@ -1,5 +1,6 @@
 import { MouseEvent as ReactMouseEvent, useCallback, useState } from 'react'
 import { Channel } from '../api'
+import { useContextMenuState } from '../contextMenuStack'
 import { MessageInputPrefill } from '../components/MessageInput'
 import { ParticipantContextMenuMember, ParticipantContextMenuTarget } from '../components/ParticipantContextMenu'
 
@@ -16,9 +17,7 @@ export function useParticipantContextMenu(
   setServerId: (id: number | null) => void,
   setActiveConversationId: (id: number | null) => void,
 ) {
-  const [contextMenuTarget, setContextMenuTarget] = useState<ParticipantContextMenuTarget | null>(
-    null,
-  )
+  const [contextMenuTarget, setContextMenuTarget] = useContextMenuState<ParticipantContextMenuTarget>()
   const [mentionPrefill, setMentionPrefill] = useState<MessageInputPrefill | null>(null)
 
   const openParticipantContextMenu = useCallback(

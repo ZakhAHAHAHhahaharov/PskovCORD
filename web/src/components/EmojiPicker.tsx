@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Plus, Trash2 } from 'lucide-react'
 import { CustomEmoji, Sticker, StickerPack, api } from '../api'
+import { useContextMenuState } from '../contextMenuStack'
 import { customEmojiStore, useCustomEmojiPacks, useEmojiUploadTargets, useExpressionServers } from '../customEmoji'
 import { EMOJI_CATEGORIES, EmojiEntry, searchEmoji } from '../emoji'
 import { useDragScroll } from '../dragScroll'
@@ -102,11 +103,10 @@ export default function EmojiPicker({
   // курсором. Своё состояние, а не переиспользование editorOpen: закрывается
   // по-другому (см. эффект ниже и onClick панели) и не должно блокировать
   // остальную панель так же, как редактор.
-  const [menu, setMenu] = useState<
-    { emoji: CustomEmoji; sticker?: undefined; x: number; y: number }
+  const [menu, setMenu] = useContextMenuState<
+    | { emoji: CustomEmoji; sticker?: undefined; x: number; y: number }
     | { sticker: Sticker; emoji?: undefined; x: number; y: number }
-    | null
-  >(null)
+  >()
   const panelRef = useRef<HTMLDivElement>(null)
   const searchRef = useRef<HTMLInputElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
