@@ -76,6 +76,53 @@ export default function AppShellOverlays({
   // Кому сейчас правим никнейм НА СЕРВЕРЕ (см. ServerNicknameModal) — держим
   // id, а не самого участника: ростер живой, объект успел бы протухнуть.
   const [serverNicknameUserId, setServerNicknameUserId] = useState<number | null>(null)
+
+  // --- модерация из контекстного меню человека (см. FriendContextMenu) ----
+  // Роли/бан/кик доступны только внутри текущего сервера — та же ручка
+  // api.setMemberRoles/kickMember/banMember, что и в ServerSettingsModal
+  // (RolesTab/BansTab), просто вызванная из контекстного меню вместо формы.
+  const handleToggleMemberRole = async (
+    userId: number,
+    roleId: number,
+    on: boolean,
+    currentRoleIds: number[],
+  ) => {
+    if (!server.currentServer) return
+    const next = on ? [...currentRoleIds, roleId] : currentRoleIds.filter((id) => id !== roleId)
+    try {
+      await api.setMemberRoles(server.currentServer.id, userId, next)
+      void server.reloadMembers()
+    } catch (e) {
+      alert((e as Error).message)
+    }
+  }
+
+  const handleKickMember = async (userId: number, username: string) => {
+    if (!server.currentServer) return
+    if (!window.confirm(`Выгнать ${username} с сервера?`)) return
+    try {
+      await api.kickMember(server.currentServer.id, userId)
+      void server.reloadMembers()
+    } catch (e) {
+      alert((e as Error).message)
+    }
+  }
+
+  const handleBanMember = async (userId: number, username: string) => {
+    if (!server.currentServer) return
+    // window.prompt сразу и подтверждает действие (Cancel = null = отмена),
+    // и собирает причину — тот же смысл, что у формы в BansTab, но в один шаг,
+    // как и подобает пункту контекстного меню.
+    const reason = window.prompt(`Забанить ${username}? Причина (необязательно):`)
+    if (reason == null) return
+    try {
+      await api.banMember(server.currentServer.id, userId, reason.trim())
+      void server.reloadMembers()
+    } catch (e) {
+      alert((e as Error).message)
+    }
+  }
+
   return (
     <>
       {conv.showNewConversation && (
@@ -182,6 +229,36 @@ export default function AppShellOverlays({
         const liveFriend = conv.friends.friends.find((f) => f.id === target.friend.id)
         const isFriendNow = !!liveFriend
         const friend = liveFriend ?? target.friend
+
+        // Серверный контекст — только если сейчас открыт текстовый канал
+        // сервера (в личке/группе server.currentServer всегда null, см.
+        // useServerData). Роли/никнейм-на-сервере/кик/бан имеют смысл только
+        // тут — то самое «только в текстовых каналах на серверах» из задачи.
+        const currentChannel = server.currentChannel
+        const inServerTextChannel = !!(server.currentServer && currentChannel?.kind === 'text')
+        const currentServer = server.currentServer
+        const targetMember = inServerTextChannel
+          ? server.members.find((m) => m.id === friend.id) ?? null
+          : null
+        const roles = inServerTextChannel && currentServer ? server.rolesForServer(currentServer.id) : []
+        const myPerms = currentServer?.my_permissions
+        const iAmOwner = currentServer?.owner === user.id
+        const myMember = inServerTextChannel ? server.members.find((m) => m.id === user.id) : null
+        // Позиция в иерархии — то же самое, что backend chat.roles.
+        // highest_role_position: максимум позиций персональных ролей,
+        // владелец — заведомо выше всех. Итоговое решение всё равно
+        // перепроверяет сервер, здесь только прячем заведомо недоступные
+        // пункты, а не строим точную копию бэкенда.
+        const rolePosition = (roleIds: number[]) =>
+          roleIds.reduce((max, id) => Math.max(max, roles.find((r) => r.id === id)?.position ?? -1), -1)
+        const myPosition = iAmOwner ? Infinity : rolePosition(myMember?.role_ids ?? [])
+        const targetPosition = targetMember?.is_owner ? Infinity : rolePosition(targetMember?.role_ids ?? [])
+        const canActOnTarget =
+          !!targetMember && !targetMember.is_owner && (iAmOwner || targetPosition < myPosition)
+
+        const activeConversationId = conv.activeConversationId
+        const canMention = activeConversationId != null || inServerTextChannel
+
         return (
           <FriendContextMenu
             friend={friend}
@@ -201,6 +278,47 @@ export default function AppShellOverlays({
             onAddFriend={() => void conv.handleMiniProfileAddFriend(friend.id)}
             onRemoveFriend={() => void friendMenu.handleRemoveFriend(friend)}
             onRelationChange={(relation) => friendMenu.handleRelationChange(friend, relation)}
+            onMention={
+              canMention
+                ? () => {
+                    const member = {
+                      id: friend.id, username: friend.username,
+                      sharing_screen: false, muted: false, deafened: false,
+                    }
+                    if (activeConversationId != null) {
+                      participant.handleMention(member, { kind: 'conversation', id: activeConversationId })
+                    } else if (currentChannel) {
+                      participant.handleMention(member, { kind: 'channel', id: currentChannel.id })
+                    }
+                  }
+                : undefined
+            }
+            onSetServerNickname={
+              targetMember && myPerms?.manage_nicknames
+                ? () => setServerNicknameUserId(friend.id)
+                : undefined
+            }
+            rolesMenu={
+              targetMember
+                ? {
+                    roles: roles.filter((r) => !r.is_default && !r.is_owner_role),
+                    targetRoleIds: targetMember.role_ids,
+                    canManage: !!myPerms?.manage_roles && canActOnTarget,
+                    onToggle: (roleId, on) =>
+                      void handleToggleMemberRole(friend.id, roleId, on, targetMember.role_ids),
+                  }
+                : undefined
+            }
+            onKick={
+              targetMember && myPerms?.manage_members && canActOnTarget
+                ? () => void handleKickMember(friend.id, friend.username)
+                : undefined
+            }
+            onBan={
+              targetMember && (myPerms?.manage_members || myPerms?.ban_members) && canActOnTarget
+                ? () => void handleBanMember(friend.id, friend.username)
+                : undefined
+            }
           />
         )
       })()}

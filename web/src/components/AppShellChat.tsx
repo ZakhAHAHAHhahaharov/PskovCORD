@@ -318,6 +318,7 @@ export default function AppShellChat({
           roles={rolesForServer(serverId)}
           ownerId={currentServer?.owner ?? -1}
           onOpenProfile={openProfilePopup}
+          onUserContextMenu={onUserContextMenu}
         />
       ) : currentChannel?.kind === 'voice' ||
         (currentChannel?.kind === 'text' && !showMembersList) ? null : (
