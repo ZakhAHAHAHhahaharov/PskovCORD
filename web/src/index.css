@@ -7832,60 +7832,6 @@ button.settings-row-clickable:hover .settings-row-label {
    добавляется только заголовок с именем канала над списком вкладок. */
 .channel-settings-modal {
   position: relative;
-  /* Шире базового .settings-modal (700px) — см. margin-right у .settings-body
-     ниже: сама по себе ширина скроллбар от кнопки закрытия не отодвигает
-     (он всё равно рисуется у правого края .settings-content, который просто
-     растягивается на всю лишнюю ширину), нужны оба правила разом. */
-  width: 760px;
-}
-
-/* .settings-content скроллится (overflow-y: auto, см. вкладку «Обзор» с
-   длинной темой канала), и его скроллбар рисуется у правого края БЛОКА, а
-   не у текста внутри — обычный padding-right тут не спасает. Круглая кнопка
-   закрытия (.channel-settings-close) стоит всего в 18px от края модалки, и
-   скроллбар заезжал под неё. Отодвигаем сам блок margin-right'ом, а лишнюю
-   ширину компенсирует .channel-settings-modal выше — контент не сужается. */
-.channel-settings-modal .settings-body {
-  margin-right: 50px;
-}
-
-/* Круглая кнопка закрытия в углу — как в «настоящих» настройках Discord.
-   Отдельная от .modal-close (та — во весь ряд кнопка "Отмена" у других
-   модалок), здесь именно маленький круг с подписью ESC под ним. */
-.channel-settings-close {
-  position: absolute;
-  top: 18px;
-  right: 18px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 5px;
-  color: var(--text-muted);
-  z-index: 1;
-}
-
-.channel-settings-close-circle {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-  border: 2px solid var(--text-muted);
-  border-radius: 50%;
-}
-
-.channel-settings-close:hover {
-  color: var(--text-normal);
-}
-
-.channel-settings-close:hover .channel-settings-close-circle {
-  border-color: var(--text-normal);
-}
-
-.channel-settings-close-label {
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.4px;
 }
 
 .channel-settings-header {
