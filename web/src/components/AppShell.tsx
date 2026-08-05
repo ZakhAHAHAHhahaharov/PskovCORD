@@ -252,10 +252,18 @@ export default function AppShell() {
   // друзья резолвятся заново в AppShellOverlays, здесь достаточно снимка.
   const handleUserContextMenu = useCallback(
     (target: ProfilePopupUser, e: ReactMouseEvent) => {
+      // ПКМ по самому себе: звонить/писать/добавлять в друзья себе же
+      // незачем — просто не открываем меню (обычное меню браузера тоже не
+      // показываем, как и для остальных людей, см. preventDefault в
+      // источниках клика).
+      if (target.id === user?.id) {
+        e.preventDefault()
+        return
+      }
       const isFriend = conversationsData.friends.friends.some((f) => f.id === target.id)
       friendMenu.openFriendContextMenu(target, isFriend, e)
     },
-    [conversationsData.friends.friends, friendMenu],
+    [conversationsData.friends.friends, friendMenu, user?.id],
   )
 
   // Реакции переключаются по факту «стоит ли она уже у меня» — его считает

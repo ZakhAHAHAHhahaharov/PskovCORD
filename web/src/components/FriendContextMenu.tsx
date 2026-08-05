@@ -1,9 +1,9 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import {
-  Ban, BellOff, Check, MessageSquare, NotebookPen, Phone, ServerIcon, Tag,
-  User as UserIcon, UserMinus, UserPlus,
+  AtSign, Ban, BellOff, Check, MessageSquare, NotebookPen, Phone, ServerIcon,
+  Shield, ShieldBan, Tag, User as UserIcon, UserMinus, UserPlus, UserX,
 } from 'lucide-react'
-import { api, Server, UserRelation } from '../api'
+import { api, Role, Server, UserRelation } from '../api'
 import { useHoverFlyout } from '../hooks/useHoverFlyout'
 import { useNickname } from '../nicknames'
 import { ProfilePopupUser } from './MiniProfilePopup'
@@ -39,6 +39,11 @@ export default function FriendContextMenu({
   onAddFriend,
   onRemoveFriend,
   onRelationChange,
+  onMention,
+  onSetServerNickname,
+  rolesMenu,
+  onKick,
+  onBan,
 }: {
   friend: ProfilePopupUser
   /** Уже в друзьях — переключает нижний пункт между «Удалить»/«Добавить в
@@ -62,11 +67,37 @@ export default function FriendContextMenu({
   /** Игнор/блокировка изменились — обновить состояние снаружи (лента,
    * уведомления). */
   onRelationChange: (relation: UserRelation) => void
+  /** Упомянуть в текущем открытом канале/диалоге — undefined, если сейчас ни
+   * один не открыт (тогда пункт скрыт, вставлять "@Ник " было бы некуда). */
+  onMention?: () => void
+  /** Никнейм НА СЕРВЕРЕ (публичный, см. ServerNicknameModal) — задан, только
+   * если открыли в текстовом канале сервера и есть право manage_nicknames.
+   * Вытесняет приватный никнейм друга (onSetNickname) в пункте меню: оба
+   * смысла одному пункту не нужны, а приватный никнейм остаётся доступен
+   * через карточку профиля. */
+  onSetServerNickname?: () => void
+  /** Роли участника на сервере — есть, только если цель является участником
+   * сервера в открытом сейчас текстовом канале (см. AppShellOverlays).
+   * canManage — есть право manage_roles И цель ниже меня в иерархии
+   * (см. backend chat.roles.can_manage_role/can_act_on_member); без этого
+   * флажки показываются, но задизейблены — как и было решено в задаче. */
+  rolesMenu?: {
+    roles: Role[]
+    targetRoleIds: number[]
+    canManage: boolean
+    onToggle: (roleId: number, on: boolean) => void
+  }
+  /** «Выгнать» — есть, только если у меня manage_members на сервере и цель
+   * ниже меня в иерархии (см. backend can_act_on_member). */
+  onKick?: () => void
+  /** «Забанить» — то же самое, но по ban_members/manage_members. */
+  onBan?: () => void
 }) {
   const ref = useRef<HTMLDivElement>(null)
   const nickname = useNickname(friend.id)
   const [relation, setRelation] = useState<UserRelation | null>(null)
   const serversFlyout = useHoverFlyout()
+  const rolesFlyout = useHoverFlyout()
 
   useEffect(() => {
     let cancelled = false
@@ -156,14 +187,16 @@ export default function FriendContextMenu({
     <div ref={ref} className="profile-popup channel-context-menu" style={{ left: x, top: y }}>
       <div className="profile-popup-menu">
         {item(<UserIcon size={15} />, 'Профиль', onOpenProfile)}
+        {onMention && item(<AtSign size={15} />, 'Упомянуть', onMention)}
         {item(<MessageSquare size={15} />, 'Написать сообщение', onSendMessage)}
         {item(<Phone size={15} />, 'Начать звонок', onStartCall)}
         {item(<NotebookPen size={15} />, 'Добавить заметку', onAddNote)}
-        {item(
-          <Tag size={15} />,
-          nickname ? 'Изменить никнейм друга' : 'Добавить никнейм друга',
-          onSetNickname,
-        )}
+        {(onSetServerNickname || isFriend) &&
+          item(
+            <Tag size={15} />,
+            onSetServerNickname ? 'Изменить никнейм' : nickname ? 'Изменить никнейм друга' : 'Добавить никнейм друга',
+            onSetServerNickname ?? onSetNickname,
+          )}
       </div>
 
       {servers.length > 0 && (
@@ -229,6 +262,53 @@ export default function FriendContextMenu({
           <Ban size={15} /> {relation?.blocked ? 'Разблокировать' : 'Заблокировать'}
         </button>
       </div>
+
+      {rolesMenu && rolesMenu.roles.length > 0 && (
+        <>
+          <div className="profile-popup-divider" />
+          <div className="profile-popup-menu">
+            <div
+              className="conversation-menu-servers"
+              onMouseEnter={rolesFlyout.onMouseEnter}
+              onMouseLeave={rolesFlyout.onMouseLeave}
+            >
+              <button type="button" className="profile-popup-item">
+                <Shield size={15} /> Роли
+                <span className="conversation-menu-chevron">{flyoutLeft ? '◂' : '▸'}</span>
+              </button>
+              {rolesFlyout.open && (
+                <div className={`conversation-menu-flyout ${flyoutLeft ? 'flyout-left' : ''}`}>
+                  {rolesMenu.roles.map((r) => (
+                    <label
+                      key={r.id}
+                      className="profile-popup-item conversation-menu-server channel-ctx-checkbox-item"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={rolesMenu.targetRoleIds.includes(r.id)}
+                        disabled={!rolesMenu.canManage}
+                        onChange={(e) => rolesMenu.onToggle(r.id, e.target.checked)}
+                      />
+                      <span className="srv-role-dot" style={{ background: r.color }} />
+                      <span className="conversation-menu-server-name">{r.name}</span>
+                    </label>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </>
+      )}
+
+      {(onBan || onKick) && (
+        <>
+          <div className="profile-popup-divider" />
+          <div className="profile-popup-menu">
+            {onBan && item(<ShieldBan size={15} />, 'Забанить', onBan)}
+            {onKick && item(<UserX size={15} />, 'Выгнать', onKick)}
+          </div>
+        </>
+      )}
     </div>
   )
 }

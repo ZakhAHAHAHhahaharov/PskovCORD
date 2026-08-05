@@ -665,6 +665,11 @@ export default function MessageList({
               type="button"
               className="avatar-trigger"
               onClick={(e) => onOpenProfile(m.author, e)}
+              onContextMenu={(e) => {
+                e.preventDefault()
+                e.stopPropagation()
+                onUserContextMenu(m.author, e)
+              }}
               onMouseEnter={() => setHoveredAuthorRow(rowKey)}
               onMouseLeave={() => setHoveredAuthorRow((prev) => (prev === rowKey ? null : prev))}
             >
@@ -703,6 +708,11 @@ export default function MessageList({
                   className={`message-author profile-trigger-name ${styledNameProps(m.author).className}`}
                   style={styledNameProps(m.author).style}
                   onClick={(e) => onOpenProfile(m.author, e)}
+                  onContextMenu={(e) => {
+                    e.preventDefault()
+                    e.stopPropagation()
+                    onUserContextMenu(m.author, e)
+                  }}
                   // Ник — вторая точка наведения для гифки-аватара, наравне
                   // с самой аватаркой.
                   onMouseEnter={() => setHoveredAuthorRow(rowKey)}

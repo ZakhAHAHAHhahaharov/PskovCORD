@@ -50,6 +50,7 @@ export default function MembersList({
   roles,
   ownerId,
   onOpenProfile,
+  onUserContextMenu,
 }: {
   members: Member[]
   channels: Channel[]
@@ -57,6 +58,9 @@ export default function MembersList({
   roles: Role[]
   ownerId: number
   onOpenProfile: (user: ProfilePopupUser, e: ReactMouseEvent) => void
+  /** Правый клик по строке участника — то же меню, что у аватарки/ника в
+   * чате (см. MessageList/AppShell.handleUserContextMenu). */
+  onUserContextMenu: (user: ProfilePopupUser, e: ReactMouseEvent) => void
 }) {
   const online = members.filter((m) => m.online)
   const offline = members.filter((m) => !m.online)
@@ -77,6 +81,10 @@ export default function MembersList({
         type="button"
         className="member-row"
         onClick={(e) => onOpenProfile(m, e)}
+        onContextMenu={(e) => {
+          e.preventDefault()
+          onUserContextMenu(m, e)
+        }}
       >
         <Avatar
           name={m.username}
