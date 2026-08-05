@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import {
   Bold, Eye, EyeOff, Hash, Italic, Lock, Smile, Strikethrough, Timer, Trash2, Underline,
-  UserMinus, Volume2, X,
+  UserMinus, Volume2,
 } from 'lucide-react'
 import {
   api, Channel, ChannelInviteEntry, Member, Role,
@@ -82,11 +82,6 @@ export default function ChannelSettingsModal({
         className="modal settings-modal channel-settings-modal"
         onClick={(e) => e.stopPropagation()}
       >
-        <button type="button" className="channel-settings-close" onClick={onClose} title="Закрыть">
-          <span className="channel-settings-close-circle"><X size={18} /></span>
-          <span className="channel-settings-close-label">ESC</span>
-        </button>
-
         <div className="settings-body">
           <nav className="settings-sidebar channel-settings-sidebar">
             <div className="channel-settings-header">
