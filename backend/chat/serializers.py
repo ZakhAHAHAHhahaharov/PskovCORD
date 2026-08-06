@@ -9,7 +9,7 @@ from . import presence, roles
 from .models import (
     Attachment, Channel, Conversation, ConversationMessage,
     ConversationParticipant, Membership,
-    Message, Role, Server, ServerBan, ServerEmoji, ServerInvite,
+    Message, Role, Server, ServerAuditLog, ServerBan, ServerEmoji, ServerInvite,
     ServerJoinRequest, Sticker, StickerPack, dm_room,
 )
 
@@ -302,6 +302,23 @@ class ServerBanSerializer(serializers.ModelSerializer):
     class Meta:
         model = ServerBan
         fields = ["id", "user", "banned_by", "reason", "created_at"]
+
+
+class ServerAuditLogSerializer(serializers.ModelSerializer):
+    """Запись журнала модерации для панели модератора (см.
+    chat.views.ServerMemberModeratorView).
+
+    actor отдаётся целиком (нужны аватар и имя рядом с действием), target —
+    нет: панель всегда открыта НА конкретном участнике, и повторять его в
+    каждой строке незачем. details уходит как есть — его форма своя у
+    каждого действия, разбирает её фронт (см. ModeratorPanel.tsx).
+    """
+
+    actor = UserSerializer(read_only=True)
+
+    class Meta:
+        model = ServerAuditLog
+        fields = ["id", "actor", "action", "details", "created_at"]
 
 
 class MembershipSettingsSerializer(serializers.ModelSerializer):

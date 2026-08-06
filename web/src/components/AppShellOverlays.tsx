@@ -15,7 +15,9 @@ import DiscoverModal from './DiscoverModal'
 import ServerSettingsModal from './ServerSettingsModal'
 import SettingsModal from './SettingsModal'
 import ProfileModal from './ProfileModal'
-import MiniProfilePopup, { ProfilePopupTarget } from './MiniProfilePopup'
+import MiniProfilePopup, { ProfilePopupTarget, ProfilePopupUser } from './MiniProfilePopup'
+import ModeratorPanel from './ModeratorPanel'
+import BanMemberModal from './BanMemberModal'
 import ParticipantContextMenu from './ParticipantContextMenu'
 import MuteVoteModal from './MuteVoteModal'
 import ServerContextMenu from './ServerContextMenu'
@@ -50,6 +52,13 @@ interface AppShellOverlaysProps {
   friendMenu: ReturnType<typeof useFriendContextMenu>
   /** Мои серверы — из них выбирается, куда пригласить собеседника. */
   servers: Server[]
+  /** Кого сейчас разбираем в панели модератора, null — панель закрыта.
+   * Состояние живёт в AppShell, а не здесь, хотя и открывает, и рисует
+   * панель этот компонент: от него зависит СЕТКА .app (появляется четвёртая
+   * колонка, см. app-moderator-open в index.css), а класс на ней вешает
+   * AppShell — ровно как у app-no-members-col рядом. */
+  moderatorTarget: ProfilePopupUser | null
+  setModeratorTarget: (v: ProfilePopupUser | null) => void
 }
 
 /** Все модалки/попапы/контекстные меню, наложенные поверх основного layout'а
@@ -62,7 +71,16 @@ export default function AppShellOverlays({
   showSettings, closeSettings, showProfile, setShowProfile,
   profilePopup, setProfilePopup,
   conversationMenu, friendMenu, servers,
+  moderatorTarget, setModeratorTarget,
 }: AppShellOverlaysProps) {
+  // Кого баним прямо сейчас (модалка с причиной). Отдельно от
+  // moderatorTarget: забанить можно и из контекстного меню, не открывая
+  // панель, а из панели — не закрывая её.
+  const [banTarget, setBanTarget] = useState<ProfilePopupUser | null>(null)
+  // Счётчик «в сводке что-то изменилось» — панель модератора перечитывает
+  // себя при его смене (см. reloadToken там). Нужен только для бана: он
+  // уходит в отдельную модалку, а не в саму панель.
+  const [moderationVersion, setModerationVersion] = useState(0)
   const menuTarget = conversationMenu.menuTarget
   // Беседу резолвим из живого списка по id, а не берём снимок момента
   // открытия — иначе, например, «Закрепить» рисовало бы прежнее состояние
@@ -108,19 +126,16 @@ export default function AppShellOverlays({
     }
   }
 
-  const handleBanMember = async (userId: number, username: string) => {
+  // Бан идёт через модалку (см. BanMemberModal), а не window.prompt: причина
+  // уезжает в журнал модерации и в список банов, и набирать её в системном
+  // окошке без единого намёка на то, кого именно банишь, — плохая идея.
+  // Ошибку модалка показывает у себя и остаётся открытой, поэтому здесь она
+  // не глотается, а пробрасывается наружу.
+  const handleBanMember = async (userId: number, reason: string) => {
     if (!server.currentServer) return
-    // window.prompt сразу и подтверждает действие (Cancel = null = отмена),
-    // и собирает причину — тот же смысл, что у формы в BansTab, но в один шаг,
-    // как и подобает пункту контекстного меню.
-    const reason = window.prompt(`Забанить ${username}? Причина (необязательно):`)
-    if (reason == null) return
-    try {
-      await api.banMember(server.currentServer.id, userId, reason.trim())
-      void server.reloadMembers()
-    } catch (e) {
-      alert((e as Error).message)
-    }
+    await api.banMember(server.currentServer.id, userId, reason)
+    void server.reloadMembers()
+    setModerationVersion((v) => v + 1)
   }
 
   return (
@@ -309,6 +324,11 @@ export default function AppShellOverlays({
                   }
                 : undefined
             }
+            onOpenModeratorPanel={
+              targetMember && myPerms?.manage_server
+                ? () => setModeratorTarget(friend)
+                : undefined
+            }
             onKick={
               targetMember && myPerms?.manage_members && canActOnTarget
                 ? () => void handleKickMember(friend.id, friend.username)
@@ -316,7 +336,7 @@ export default function AppShellOverlays({
             }
             onBan={
               targetMember && (myPerms?.manage_members || myPerms?.ban_members) && canActOnTarget
-                ? () => void handleBanMember(friend.id, friend.username)
+                ? () => setBanTarget(friend)
                 : undefined
             }
           />
@@ -562,6 +582,51 @@ export default function AppShellOverlays({
           onClose={() => inviteLinks.setVoiceInvite(null)}
         />
       )}
+      {banTarget && (
+        <BanMemberModal
+          member={banTarget}
+          onBan={(reason) => handleBanMember(banTarget.id, reason)}
+          onClose={() => setBanTarget(null)}
+        />
+      )}
+      {/* Панель модератора — не модалка, а КОЛОНКА в сетке .app (см.
+          index.css): рендерится здесь, потому что тут же живут и её данные,
+          и действия, а место в раскладке ей задаёт grid-column, а не порядок
+          в DOM. Права пересчитываются на каждый рендер из живого ростера —
+          пока панель открыта, цели могли выдать роль или снять её. */}
+      {moderatorTarget && server.currentServer && (() => {
+        const currentServer = server.currentServer
+        const roles = server.rolesForServer(currentServer.id)
+        const myPerms = currentServer.my_permissions
+        if (!myPerms.manage_server) return null
+        const targetMember = server.members.find((m) => m.id === moderatorTarget.id) ?? null
+        const iAmOwner = currentServer.owner === user.id
+        const myMember = server.members.find((m) => m.id === user.id)
+        const rolePosition = (roleIds: number[]) =>
+          roleIds.reduce(
+            (max, id) => Math.max(max, roles.find((r) => r.id === id)?.position ?? -1), -1)
+        const myPosition = iAmOwner ? Infinity : rolePosition(myMember?.role_ids ?? [])
+        const targetPosition = targetMember?.is_owner
+          ? Infinity
+          : rolePosition(targetMember?.role_ids ?? [])
+        const canActOnTarget =
+          !!targetMember && !targetMember.is_owner && (iAmOwner || targetPosition < myPosition)
+        return (
+          <ModeratorPanel
+            serverId={currentServer.id}
+            target={moderatorTarget}
+            roles={roles}
+            canManageMembers={!!myPerms.manage_members}
+            canBan={!!(myPerms.manage_members || myPerms.ban_members)}
+            canActOnTarget={canActOnTarget}
+            reloadToken={moderationVersion}
+            onClose={() => setModeratorTarget(null)}
+            onSendMessage={() => friendMenu.handleSendMessage(moderatorTarget)}
+            onKick={() => handleKickMember(moderatorTarget.id, moderatorTarget.username)}
+            onBan={() => setBanTarget(moderatorTarget)}
+          />
+        )
+      })()}
     </>
   )
 }

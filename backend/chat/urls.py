@@ -36,6 +36,8 @@ urlpatterns = [
          views.ServerMemberDetail.as_view(), name="server-member-detail"),
     path("servers/<int:server_id>/members/<int:user_id>/nickname",
          views.ServerMemberNickname.as_view(), name="server-member-nickname"),
+    path("servers/<int:server_id>/members/<int:user_id>/moderator-view",
+         views.ServerMemberModeratorView.as_view(), name="server-member-moderator-view"),
     path("servers/<int:server_id>/channels",
          views.ChannelCreate.as_view(), name="channel-create"),
 

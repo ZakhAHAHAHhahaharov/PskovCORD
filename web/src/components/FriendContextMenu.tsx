@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import {
-  AtSign, Ban, BellOff, Check, MessageSquare, NotebookPen, Phone, ServerIcon,
+  AtSign, Ban, BellOff, Check, Gavel, MessageSquare, NotebookPen, Phone, ServerIcon,
   Shield, ShieldBan, Tag, User as UserIcon, UserMinus, UserPlus, UserX,
 } from 'lucide-react'
 import { api, Role, Server, UserRelation } from '../api'
@@ -42,6 +42,7 @@ export default function FriendContextMenu({
   onMention,
   onSetServerNickname,
   rolesMenu,
+  onOpenModeratorPanel,
   onKick,
   onBan,
 }: {
@@ -87,6 +88,10 @@ export default function FriendContextMenu({
     canManage: boolean
     onToggle: (roleId: number, on: boolean) => void
   }
+  /** «Открыть в панели модератора» — есть, только если у меня manage_server
+   * на этом сервере и цель является его участником (см. backend
+   * chat.views.ServerMemberModeratorView). */
+  onOpenModeratorPanel?: () => void
   /** «Выгнать» — есть, только если у меня manage_members на сервере и цель
    * ниже меня в иерархии (см. backend can_act_on_member). */
   onKick?: () => void
@@ -296,6 +301,15 @@ export default function FriendContextMenu({
                 </div>
               )}
             </div>
+          </div>
+        </>
+      )}
+
+      {onOpenModeratorPanel && (
+        <>
+          <div className="profile-popup-divider" />
+          <div className="profile-popup-menu">
+            {item(<Gavel size={15} />, 'Открыть в панели модератора', onOpenModeratorPanel)}
           </div>
         </>
       )}

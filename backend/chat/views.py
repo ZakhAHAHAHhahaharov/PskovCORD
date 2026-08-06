@@ -20,11 +20,13 @@ from rest_framework.views import APIView
 from accounts.models import Friendship
 from accounts.serializers import UserSerializer
 
-from . import emoji as emoji_keys, presence, roles, sfu, stickers as sticker_files, uploads
+from . import (
+    audit, emoji as emoji_keys, presence, roles, sfu, stickers as sticker_files, uploads,
+)
 from .models import (
     Attachment, Channel, ChannelMemberSettings, Conversation, ConversationMessage,
     ConversationParticipant, FriendNickname, Membership, Message, ProfileNote, Role, Server,
-    ServerBan, ServerEmoji, ServerInvite, ServerJoinRequest, Sticker, StickerPack,
+    ServerAuditLog, ServerBan, ServerEmoji, ServerInvite, ServerJoinRequest, Sticker, StickerPack,
     ChannelReadState, UserRelationState,
     MAX_ATTACHMENT_BYTES, MAX_EMOJI_BYTES, MAX_EMOJI_PER_SERVER,
     MAX_VOICE_MS, MAX_WAVEFORM_POINTS,
@@ -39,7 +41,7 @@ from .serializers import (
     AttachmentSerializer, ChannelInviteSerializer, ChannelMemberSettingsSerializer,
     ChannelSerializer, ConversationMessageSerializer,
     ConversationSerializer, MembershipSettingsSerializer, MessageSerializer,
-    RoleSerializer, ServerBanSerializer, ServerEmojiSerializer,
+    RoleSerializer, ServerAuditLogSerializer, ServerBanSerializer, ServerEmojiSerializer,
     ServerInviteLinkSerializer, ServerInviteSerializer,
     ServerJoinRequestSerializer, ServerSerializer, ServerUpdateSerializer,
     StickerPackSerializer, StickerSerializer, channel_member_settings_payload,
@@ -410,7 +412,8 @@ class ServerListCreate(APIView):
         if not name:
             return Response({"detail": "Нужно имя сервера."}, status=400)
         server = Server.objects.create(name=name, owner=request.user)
-        Membership.objects.create(user=request.user, server=server)
+        Membership.objects.create(
+            user=request.user, server=server, join_method=Membership.JOIN_OWNER)
         # Роль по умолчанию (аналог @everyone) — есть на каждом сервере,
         # именно её права действуют на всех участников без ролей.
         roles.create_default_role(server)
@@ -550,8 +553,10 @@ class ServerJoin(APIView):
                 status=202,
             )
 
-        Membership.objects.get_or_create(user=request.user, server=server)
+        membership, created = Membership.objects.get_or_create(
+            user=request.user, server=server)
         _grant_server_membership(server, request.user.id)
+        audit.record_join(membership, created, Membership.JOIN_PUBLIC)
         return Response(
             ServerSerializer(server, context=server_context(request, server)).data, status=200)
 
@@ -637,7 +642,9 @@ class ServerMemberDetail(APIView):
                            + ", ".join(too_high) + "."},
                 status=403,
             )
+        before = list(membership.roles.all())
         membership.roles.set(valid)
+        audit.log_role_changes(server, request.user, membership.user, before, valid)
         return Response({"user_id": user_id, "role_ids": [r.id for r in valid]})
 
     def delete(self, request, server_id, user_id):
@@ -651,8 +658,14 @@ class ServerMemberDetail(APIView):
         if not roles.can_act_on_member(request.user, server, user_id):
             return Response(
                 {"detail": "Нельзя выгнать участника не ниже вас."}, status=403)
-        Membership.objects.filter(server=server, user_id=user_id).delete()
+        membership = Membership.objects.filter(
+            server=server, user_id=user_id).select_related("user").first()
+        if membership is None:
+            return Response({"detail": "Участник не найден."}, status=404)
+        target = membership.user
+        membership.delete()
         _revoke_server_membership(server, user_id)
+        audit.log(server, request.user, target, ServerAuditLog.KICK)
         return Response(status=204)
 
 
@@ -684,8 +697,14 @@ class ServerMemberNickname(APIView):
                 {"detail": "Нельзя менять никнейм участника не ниже вас."}, status=403)
         membership = get_object_or_404(Membership, server=server, user_id=user_id)
         nickname = str(request.data.get("nickname") or "").strip()[:100]
+        before = membership.nickname
         membership.nickname = nickname
         membership.save(update_fields=["nickname"])
+        # Своё переименование в журнал не пишем: он про модерацию, а смена
+        # собственного ника — обычное действие участника, как смена аватарки.
+        if not own and before != nickname:
+            audit.log(server, request.user, membership.user,
+                      ServerAuditLog.NICKNAME, before=before, after=nickname)
         # Ростер сервера у всех открыт прямо сейчас — без рассылки чужое имя
         # сменилось бы только у того, кто его правил, до перезахода остальных.
         channel_layer = get_channel_layer()
@@ -697,6 +716,85 @@ class ServerMemberNickname(APIView):
                 "nickname": nickname,
             }})
         return Response({"user_id": user_id, "nickname": nickname})
+
+
+class ServerMemberModeratorView(APIView):
+    """GET /api/servers/<id>/members/<user_id>/moderator-view — сводка по
+    участнику для панели модератора (см. web ModeratorPanel.tsx).
+
+    Закрыта правом manage_server, а не manage_members: панель показывает не
+    рычаги модерации, а ПОДНОГОТНУЮ человека — сколько он писал, как попал на
+    сервер, кто и что с ним делал. Это уровень «управляю сервером», и именно
+    его назвал заказчик задачи.
+
+    Счётчики считаются запросами по Message ЗДЕСЬ И СЕЙЧАС, а не копятся в
+    журнале (см. chat.audit): так они верны и для истории, накопленной до
+    появления панели, а таблица журнала не растёт на каждое сообщение.
+    Цель может быть уже НЕ участником (выгнали, ушёл) — журнал и счётчики
+    для неё всё равно отдаются, иначе панель было бы невозможно открыть ровно
+    тогда, когда она нужнее всего; блок членства в этом случае пустой.
+    """
+
+    # Сколько последних записей журнала отдаём. Панель показывает их списком
+    # без подгрузки — «вся история» здесь не нужна, а без потолка выборка
+    # росла бы неограниченно на старом сервере.
+    AUDIT_LIMIT = 50
+
+    def get(self, request, server_id, user_id):
+        server = get_object_or_404(Server, id=server_id)
+        denied = _require_permission(request, server, "manage_server")
+        if denied:
+            return denied
+        target = get_object_or_404(User, id=user_id)
+
+        authored = Message.objects.filter(channel__server=server, author=target)
+        # Ссылка — по вхождению схемы в текст. Грубо (внутри код-блока тоже
+        # засчитается), но честно отражает «сколько раз человек кидал ссылки»,
+        # а полноценный разбор markdown ради счётчика на панели избыточен.
+        links = authored.filter(
+            Q(content__icontains="http://") | Q(content__icontains="https://")).count()
+        # Медиа — сами файлы, а не сообщения с файлами: два скриншота одним
+        # сообщением это два медиа, и модератору интересно именно их число.
+        media = Attachment.objects.filter(
+            message__channel__server=server, message__author=target).count()
+
+        membership = Membership.objects.filter(
+            server=server, user=target
+        ).select_related("join_invited_by").prefetch_related("roles").first()
+
+        entries = ServerAuditLog.objects.filter(
+            server=server, target=target).select_related("actor")[:self.AUDIT_LIMIT]
+
+        perms = roles.permissions_for(target, server)
+        return Response({
+            "user": UserSerializer(target).data,
+            "is_member": membership is not None,
+            "is_owner": target.id == server.owner_id,
+            "stats": {
+                "messages": authored.count(),
+                "links": links,
+                "media": media,
+                "audit_entries": ServerAuditLog.objects.filter(
+                    server=server, target=target).count(),
+            },
+            # Права ЦЕЛИ, не запрашивающего — панель показывает, что может
+            # сам участник (блок «Права для модератора» на макете).
+            "permissions": perms,
+            "permission_labels": {
+                name: label for name, label, _group, _hint in roles.PERMISSION_FIELDS
+            },
+            "role_ids": [r.id for r in membership.roles.all()] if membership else [],
+            "server_nickname": membership.nickname if membership else "",
+            "registered_at": target.date_joined,
+            "joined_at": membership.joined_at if membership else None,
+            "join_method": membership.join_method if membership else None,
+            "join_invite_code": membership.join_invite_code if membership else "",
+            "join_invited_by": (
+                UserSerializer(membership.join_invited_by).data
+                if membership and membership.join_invited_by else None
+            ),
+            "audit_log": ServerAuditLogSerializer(entries, many=True).data,
+        })
 
 
 class ServerRoles(APIView):
@@ -808,7 +906,10 @@ class ServerJoinRequestDecision(APIView):
             return denied
         join_request = get_object_or_404(
             ServerJoinRequest, id=request_id, server=server)
-        Membership.objects.get_or_create(user=join_request.user, server=server)
+        membership, created = Membership.objects.get_or_create(
+            user=join_request.user, server=server)
+        audit.record_join(membership, created, Membership.JOIN_REQUEST,
+                          invited_by=request.user)
         user_id = join_request.user_id
         join_request.delete()
         _grant_server_membership(server, user_id)
@@ -866,6 +967,8 @@ class ServerBans(APIView):
         Membership.objects.filter(server=server, user=target).delete()
         ServerJoinRequest.objects.filter(server=server, user=target).delete()
         _revoke_server_membership(server, target.id)
+        audit.log(server, request.user, target, ServerAuditLog.BAN,
+                  reason=ban.reason)
         return Response(ServerBanSerializer(ban).data, status=201)
 
 
@@ -876,7 +979,13 @@ class ServerBanDetail(APIView):
             request, server, "manage_members", "ban_members")
         if denied:
             return denied
-        ServerBan.objects.filter(server=server, user_id=user_id).delete()
+        ban = ServerBan.objects.filter(
+            server=server, user_id=user_id).select_related("user").first()
+        if ban is None:
+            return Response(status=204)
+        target = ban.user
+        ban.delete()
+        audit.log(server, request.user, target, ServerAuditLog.UNBAN)
         return Response(status=204)
 
 
@@ -899,6 +1008,7 @@ class ServerLeave(APIView):
                 {"detail": "Владелец не может покинуть свой сервер."}, status=400)
         Membership.objects.filter(server=server, user=request.user).delete()
         _revoke_server_membership(server, request.user.id)
+        audit.log(server, request.user, request.user, ServerAuditLog.LEAVE)
         return Response(status=204)
 
 
@@ -1045,7 +1155,10 @@ class ServerInviteDecision(APIView):
             invite.save(update_fields=["status"])
             _broadcast_invite_message_update(invite)
             return Response({"detail": "Вы забанены на этом сервере."}, status=403)
-        Membership.objects.get_or_create(user=request.user, server=server)
+        membership, created = Membership.objects.get_or_create(
+            user=request.user, server=server)
+        audit.record_join(membership, created, Membership.JOIN_INVITE_DIRECT,
+                          invited_by=invite.created_by)
         invite.status = ServerInvite.ACCEPTED
         invite.save(update_fields=["status"])
         _grant_server_membership(server, request.user.id)
@@ -1175,8 +1288,11 @@ class ServerInviteRedeem(APIView):
         if not is_member(request.user, server):
             if ServerBan.objects.filter(server=server, user=request.user).exists():
                 return Response({"detail": "Вы забанены на этом сервере."}, status=403)
-            Membership.objects.get_or_create(user=request.user, server=server)
+            membership, created = Membership.objects.get_or_create(
+                user=request.user, server=server)
             _grant_server_membership(server, request.user.id)
+            audit.record_join(membership, created, Membership.JOIN_INVITE_LINK,
+                              invite_code=invite.code, invited_by=invite.created_by)
             # F(), а не invite.uses += 1 — иначе одновременные вступления по
             # одной и той же ссылке (два человека почти разом) теряли бы
             # инкременты друг друга (read-modify-write не атомарен без него).
