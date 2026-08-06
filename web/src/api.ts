@@ -418,6 +418,76 @@ export interface ServerBanEntry {
   created_at: string
 }
 
+/** Действие в журнале модерации (backend chat.models.ServerAuditLog). */
+export type AuditAction =
+  | 'join'
+  | 'leave'
+  | 'kick'
+  | 'ban'
+  | 'unban'
+  | 'role_add'
+  | 'role_remove'
+  | 'nickname'
+
+export interface AuditLogEntry {
+  id: number
+  /** Кто действовал: модератор, а для join/leave — сам участник. null, если
+   * его аккаунт с тех пор удалили. */
+  actor: User | null
+  action: AuditAction
+  /** Подробности своей формы у каждого действия — причина бана, имя и цвет
+   * роли, старый/новый никнейм (см. backend chat.audit). */
+  details: {
+    reason?: string
+    role_name?: string
+    role_color?: string
+    before?: string
+    after?: string
+    method?: string
+    invite_code?: string
+    invited_by_username?: string
+  }
+  created_at: string
+}
+
+/** Как участник попал на сервер (backend Membership.JOIN_METHOD_CHOICES). */
+export type JoinMethod =
+  | 'unknown'
+  | 'public'
+  | 'invite_link'
+  | 'invite_direct'
+  | 'request'
+  | 'owner'
+
+/** Сводка по участнику для панели модератора — требует права manage_server
+ * (см. backend chat.views.ServerMemberModeratorView). Цель может быть уже НЕ
+ * участником: тогда is_member=false, а всё, что про членство (роли, дата
+ * вступления, способ), пустое — журнал и счётчики остаются. */
+export interface ModeratorView {
+  user: User
+  is_member: boolean
+  is_owner: boolean
+  stats: {
+    messages: number
+    links: number
+    media: number
+    audit_entries: number
+  }
+  /** Права САМОГО участника, а не смотрящего. */
+  permissions: ServerPermissions
+  /** Подписи прав — приезжают с бэка, чтобы список названий жил в одном
+   * месте (chat/roles.py PERMISSION_FIELDS). */
+  permission_labels: Record<string, string>
+  role_ids: number[]
+  server_nickname: string
+  registered_at: string
+  joined_at: string | null
+  join_method: JoinMethod | null
+  join_invite_code: string
+  join_invited_by: User | null
+  audit_log: AuditLogEntry[]
+}
+
 /** Файл, прикреплённый к сообщению (backend chat.models.Attachment). */
 export interface Attachment {
   id: string
@@ -1302,6 +1372,8 @@ export const api = {
     }),
   kickMember: (serverId: number, userId: number) =>
     req(`/api/servers/${serverId}/members/${userId}`, { method: 'DELETE' }),
+  moderatorView: (serverId: number, userId: number): Promise<ModeratorView> =>
+    req(`/api/servers/${serverId}/members/${userId}/moderator-view`),
 
   serverJoinRequests: (serverId: number): Promise<ServerJoinRequestEntry[]> =>
     req(`/api/servers/${serverId}/requests`),

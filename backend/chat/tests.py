@@ -40,7 +40,8 @@ from .models import (
     Attachment, Channel, ChannelMemberSettings, Conversation, ConversationMessage,
     ConversationParticipant, MAX_ATTACHMENT_BYTES, MAX_EMOJI_BYTES,
     MAX_REACTIONS_PER_MESSAGE,
-    FriendNickname, Membership, Message, ProfileNote, Reaction, Role, Server, ServerBan,
+    FriendNickname, Membership, Message, ProfileNote, Reaction, Role, Server,
+    ServerAuditLog, ServerBan,
     ServerEmoji, ServerInvite, ServerJoinRequest, Sticker, StickerPack,
     ChannelReadState,
     MAX_STICKER_BYTES, MAX_VOICE_MS, MAX_WAVEFORM_POINTS, STICKER_SIDE, dm_room,
@@ -5287,3 +5288,124 @@ class PrivateChannelTests(APITestCase):
         resp = self.client.patch(
             "/api/channels/{}".format(self.channel.id), {}, format="json")
         self.assertEqual(resp.status_code, 400)
+
+
+class ModeratorViewTests(APITestCase):
+    """Панель модератора: сводка по участнику (chat.views
+    .ServerMemberModeratorView) и журнал событий (chat.audit)."""
+
+    def setUp(self):
+        self.owner = User.objects.create_user(username="mv_owner", password="pw12345")
+        self.moder = User.objects.create_user(username="mv_moder", password="pw12345")
+        self.target = User.objects.create_user(username="mv_target", password="pw12345")
+        self.server = Server.objects.create(name="s", owner=self.owner)
+        Membership.objects.create(user=self.owner, server=self.server)
+        self.moder_membership = Membership.objects.create(
+            user=self.moder, server=self.server)
+        self.target_membership = Membership.objects.create(
+            user=self.target, server=self.server)
+        roles.create_default_role(self.server)
+        self.channel = Channel.objects.create(
+            server=self.server, name="general", kind=Channel.TEXT)
+        self.url = (f"/api/servers/{self.server.id}"
+                    f"/members/{self.target.id}/moderator-view")
+
+    def test_requires_manage_server(self):
+        """Рядовому участнику панель закрыта — даже если он умеет банить."""
+        role = Role.objects.create(
+            server=self.server, name="вышибала", position=5, manage_members=True)
+        self.moder_membership.roles.add(role)
+        self.client.force_authenticate(self.moder)
+        self.assertEqual(self.client.get(self.url).status_code, 403)
+
+    def test_manage_server_role_gets_access(self):
+        role = Role.objects.create(
+            server=self.server, name="админ", position=5, manage_server=True)
+        self.moder_membership.roles.add(role)
+        self.client.force_authenticate(self.moder)
+        self.assertEqual(self.client.get(self.url).status_code, 200)
+
+    def test_counts_messages_links_and_media(self):
+        Message.objects.create(
+            channel=self.channel, author=self.target, content="просто текст")
+        Message.objects.create(
+            channel=self.channel, author=self.target,
+            content="держи https://example.com")
+        with_file = Message.objects.create(
+            channel=self.channel, author=self.target, content="скрин")
+        Attachment.objects.create(
+            uploaded_by=self.target, message=with_file,
+            file=SimpleUploadedFile("a.png", b"x"),
+            original_name="a.png", content_type="image/png", size=1)
+        # Чужое сообщение в тот же канал в счётчики цели попасть не должно.
+        Message.objects.create(
+            channel=self.channel, author=self.moder, content="https://other")
+
+        self.client.force_authenticate(self.owner)
+        stats = self.client.get(self.url).data["stats"]
+        self.assertEqual(stats["messages"], 3)
+        self.assertEqual(stats["links"], 1)
+        self.assertEqual(stats["media"], 1)
+
+    def test_kick_ban_and_role_changes_are_logged(self):
+        self.client.force_authenticate(self.owner)
+        role = Role.objects.create(server=self.server, name="цвет", position=1)
+        self.client.patch(
+            f"/api/servers/{self.server.id}/members/{self.target.id}",
+            {"role_ids": [role.id]}, format="json")
+        self.client.delete(
+            f"/api/servers/{self.server.id}/members/{self.target.id}")
+
+        actions = list(ServerAuditLog.objects.filter(
+            server=self.server, target=self.target
+        ).values_list("action", flat=True))
+        self.assertIn(ServerAuditLog.ROLE_ADD, actions)
+        self.assertIn(ServerAuditLog.KICK, actions)
+
+    def test_audit_survives_target_leaving_the_server(self):
+        """Панель должна открываться и по уже выгнанному — именно тогда
+        история и нужна."""
+        self.client.force_authenticate(self.owner)
+        self.client.delete(
+            f"/api/servers/{self.server.id}/members/{self.target.id}")
+        resp = self.client.get(self.url)
+        self.assertEqual(resp.status_code, 200)
+        self.assertFalse(resp.data["is_member"])
+        self.assertEqual(
+            [e["action"] for e in resp.data["audit_log"]], [ServerAuditLog.KICK])
+
+    def test_joining_by_link_records_code_and_inviter(self):
+        newcomer = User.objects.create_user(username="mv_new", password="pw12345")
+        invite = ServerInvite.objects.create(
+            server=self.server, created_by=self.owner,
+            kind=ServerInvite.LINK, code="abc123")
+        self.client.force_authenticate(newcomer)
+        resp = self.client.post("/api/invites/redeem", {"code": "abc123"}, format="json")
+        self.assertEqual(resp.status_code, 200)
+
+        membership = Membership.objects.get(server=self.server, user=newcomer)
+        self.assertEqual(membership.join_method, Membership.JOIN_INVITE_LINK)
+        self.assertEqual(membership.join_invite_code, "abc123")
+        self.assertEqual(membership.join_invited_by_id, self.owner.id)
+        invite.refresh_from_db()
+        self.assertEqual(invite.uses, 1)
+
+        self.client.force_authenticate(self.owner)
+        data = self.client.get(
+            f"/api/servers/{self.server.id}"
+            f"/members/{newcomer.id}/moderator-view").data
+        self.assertEqual(data["join_invite_code"], "abc123")
+        self.assertEqual(data["join_invited_by"]["username"], "mv_owner")
+
+    def test_repeat_redeem_does_not_overwrite_join_method(self):
+        """Повторный переход по своей же ссылке — не новое вступление."""
+        ServerInvite.objects.create(
+            server=self.server, created_by=self.owner,
+            kind=ServerInvite.LINK, code="dup999")
+        self.client.force_authenticate(self.target)
+        self.client.post("/api/invites/redeem", {"code": "dup999"}, format="json")
+        self.target_membership.refresh_from_db()
+        self.assertEqual(self.target_membership.join_method, Membership.JOIN_UNKNOWN)
+        self.assertFalse(ServerAuditLog.objects.filter(
+            server=self.server, target=self.target,
+            action=ServerAuditLog.JOIN).exists())

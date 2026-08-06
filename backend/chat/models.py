@@ -240,6 +240,39 @@ class Membership(models.Model):
     # раскладка, не влияет ни на кого другого — как заглушение/уведомления.
     pinned_channel_ids = models.JSONField(default=list, blank=True)
 
+    # --- как участник сюда попал (блок «Способ вступления» в панели
+    # модератора, см. chat.views.ServerMemberModeratorView) ----------------
+    # Полем на Membership, а не выводом из ServerAuditLog: это свойство
+    # ТЕКУЩЕГО членства, а не событие. Ушёл и вернулся по другой ссылке —
+    # здесь должно стоять новое, а не первое за всю историю. Журнал же
+    # хранит обе отлучки как отдельные записи, и одно другому не мешает.
+    JOIN_UNKNOWN = "unknown"
+    JOIN_PUBLIC = "public"
+    JOIN_INVITE_LINK = "invite_link"
+    JOIN_INVITE_DIRECT = "invite_direct"
+    JOIN_REQUEST = "request"
+    JOIN_OWNER = "owner"
+    JOIN_METHOD_CHOICES = [
+        (JOIN_UNKNOWN, "Неизвестно"),
+        (JOIN_PUBLIC, "Открытый сервер"),
+        (JOIN_INVITE_LINK, "Ссылка-приглашение"),
+        (JOIN_INVITE_DIRECT, "Личное приглашение"),
+        (JOIN_REQUEST, "Одобренная заявка"),
+        (JOIN_OWNER, "Создатель сервера"),
+    ]
+    # unknown — не только «не знаем», но и все, кто вступил ДО появления
+    # этих полей: заполнять их задним числом нечем, и врать точным способом
+    # хуже, чем честно показать «Неизвестно».
+    join_method = models.CharField(
+        max_length=20, choices=JOIN_METHOD_CHOICES, default=JOIN_UNKNOWN)
+    # Код ссылки, по которой вступили — только для JOIN_INVITE_LINK. Копия
+    # строки, а не FK на ServerInvite: ссылку могут удалить, а «пришёл вот
+    # по этой» должно остаться.
+    join_invite_code = models.CharField(max_length=16, blank=True, default="")
+    join_invited_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True,
+        blank=True, related_name="invited_memberships")
+
     class Meta:
         unique_together = ("user", "server")
 
@@ -296,6 +329,74 @@ class ServerBan(models.Model):
 
     def __str__(self) -> str:
         return f"{self.user} banned @ {self.server}"
+
+
+class ServerAuditLog(models.Model):
+    """Журнал событий по участникам сервера — то, что показывает блок
+    «Журнал аудита» в панели модератора (см.
+    chat.views.ServerMemberModeratorView).
+
+    Пишется ТОЛЬКО о том, что нельзя восстановить из текущего состояния БД:
+    кик/бан/разбан, выдача и снятие ролей, смена никнейма, вступление и
+    выход. Счётчики сообщений/ссылок/медиа сюда НЕ пишутся — они считаются
+    запросом по chat.models.Message в момент открытия панели (см. там же):
+    так они верны и для истории, накопленной до появления журнала, а таблица
+    не растёт на каждое сообщение в чате.
+
+    Записи привязаны к паре (сервер, участник-цель) и переживают уход цели с
+    сервера: модерации важно видеть историю того, кого уже выгнали. Оба
+    пользователя — SET_NULL, чтобы удаление аккаунта не уносило с собой чужую
+    историю модерации.
+    """
+
+    JOIN = "join"
+    LEAVE = "leave"
+    KICK = "kick"
+    BAN = "ban"
+    UNBAN = "unban"
+    ROLE_ADD = "role_add"
+    ROLE_REMOVE = "role_remove"
+    NICKNAME = "nickname"
+    ACTION_CHOICES = [
+        (JOIN, "Вступление"),
+        (LEAVE, "Выход"),
+        (KICK, "Кик"),
+        (BAN, "Бан"),
+        (UNBAN, "Разбан"),
+        (ROLE_ADD, "Выдана роль"),
+        (ROLE_REMOVE, "Снята роль"),
+        (NICKNAME, "Смена никнейма"),
+    ]
+
+    server = models.ForeignKey(
+        Server, on_delete=models.CASCADE, related_name="audit_entries")
+    # Кто ДЕЙСТВОВАЛ. Для JOIN/LEAVE совпадает с target (человек пришёл или
+    # ушёл сам), для остального — модератор.
+    actor = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True,
+        blank=True, related_name="audit_actions")
+    # О КОМ запись — по нему панель модератора и фильтрует.
+    target = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True,
+        blank=True, related_name="audit_records")
+    action = models.CharField(max_length=20, choices=ACTION_CHOICES)
+    # Подробности, своя форма у каждого действия: причина бана, имя и цвет
+    # роли, старый/новый никнейм, способ вступления. JSON, а не колонки под
+    # каждое — набор полей у восьми действий разный и будет меняться, а
+    # читает их только фронт панели (см. web/src/components/ModeratorPanel).
+    details = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+        indexes = [
+            # Панель всегда спрашивает «записи про ЭТОГО человека на ЭТОМ
+            # сервере, свежие сверху» — индекс ровно под этот запрос.
+            models.Index(fields=["server", "target", "-created_at"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.action} {self.target_id} @ {self.server_id}"
 
 
 def _invite_code() -> str:

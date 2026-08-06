@@ -89,6 +89,16 @@ export default function AppShell() {
   }, [isMobile, goBackMobile])
   const [showProfile, setShowProfile] = useState(false)
   const [profilePopup, setProfilePopup] = useState<ProfilePopupTarget | null>(null)
+  // Кого разбираем в панели модератора (см. ModeratorPanel). Рисует и
+  // открывает панель AppShellOverlays, но состояние держим здесь: от него
+  // зависит сетка .app ниже — панель это КОЛОНКА, а не наложение.
+  const [moderatorTarget, setModeratorTarget] = useState<ProfilePopupUser | null>(null)
+  // Ушли с сервера или переключились на другой — досье прежнего участника
+  // там ни при чём, и права на него уже другие. Закрываем, а не тащим за
+  // собой в чужой контекст.
+  useEffect(() => {
+    setModeratorTarget(null)
+  }, [serverId])
   // Черновики композера — по одному на канал/диалог, переживают переключение
   // между ними (и отлучку в голосовой канал/пустой экран): сам MessageInput
   // размонтируется при смене места (см. key={draftKey} у обоих <MessageInput>
@@ -298,7 +308,7 @@ export default function AppShell() {
         (currentChannel?.kind === 'text' && !showMembersList)
           ? 'app-no-members-col'
           : ''
-      }`}
+      } ${moderatorTarget ? 'app-moderator-open' : ''}`}
     >
       <AppShellNav
         server={serverData}
@@ -358,6 +368,8 @@ export default function AppShell() {
         conversationMenu={conversationMenu}
         friendMenu={friendMenu}
         servers={servers}
+        moderatorTarget={moderatorTarget}
+        setModeratorTarget={setModeratorTarget}
       />
     </div>
     </VoiceProvider>
