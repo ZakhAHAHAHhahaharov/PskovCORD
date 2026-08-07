@@ -4831,6 +4831,27 @@ class ReadMessageHistoryTests(APITestCase):
             "/api/channels/{}/messages".format(self.channel.id))
         self.assertEqual([m["id"] for m in resp.data], [fresh.id])
 
+    def test_message_exactly_at_login_moment_is_visible(self):
+        """Граница входа не должна ехать по округлению.
+
+        online_since раньше лежал в Redis как float секунд (time.time()), и
+        собранный обратно fromtimestamp() округлял к БЛИЖАЙШЕЙ микросекунде,
+        тогда как timezone.now() свою отбрасывает. На половине значений cutoff
+        оказывался на 1 мкс ПОЗЖЕ реального входа, и сообщение, отправленное в
+        тот же тик системных часов (на Windows — до 15 мс), считалось «до
+        входа» и пропадало: тест выше падал примерно через раз.
+        """
+        self.default_role.read_message_history = False
+        self.default_role.save(update_fields=["read_message_history"])
+        presence.user_connected(self.member.id)
+        edge = Message.objects.create(
+            channel=self.channel, author=self.owner, content="ровно на границе")
+        Message.objects.filter(id=edge.id).update(
+            created_at=presence.online_since(self.member.id))
+        resp = self.client.get(
+            "/api/channels/{}/messages".format(self.channel.id))
+        self.assertEqual([m["id"] for m in resp.data], [edge.id])
+
     def test_pins_are_gated_too(self):
         """Закреп ходит отдельной ручкой — без гейта он показывал бы старое
         сообщение в обход основной ленты."""

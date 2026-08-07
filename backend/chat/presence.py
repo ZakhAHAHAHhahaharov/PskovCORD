@@ -8,9 +8,12 @@ Presence через Redis.
   кто-то есть — появляется при первом входе, стирается когда канал пустеет.
 """
 import time
+from datetime import datetime, timedelta
+from datetime import timezone as dt_timezone
 
 import redis
 from django.conf import settings
+from django.utils import timezone
 
 _r = redis.from_url(settings.REDIS_URL, decode_responses=True)
 
@@ -74,6 +77,29 @@ def _online_since_key(uid) -> str:
     return f"presence:online_since:{uid}"
 
 
+_EPOCH = datetime(1970, 1, 1, tzinfo=dt_timezone.utc)
+_MICROSECOND = timedelta(microseconds=1)
+
+
+def _now_micros() -> int:
+    """«Сейчас» в целых микросекундах от эпохи.
+
+    Не time.time(): единственный потребитель online_since сравнивает эту
+    метку с Message.created_at, а тот штампуется timezone.now() и хранится с
+    микросекундной точностью. float секунд через такое сравнение не проходит:
+    при 1.8e9 у double остаётся ~0.1 мкс разрешения, и обратная сборка
+    datetime.fromtimestamp() округляет к БЛИЖАЙШЕЙ микросекунде, тогда как
+    timezone.now() свою просто отбрасывает. На половине значений граница
+    получалась на 1 мкс ПОЗЖЕ реального момента входа, и сообщение,
+    отправленное в тот же тик системных часов (на Windows это до 15 мс),
+    оказывалось «строго раньше входа» и пропадало из выдачи.
+
+    Целые микросекунды от той же timezone.now() воспроизводятся обратно
+    без потерь — округлять нечего.
+    """
+    return (timezone.now() - _EPOCH) // _MICROSECOND
+
+
 # --- online -----------------------------------------------------------------
 def user_connected(uid) -> int:
     uid = str(uid)
@@ -84,7 +110,7 @@ def user_connected(uid) -> int:
         # пользователя не должна двигать границу видимой истории (см.
         # online_since ниже) — иначе открытие второго окна прятало бы часть
         # только что прочитанного.
-        _r.set(_online_since_key(uid), time.time())
+        _r.set(_online_since_key(uid), _now_micros())
     return n
 
 
@@ -101,22 +127,32 @@ def user_disconnected(uid) -> int:
     return n
 
 
-def online_since(uid) -> float | None:
-    """Unix-время, когда пользователь вошёл в сеть (первый WS-коннект), или
-    None, если он сейчас офлайн.
+def online_since(uid) -> datetime | None:
+    """Момент, когда пользователь вошёл в сеть (первый WS-коннект), или None,
+    если он сейчас офлайн.
 
     Нужно ровно одному потребителю — праву read_message_history: без него
     участник видит только те сообщения, что пришли с момента ТЕКУЩЕГО входа
     (см. chat.views.ChannelMessages). Живёт в Redis рядом с самим presence, а
     не в БД: это свойство сессии, оно исчезает вместе с ней и переживать
-    перезапуск не должно."""
+    перезапуск не должно.
+
+    Отдаёт сразу aware datetime, а не unix-секунды: сравнивать метку нужно с
+    Message.created_at, и перегонять её через float по дороге нельзя (почему —
+    см. _now_micros).
+    """
     raw = _r.get(_online_since_key(str(uid)))
     if raw is None:
         return None
     try:
-        return float(raw)
+        micros = int(raw)
     except (TypeError, ValueError):
+        # В том числе ключи старого формата (float секунд), оставшиеся в Redis
+        # от предыдущей версии: считаем границу неизвестной — потребитель
+        # тогда отсчитывает от «сейчас» и на следующем входе всё встанет на
+        # место (см. chat.views._hide_old_history).
         return None
+    return _EPOCH + timedelta(microseconds=micros)
 
 
 def is_online(uid) -> bool:
@@ -158,7 +194,7 @@ def heartbeat(uid) -> bool:
     _r.setnx(_conn_key(uid), 1)
     # setnx, а не set: если запись пережила sweep, это тот же самый вход, и
     # двигать границу видимой истории (см. online_since) не за что.
-    _r.setnx(_online_since_key(uid), time.time())
+    _r.setnx(_online_since_key(uid), _now_micros())
     return True
 
 
