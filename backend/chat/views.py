@@ -2261,11 +2261,7 @@ def _hide_old_history(request, server, qs):
     if roles.has_permission(request.user, server, "read_message_history"):
         return qs
     since = presence.online_since(request.user.id)
-    cutoff = (
-        timezone.datetime.fromtimestamp(since, tz=timezone.get_current_timezone())
-        if since is not None
-        else timezone.now()
-    )
+    cutoff = since if since is not None else timezone.now()
     return qs.filter(created_at__gte=cutoff)
 
 
