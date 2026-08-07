@@ -58,6 +58,9 @@ interface AppShellOverlaysProps {
    * колонка, см. app-moderator-open в index.css), а класс на ней вешает
    * AppShell — ровно как у app-no-members-col рядом. */
   moderatorTarget: ProfilePopupUser | null
+  /** Уйти к сообщению из мини-чата панели — переключает канал и прокручивает
+   * ленту (см. AppShell.jumpToMessage). */
+  onJumpToMessage: (channelId: number, messageId: number) => void
   setModeratorTarget: (v: ProfilePopupUser | null) => void
 }
 
@@ -71,7 +74,7 @@ export default function AppShellOverlays({
   showSettings, closeSettings, showProfile, setShowProfile,
   profilePopup, setProfilePopup,
   conversationMenu, friendMenu, servers,
-  moderatorTarget, setModeratorTarget,
+  moderatorTarget, setModeratorTarget, onJumpToMessage,
 }: AppShellOverlaysProps) {
   // Кого баним прямо сейчас (модалка с причиной). Отдельно от
   // moderatorTarget: забанить можно и из контекстного меню, не открывая
@@ -624,6 +627,17 @@ export default function AppShellOverlays({
             onSendMessage={() => friendMenu.handleSendMessage(moderatorTarget)}
             onKick={() => handleKickMember(moderatorTarget.id, moderatorTarget.username)}
             onBan={() => setBanTarget(moderatorTarget)}
+            onJumpToMessage={onJumpToMessage}
+            // Тот же гейт, что у флайаута «Роли» в контекстном меню
+            // (см. rolesMenu выше): право manage_roles И цель ниже меня.
+            // Сама выдача — та же ручка api.setMemberRoles.
+            onGrantRole={
+              targetMember && myPerms.manage_roles && canActOnTarget
+                ? (roleId) => handleToggleMemberRole(
+                  moderatorTarget.id, roleId, true, targetMember.role_ids,
+                )
+                : undefined
+            }
           />
         )
       })()}

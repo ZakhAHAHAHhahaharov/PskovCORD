@@ -4294,6 +4294,30 @@ textarea.inline-editable-input {
   text-align: right;
 }
 
+/* Строка активности, ведущая в мини-чат (см. activityRow в ModeratorPanel).
+   Кнопка, а не div — клавиатура и скринридер должны видеть в ней действие;
+   width:100% возвращает ей ширину карточки, которую <button> иначе ужал бы
+   по содержимому. */
+button.moderator-panel-row-link {
+  width: 100%;
+  text-align: left;
+  border-radius: 4px;
+  /* Отрицательные поля с равным паддингом — подсветка ховера шире текста, до
+     краёв карточки, но сама строка стоит там же, где соседние. */
+  margin: 0 -6px;
+  padding-left: 6px;
+  padding-right: 6px;
+}
+
+.moderator-panel-row-link:hover {
+  background: var(--channel-hover);
+}
+
+.moderator-panel-row-link:hover > span:first-child,
+.moderator-panel-row-link:hover .moderator-panel-value {
+  color: var(--heading-text);
+}
+
 /* «Способ вступления» — подпись «участник приглашён …» уезжает на свою
    строку под значением, поэтому строка перестаёт быть двухколоночной. */
 .moderator-panel-row-stacked {
@@ -4394,6 +4418,198 @@ textarea.inline-editable-input {
 .moderator-panel-audit-actor {
   font-size: calc(11px * var(--font-scale, 1));
   color: var(--text-faint);
+}
+
+/* ---- выдача роли из панели (кнопка «+» в карточке «Роли») ---- */
+
+/* position:relative — якорь для выпадающего списка ниже. */
+.moderator-role-add {
+  position: relative;
+  display: inline-flex;
+}
+
+.moderator-role-add-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--input-secondary-bg);
+  color: var(--text-muted);
+}
+
+.moderator-role-add-btn:hover {
+  background: var(--channel-hover);
+  color: var(--heading-text);
+}
+
+/* Раскрывается ВВЕРХ (bottom:100%): карточка ролей сидит в середине длинной
+   панели, и список вниз упирался бы в её нижний край чаще, чем в верхний. */
+.moderator-role-picker {
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  z-index: 30;
+  min-width: 180px;
+  max-height: 260px;
+  overflow-y: auto;
+  margin-bottom: 6px;
+  padding: 6px;
+  border-radius: 6px;
+  background: var(--modal-bg);
+  border: 1px solid var(--input-border);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+
+.moderator-role-picker-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 8px;
+  border-radius: 4px;
+  font-size: calc(13px * var(--font-scale, 1));
+  color: var(--text-normal);
+  text-align: left;
+}
+
+.moderator-role-picker-item:hover {
+  background: var(--channel-hover);
+  color: var(--heading-text);
+}
+
+/* ---- мини-чат под счётчиками активности (ModeratorMessages) ---- */
+
+/* Пока открыт мини-чат, прокручивается СПИСОК, а не всё тело панели: шапка
+   с кнопкой «назад» должна оставаться на месте. Само тело в этом режиме
+   становится колонкой и свой скролл отдаёт (overflow:hidden) — иначе
+   прокручиваемых контейнеров оказалось бы два вложенных. */
+.moderator-panel-body-messages {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.moderator-msg-title {
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.moderator-msg-back {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  color: var(--text-muted);
+}
+
+.moderator-msg-back:hover {
+  background: var(--channel-hover);
+  color: var(--heading-text);
+}
+
+/* Своя прокрутка: шапка с кнопкой «назад» остаётся на месте, уезжает только
+   список — как в обычной ленте. */
+.moderator-msg-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow-y: auto;
+  /* Тело панели уже прокручиваемое; здесь min-height:0 не даёт flex-элементу
+     раздуться под содержимое вместо появления собственного скролла. */
+  min-height: 0;
+  flex: 1;
+}
+
+.moderator-msg {
+  padding: 7px 8px;
+  border-radius: 6px;
+  font-size: calc(13px * var(--font-scale, 1));
+  color: var(--text-normal);
+  cursor: context-menu;
+}
+
+.moderator-msg:hover,
+.moderator-msg.active {
+  background: var(--channel-hover);
+}
+
+.moderator-msg-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 2px;
+}
+
+.moderator-msg-channel {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  font-size: calc(11px * var(--font-scale, 1));
+  font-weight: 600;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.moderator-msg-time {
+  flex-shrink: 0;
+  font-size: calc(11px * var(--font-scale, 1));
+  color: var(--text-faint);
+}
+
+.moderator-msg-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.moderator-msg-files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.moderator-msg-thumb {
+  width: 52px;
+  height: 52px;
+  object-fit: cover;
+  border-radius: 4px;
+}
+
+.moderator-msg-file {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 6px;
+  border-radius: 4px;
+  background: var(--input-secondary-bg);
+  font-size: calc(11px * var(--font-scale, 1));
+  color: var(--text-muted);
+}
+
+/* Подсветка сообщения, к которому перепрыгнули из панели модератора.
+   Гаснет анимацией, а сам класс снимает таймер в useChannelMessages —
+   анимация только рисует затухание, состоянием она не управляет. */
+.message-row.message-highlighted {
+  animation: message-jump-flash 2.6s ease-out;
+}
+
+@keyframes message-jump-flash {
+  0%, 55% {
+    background: rgba(88, 101, 242, 0.28);
+    box-shadow: inset 3px 0 0 var(--blurple);
+  }
+  100% {
+    background: transparent;
+    box-shadow: inset 3px 0 0 transparent;
+  }
 }
 
 .member-category {

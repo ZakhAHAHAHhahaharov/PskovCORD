@@ -305,6 +305,7 @@ export default function MessageList({
   onTogglePin,
   scrollAnchor,
   onReachedBottom,
+  highlightMessageId,
   servers,
   conversations,
 }: {
@@ -358,6 +359,11 @@ export default function MessageList({
    * фича недоступна (у диалогов/групп курсор прочтения не персистится, см.
    * AppShellChat). */
   onReachedBottom?: (messageId: number) => void
+  /** Сообщение, к которому только что перепрыгнули из панели модератора, —
+   * подсвечивается, пока не погаснет само (таймер живёт в
+   * useChannelMessages). Без подсветки после скачка непонятно, ради какой
+   * именно строки лента переехала. */
+  highlightMessageId?: number | null
   /** Мои серверы (с каналами) и диалоги/группы — список получателей в
    * модалке «Переслать» (см. ForwardMessageModal). Тот же набор, что и в
    * AppShell целиком: список не завязан на то, что открыто СЕЙЧАС — можно
@@ -638,7 +644,7 @@ export default function MessageList({
               pending ? 'message-pending' : ''
             } ${m.deliveryStatus === 'failed' ? 'message-failed' : ''} ${
               mobileActiveKey === rowKey ? 'mobile-actions-active' : ''
-            }`}
+            } ${highlightMessageId === m.id ? 'message-highlighted' : ''}`}
             // Точка входа для scrollAnchor (см. useLayoutEffect выше) — у
             // неподтверждённых (pending, отрицательный id) атрибут тоже
             // проставлен, просто querySelector по такому id никогда не ищут:

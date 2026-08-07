@@ -5333,10 +5333,13 @@ class ModeratorViewTests(APITestCase):
             content="держи https://example.com")
         with_file = Message.objects.create(
             channel=self.channel, author=self.target, content="скрин")
-        Attachment.objects.create(
-            uploaded_by=self.target, message=with_file,
-            file=SimpleUploadedFile("a.png", b"x"),
-            original_name="a.png", content_type="image/png", size=1)
+        # ДВА файла одним сообщением — «медиа» считает сообщения, а не файлы:
+        # столько же строк потом окажется в мини-чате (см. ServerMemberMessages).
+        for name in ("a.png", "b.png"):
+            Attachment.objects.create(
+                uploaded_by=self.target, message=with_file,
+                file=SimpleUploadedFile(name, b"x"),
+                original_name=name, content_type="image/png", size=1)
         # Чужое сообщение в тот же канал в счётчики цели попасть не должно.
         Message.objects.create(
             channel=self.channel, author=self.moder, content="https://other")
@@ -5346,6 +5349,85 @@ class ModeratorViewTests(APITestCase):
         self.assertEqual(stats["messages"], 3)
         self.assertEqual(stats["links"], 1)
         self.assertEqual(stats["media"], 1)
+
+    # --- мини-чат под счётчиками (ServerMemberMessages) --------------------
+
+    def _messages_url(self, kind=None):
+        url = (f"/api/servers/{self.server.id}"
+               f"/members/{self.target.id}/messages")
+        return f"{url}?kind={kind}" if kind else url
+
+    def test_messages_list_requires_manage_server(self):
+        self.client.force_authenticate(self.moder)
+        self.assertEqual(self.client.get(self._messages_url()).status_code, 403)
+
+    def test_messages_list_filters_by_kind(self):
+        Message.objects.create(
+            channel=self.channel, author=self.target, content="просто текст")
+        Message.objects.create(
+            channel=self.channel, author=self.target,
+            content="держи https://example.com")
+        with_file = Message.objects.create(
+            channel=self.channel, author=self.target, content="скрин")
+        Attachment.objects.create(
+            uploaded_by=self.target, message=with_file,
+            file=SimpleUploadedFile("a.png", b"x"),
+            original_name="a.png", content_type="image/png", size=1)
+        Message.objects.create(
+            channel=self.channel, author=self.moder, content="https://chужое")
+
+        self.client.force_authenticate(self.owner)
+        self.assertEqual(len(self.client.get(self._messages_url()).data), 3)
+        links = self.client.get(self._messages_url("links")).data
+        self.assertEqual([m["content"] for m in links],
+                         ["держи https://example.com"])
+        media = self.client.get(self._messages_url("media")).data
+        self.assertEqual([m["content"] for m in media], ["скрин"])
+        # Канал нужен, чтобы было куда переходить из мини-чата.
+        self.assertEqual(media[0]["channel_id"], self.channel.id)
+        self.assertEqual(media[0]["channel_name"], "general")
+
+    def test_message_with_two_files_is_one_media_row(self):
+        """Счётчик «Медиаконтент» и длина списка не должны расходиться."""
+        with_files = Message.objects.create(
+            channel=self.channel, author=self.target, content="два скрина")
+        for name in ("a.png", "b.png"):
+            Attachment.objects.create(
+                uploaded_by=self.target, message=with_files,
+                file=SimpleUploadedFile(name, b"x"),
+                original_name=name, content_type="image/png", size=1)
+        self.client.force_authenticate(self.owner)
+        stats = self.client.get(self.url).data["stats"]
+        rows = self.client.get(self._messages_url("media")).data
+        self.assertEqual(stats["media"], len(rows))
+        self.assertEqual(len(rows), 1)
+
+    def test_private_channel_hidden_from_moderator_without_access(self):
+        """manage_server не пускает в приватный канал — ни счётчиком, ни
+        списком: панель не должна быть обходным путём к его содержимому."""
+        secret = Channel.objects.create(
+            server=self.server, name="secret", kind=Channel.TEXT, is_private=True)
+        Message.objects.create(
+            channel=secret, author=self.target, content="тайна")
+        Message.objects.create(
+            channel=self.channel, author=self.target, content="открытое")
+
+        role = Role.objects.create(
+            server=self.server, name="админ", position=5, manage_server=True)
+        self.moder_membership.roles.add(role)
+        self.client.force_authenticate(self.moder)
+        rows = self.client.get(self._messages_url()).data
+        self.assertEqual([m["content"] for m in rows], ["открытое"])
+        self.assertEqual(self.client.get(self.url).data["stats"]["messages"], 1)
+
+        # А тому, кому канал открыт (владельцу), видно оба.
+        self.client.force_authenticate(self.owner)
+        self.assertEqual(len(self.client.get(self._messages_url()).data), 2)
+
+    def test_messages_list_rejects_unknown_kind(self):
+        self.client.force_authenticate(self.owner)
+        self.assertEqual(
+            self.client.get(self._messages_url("secrets")).status_code, 400)
 
     def test_kick_ban_and_role_changes_are_logged(self):
         self.client.force_authenticate(self.owner)
