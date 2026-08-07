@@ -1,4 +1,6 @@
-import { MutableRefObject, useCallback, useLayoutEffect, useRef, useState } from 'react'
+import {
+  MutableRefObject, useCallback, useEffect, useLayoutEffect, useRef, useState,
+} from 'react'
 import { api, Channel, ChatMessageBase, Message } from '../api'
 import { OutgoingMessage } from '../components/MessageInput'
 import { useGateway } from '../gateway'
@@ -67,6 +69,44 @@ async function loadChannelWindow(
   }
 }
 
+/** Запрос «покажи вот это сообщение» — из мини-чата панели модератора (см.
+ * ModeratorMessages). token меняется на каждый клик, даже по тому же самому
+ * сообщению: повторный переход должен снова прокрутить и подсветить, а без
+ * отдельного счётчика одинаковый запрос не был бы новым значением. */
+export interface MessageJumpRequest {
+  channelId: number
+  messageId: number
+  token: number
+}
+
+/** Сколько сообщений подгружать по каждую сторону от цели перехода. Симметрично
+ * и заметно меньше страницы: нужен контекст вокруг («что там вообще
+ * происходило»), а не вся история канала. */
+const JUMP_CONTEXT_SIZE = 30
+
+/** Окно истории ВОКРУГ конкретного сообщения — то, чего loadChannelWindow не
+ * умеет: тот открывает канал «где остановился», а здесь цель произвольная и
+ * может лежать сколь угодно глубоко.
+ *
+ * before=<id+1> захватывает и само сообщение (фильтр строгий, id < before),
+ * after=<id> — только то, что новее; разрезы не пересекаются по построению,
+ * склеивать через Set незачем — ровно тот же приём, что в loadChannelWindow.
+ */
+async function loadMessageWindow(
+  channelId: number,
+  messageId: number,
+): Promise<Message[]> {
+  try {
+    const [before, after] = await Promise.all([
+      api.messages(channelId, { before: messageId + 1, limit: JUMP_CONTEXT_SIZE }),
+      api.messages(channelId, { after: messageId, limit: JUMP_CONTEXT_SIZE }),
+    ])
+    return [...before, ...after]
+  } catch {
+    return []
+  }
+}
+
 /** Сообщения текстового канала сервера: история, черновик ответа/редактирования,
  * отправка/удаление/реакции. `pendingEditsRef` общий с useConversationsData
  * (ключи "channel-N"/"dm-N" в одной Map) — передаётся снаружи, а не создаётся
@@ -77,6 +117,8 @@ export function useChannelMessages(
   channelId: number | null,
   gateway: ReturnType<typeof useGateway>,
   pendingEditsRef: MutableRefObject<Map<string, ChatMessageBase>>,
+  /** Куда перепрыгнуть из панели модератора — см. MessageJumpRequest. */
+  jumpRequest: MessageJumpRequest | null = null,
 ) {
   const [messages, setMessages] = useState<Message[]>([])
   // Читаются в обработчике "ready" (добор пропущенного) — через ref, чтобы не
@@ -108,6 +150,17 @@ export function useChannelMessages(
   // повторные вызовы handleReachedBottom с тем же (или более старым, при
   // гонке сетевых ответов) id не гоняли лишний POST впустую.
   const lastMarkedIdRef = useRef<number | null>(null)
+  // Сообщение, к которому только что перепрыгнули, — подсвечивается на пару
+  // секунд, иначе после скачка непонятно, ради чего именно листали.
+  const [highlightMessageId, setHighlightMessageId] = useState<number | null>(null)
+  // token последнего ОТРАБОТАННОГО перехода — не даёт применить его повторно
+  // (эффект перезапускается и от смены channelId).
+  const appliedJumpRef = useRef(0)
+  // Читается в эффекте смены канала, который намеренно не держит запрос
+  // перехода в зависимостях (иначе он перезапускался бы на каждый прыжок и
+  // сбрасывал черновик ответа).
+  const jumpRef = useRef<MessageJumpRequest | null>(jumpRequest)
+  jumpRef.current = jumpRequest
 
   // История сообщений при смене текстового канала. useLayoutEffect — по той
   // же причине, что и у аналогичного эффекта для ЛС: без него editTarget
@@ -125,6 +178,19 @@ export function useChannelMessages(
     } else {
       const openedChannelId = currentChannel.id
       setScrollAnchor(null)
+      // В канал заходят РАДИ конкретного сообщения (переход из панели
+      // модератора) — окно вокруг него загрузит эффект перехода ниже.
+      // Обычная загрузка «где остановился» здесь не только лишняя, но и
+      // вредная: два запроса гонялись бы за один и тот же setMessages.
+      const pendingJump = jumpRef.current
+      if (
+        pendingJump
+        && pendingJump.channelId === openedChannelId
+        && pendingJump.token !== appliedJumpRef.current
+      ) {
+        setMessages([])
+        return
+      }
       void loadChannelWindow(openedChannelId).then(({ loaded, target }) => {
         // Канал переключили ещё раз, пока это летало — эти данные больше
         // никому не нужны, а поставить их значило бы мигнуть чужим каналом.
@@ -143,6 +209,38 @@ export function useChannelMessages(
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [channelId, setEditTargetTracked])
+
+  // Переход к сообщению из панели модератора. Отдельным эффектом от смены
+  // канала: прыгать можно и НЕ выходя из текущего канала (тогда тот эффект
+  // вообще не сработает), а заодно так переход не сбрасывает черновик ответа
+  // и незавершённое редактирование.
+  //
+  // Ждёт, пока channelId станет тем самым: клик переключает канал и ставит
+  // запрос одним обновлением, но до перерисовки channelId здесь ещё старый.
+  useEffect(() => {
+    if (!jumpRequest || jumpRequest.token === appliedJumpRef.current) return
+    if (channelId !== jumpRequest.channelId) return
+    appliedJumpRef.current = jumpRequest.token
+    const token = ++loadTokenRef.current
+    void loadMessageWindow(jumpRequest.channelId, jumpRequest.messageId).then((loaded) => {
+      if (loadTokenRef.current !== token) return
+      setMessages(loaded)
+      setScrollAnchor({
+        key: `jump-${jumpRequest.token}`,
+        target: { messageId: jumpRequest.messageId },
+      })
+      setHighlightMessageId(jumpRequest.messageId)
+    })
+  }, [jumpRequest, channelId])
+
+  // Подсветка гаснет сама. Таймер привязан к id, а не ставится в момент
+  // перехода: повторный прыжок к тому же сообщению перезапустит эффект и
+  // продлит подсветку, а не оставит её от прошлого раза догорать.
+  useEffect(() => {
+    if (highlightMessageId == null) return
+    const id = window.setTimeout(() => setHighlightMessageId(null), 2600)
+    return () => window.clearTimeout(id)
+  }, [highlightMessageId])
 
   /** Лента дочитана до конца (см. MessageList) — продвигает курсор прочтения
    * на бэкенде. Не ждётся и не показывает ошибок: неудавшаяся отметка не
@@ -215,7 +313,7 @@ export function useChannelMessages(
     messages, setMessages, messagesRef,
     replyTarget, setReplyTarget,
     editTarget, setEditTargetTracked,
-    scrollAnchor, handleReachedBottom,
+    scrollAnchor, handleReachedBottom, highlightMessageId,
     handleSend, handleToggleReaction, handleDeleteMessage,
     handleReplyRequest, handleEditRequest, handleSaveEdit, handleTogglePin,
   }

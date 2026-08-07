@@ -273,6 +273,7 @@ export default function AppShellChat({
               onDiscard={(nonce) => outbox.discard(nonce)}
               onTogglePin={canDeleteMessages ? channelMessages.handleTogglePin : undefined}
               scrollAnchor={channelMessages.scrollAnchor}
+              highlightMessageId={channelMessages.highlightMessageId}
               onReachedBottom={channelMessages.handleReachedBottom}
               servers={server.servers}
               conversations={conv.conversations}

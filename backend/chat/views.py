@@ -718,6 +718,86 @@ class ServerMemberNickname(APIView):
         return Response({"user_id": user_id, "nickname": nickname})
 
 
+def _moderator_message_qs(request, server, target):
+    """Сообщения target'а на сервере — основа и для счётчиков панели, и для
+    мини-чата под ними (см. ServerMemberMessages).
+
+    Ограничено каналами, видимыми СМОТРЯЩЕМУ, а не всеми подряд: manage_server
+    не даёт доступа к приватным каналам (см. permissions.can_see_channel —
+    туда пускает manage_channels либо явный допуск ролью/поимённо), и панель
+    модератора не должна становиться обходным путём к их содержимому. Из-за
+    этого у двух модераторов с разным доступом цифры могут отличаться — это
+    правильно: каждый видит ровно тот срез сервера, который ему и так открыт.
+    """
+    channel_ids = [c.id for c in visible_channels(request.user, server)]
+    return Message.objects.filter(channel_id__in=channel_ids, author=target)
+
+
+# Ссылку ищем по вхождению схемы в текст. Грубо (внутри код-блока тоже
+# засчитается), но честно отражает «сколько раз человек кидал ссылки», а
+# полноценный разбор markdown ради счётчика на панели избыточен.
+_LINK_Q = Q(content__icontains="http://") | Q(content__icontains="https://")
+
+
+def _filter_message_kind(queryset, kind: str):
+    """Категория из панели: все сообщения / только со ссылками / только с
+    вложениями. Каждая — ровно то множество, размер которого показан
+    счётчиком в строке над мини-чатом, иначе «28» открывало бы список из
+    другого числа сообщений."""
+    if kind == "links":
+        return queryset.filter(_LINK_Q)
+    if kind == "media":
+        return queryset.filter(attachments__isnull=False).distinct()
+    return queryset
+
+
+class ServerMemberMessages(APIView):
+    """GET /api/servers/<id>/members/<user_id>/messages?kind=all|links|media —
+    сообщения участника для мини-чата панели модератора (см. ModeratorPanel).
+
+    Те же права и та же видимость каналов, что у сводки (manage_server +
+    _moderator_message_qs). Отдаётся ПОСЛЕДНЯЯ страница в хронологическом
+    порядке — мини-чат читается как обычный чат, сверху вниз, и открывается
+    на самых свежих сообщениях.
+
+    Пагинации нет намеренно: это не лента для чтения назад, а срез «что
+    человек писал», и LIMIT здесь ровно та же граница, что и у остальной
+    истории в приложении (см. _paginate_messages).
+    """
+
+    LIMIT = 100
+
+    def get(self, request, server_id, user_id):
+        server = get_object_or_404(Server, id=server_id)
+        denied = _require_permission(request, server, "manage_server")
+        if denied:
+            return denied
+        target = get_object_or_404(User, id=user_id)
+
+        kind = request.GET.get("kind") or "all"
+        if kind not in ("all", "links", "media"):
+            return Response({"detail": "Неизвестная категория."}, status=400)
+
+        qs = _filter_message_kind(
+            _moderator_message_qs(request, server, target), kind
+        ).select_related("author", "channel").prefetch_related("attachments")
+        # Берём самые свежие, отдаём в хронологии — как _paginate_messages без
+        # курсора.
+        messages = list(qs.order_by("-created_at", "-id")[:self.LIMIT])[::-1]
+        return Response([
+            {
+                "id": m.id,
+                "channel_id": m.channel_id,
+                "channel_name": m.channel.name,
+                "content": m.content,
+                "created_at": m.created_at,
+                "attachments": AttachmentSerializer(
+                    m.attachments.all(), many=True).data,
+            }
+            for m in messages
+        ])
+
+
 class ServerMemberModeratorView(APIView):
     """GET /api/servers/<id>/members/<user_id>/moderator-view — сводка по
     участнику для панели модератора (см. web ModeratorPanel.tsx).
@@ -747,16 +827,15 @@ class ServerMemberModeratorView(APIView):
             return denied
         target = get_object_or_404(User, id=user_id)
 
-        authored = Message.objects.filter(channel__server=server, author=target)
-        # Ссылка — по вхождению схемы в текст. Грубо (внутри код-блока тоже
-        # засчитается), но честно отражает «сколько раз человек кидал ссылки»,
-        # а полноценный разбор markdown ради счётчика на панели избыточен.
-        links = authored.filter(
-            Q(content__icontains="http://") | Q(content__icontains="https://")).count()
-        # Медиа — сами файлы, а не сообщения с файлами: два скриншота одним
-        # сообщением это два медиа, и модератору интересно именно их число.
-        media = Attachment.objects.filter(
-            message__channel__server=server, message__author=target).count()
+        # Та же выборка, что кормит мини-чат под счётчиками (см.
+        # ServerMemberMessages): число в строке — это ровно длина списка,
+        # который откроется по клику по ней.
+        authored = _moderator_message_qs(request, server, target)
+        links = _filter_message_kind(authored, "links").count()
+        # Медиа — сообщения С вложениями, а не сами файлы: два скриншота одним
+        # сообщением дают одну строку в мини-чате, и счётчик должен показывать
+        # то же самое.
+        media = _filter_message_kind(authored, "media").count()
 
         membership = Membership.objects.filter(
             server=server, user=target

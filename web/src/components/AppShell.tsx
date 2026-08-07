@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, MouseEvent as ReactMouseEvent } from 'react'
 import { useIsMobile } from '../hooks/useIsMobile'
-import { useChannelMessages } from '../hooks/useChannelMessages'
+import { MessageJumpRequest, useChannelMessages } from '../hooks/useChannelMessages'
 import { useConversationsData } from '../hooks/useConversationsData'
 import { useGatewayEvents } from '../hooks/useGatewayEvents'
 import { useInviteLinks } from '../hooks/useInviteLinks'
@@ -93,6 +93,25 @@ export default function AppShell() {
   // открывает панель AppShellOverlays, но состояние держим здесь: от него
   // зависит сетка .app ниже — панель это КОЛОНКА, а не наложение.
   const [moderatorTarget, setModeratorTarget] = useState<ProfilePopupUser | null>(null)
+  // Переход к сообщению из мини-чата панели (см. ModeratorMessages →
+  // useChannelMessages). Живёт здесь, а не в панели: переключить канал и
+  // прокрутить ленту может только владелец обоих состояний.
+  const [messageJump, setMessageJump] = useState<MessageJumpRequest | null>(null)
+  const jumpToMessage = useCallback((jumpChannelId: number, messageId: number) => {
+    // Канал переключаем всегда — если уже в нём, setChannelId ничего не
+    // изменит, и окно вокруг сообщения загрузит эффект перехода.
+    setChannelId(jumpChannelId)
+    // Токен — счётчик кликов: повторный переход к тому же сообщению должен
+    // снова прокрутить и подсветить (см. MessageJumpRequest).
+    setMessageJump((prev) => ({
+      channelId: jumpChannelId,
+      messageId,
+      token: (prev?.token ?? 0) + 1,
+    }))
+    // На мобилке лента — отдельный экран, иначе переход «сработал» бы в
+    // невидимом канале за спиной у панели.
+    navigateToContent()
+  }, [setChannelId, navigateToContent])
   // Ушли с сервера или переключились на другой — досье прежнего участника
   // там ни при чём, и права на него уже другие. Закрываем, а не тащим за
   // собой в чужой контекст.
@@ -195,7 +214,9 @@ export default function AppShell() {
     onOpenProfile: (friend, x, y) => setProfilePopup({ user: friend, x, y }),
   })
 
-  const channelMessages = useChannelMessages(currentChannel, channelId, gateway, pendingEditsRef)
+  const channelMessages = useChannelMessages(
+    currentChannel, channelId, gateway, pendingEditsRef, messageJump,
+  )
   const { setMessages, messagesRef } = channelMessages
 
   // «Попасть» в приглашённый канал — по виду: голосовой подключает, текстовый
@@ -370,6 +391,7 @@ export default function AppShell() {
         servers={servers}
         moderatorTarget={moderatorTarget}
         setModeratorTarget={setModeratorTarget}
+        onJumpToMessage={jumpToMessage}
       />
     </div>
     </VoiceProvider>

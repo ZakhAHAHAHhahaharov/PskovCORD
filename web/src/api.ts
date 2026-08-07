@@ -488,6 +488,23 @@ export interface ModeratorView {
   audit_log: AuditLogEntry[]
 }
 
+/** Категория мини-чата под счётчиками панели модератора — совпадает с
+ * ?kind= у backend ServerMemberMessages. */
+export type ModeratorMessageKind = 'all' | 'links' | 'media'
+
+/** Строка мини-чата: сообщение участника вместе с каналом, в котором оно
+ * лежит — по нему работает «Перейти к сообщению». Это не полноценный
+ * Message: реакции, ответы и закрепление в досье не нужны, а канал, наоборот,
+ * нужен (в ленте он и так известен, здесь — нет). */
+export interface ModeratorMessage {
+  id: number
+  channel_id: number
+  channel_name: string
+  content: string
+  created_at: string
+  attachments: Attachment[]
+}
+
 /** Файл, прикреплённый к сообщению (backend chat.models.Attachment). */
 export interface Attachment {
   id: string
@@ -1374,6 +1391,12 @@ export const api = {
     req(`/api/servers/${serverId}/members/${userId}`, { method: 'DELETE' }),
   moderatorView: (serverId: number, userId: number): Promise<ModeratorView> =>
     req(`/api/servers/${serverId}/members/${userId}/moderator-view`),
+  /** Сообщения участника для мини-чата панели модератора. Отдаются в
+   * хронологическом порядке, последняя сотня — см. ServerMemberMessages. */
+  moderatorMessages: (
+    serverId: number, userId: number, kind: ModeratorMessageKind,
+  ): Promise<ModeratorMessage[]> =>
+    req(`/api/servers/${serverId}/members/${userId}/messages?kind=${kind}`),
 
   serverJoinRequests: (serverId: number): Promise<ServerJoinRequestEntry[]> =>
     req(`/api/servers/${serverId}/requests`),

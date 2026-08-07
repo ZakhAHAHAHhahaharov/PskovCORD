@@ -1,12 +1,16 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   BadgeAlert, ChevronRight, FileImage, Gavel, Hash, Link as LinkIcon,
-  Loader2, MessageSquare, RefreshCw, ScrollText, Shield, UserMinus, UserRound, X,
+  Loader2, MessageSquare, Plus, RefreshCw, ScrollText, Shield, UserMinus,
+  UserRound, X,
 } from 'lucide-react'
-import { api, AuditLogEntry, JoinMethod, ModeratorView, Role } from '../api'
+import {
+  api, AuditLogEntry, JoinMethod, ModeratorMessageKind, ModeratorView, Role,
+} from '../api'
 import { useEscToClose } from '../modalStack'
 import Avatar from './Avatar'
 import { ProfilePopupUser } from './MiniProfilePopup'
+import ModeratorMessages from './ModeratorMessages'
 
 const JOIN_METHOD_LABEL: Record<JoinMethod, string> = {
   unknown: 'Неизвестно',
@@ -15,6 +19,13 @@ const JOIN_METHOD_LABEL: Record<JoinMethod, string> = {
   invite_direct: 'Личное приглашение',
   request: 'Одобренная заявка',
   owner: 'Создатель сервера',
+}
+
+/** Подпись в шапке мини-чата — повторяет строку, из которой в него вошли. */
+const KIND_TITLE: Record<ModeratorMessageKind, string> = {
+  all: 'Сообщения',
+  links: 'Ссылки',
+  media: 'Медиаконтент',
 }
 
 const ACTION_LABEL: Record<AuditLogEntry['action'], string> = {
@@ -82,6 +93,8 @@ export default function ModeratorPanel({
   onSendMessage,
   onKick,
   onBan,
+  onJumpToMessage,
+  onGrantRole,
 }: {
   serverId: number
   target: ProfilePopupUser
@@ -103,12 +116,30 @@ export default function ModeratorPanel({
    * панель только зовёт и потом перечитывает сводку. */
   onKick: () => Promise<void> | void
   onBan: () => Promise<void> | void
+  /** Уйти к сообщению в основном чате из мини-чата (см. ModeratorMessages). */
+  onJumpToMessage: (channelId: number, messageId: number) => void
+  /** Выдать роль участнику. Не задан — нет права manage_roles либо цель не
+   * ниже меня в иерархии: кнопки «+» тогда нет вовсе, а не задизейблена —
+   * выдавать всё равно нечего (см. AppShellOverlays). */
+  onGrantRole?: (roleId: number) => Promise<void> | void
 }) {
   useEscToClose(onClose)
   const [data, setData] = useState<ModeratorView | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [copied, setCopied] = useState(false)
+  // Открытая категория мини-чата — null означает само досье. Не отдельный
+  // роут/модалка: панель просто показывает вместо тела список сообщений
+  // (см. ModeratorMessages).
+  const [openKind, setOpenKind] = useState<ModeratorMessageKind | null>(null)
+  // Раскрыт ли список ролей под кнопкой «+».
+  const [rolePickerOpen, setRolePickerOpen] = useState(false)
+
+  // Escape в мини-чате возвращает к досье, а не закрывает панель целиком:
+  // стек отдаёт событие последнему зарегистрированному обработчику (см.
+  // modalStack), поэтому этот, пока он активен, перехватывает Esc у onClose.
+  const backToDossier = useCallback(() => setOpenKind(null), [])
+  useEscToClose(backToDossier, openKind !== null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -151,6 +182,48 @@ export default function ModeratorPanel({
     : []
 
   const actionDisabled = !canActOnTarget || !data?.is_member
+
+  /** Строка «Активность сервера». Есть что показать — кнопка, ведущая в
+   * мини-чат; ноль — обычная строка без стрелки и без реакции на клик:
+   * кнопка, открывающая пустоту, только обманывает ожидание. */
+  const activityRow = (
+    kind: ModeratorMessageKind,
+    icon: React.ReactNode,
+    label: string,
+    count: number,
+  ) => {
+    if (count === 0) {
+      return (
+        <div className="moderator-panel-row">
+          <span>{icon} {label}</span>
+          <span className="moderator-panel-value">0</span>
+        </div>
+      )
+    }
+    return (
+      <button
+        type="button"
+        className="moderator-panel-row moderator-panel-row-link"
+        title={`Показать: ${label.toLowerCase()}`}
+        onClick={() => setOpenKind(kind)}
+      >
+        <span>{icon} {label}</span>
+        <span className="moderator-panel-value">
+          {count} <ChevronRight size={14} />
+        </span>
+      </button>
+    )
+  }
+
+  /** Роли, которых у участника ещё нет, — только их и предлагает «+».
+   * Роль по умолчанию действует на всех и не выдаётся поимённо (её нет в
+   * role_ids, см. backend chat.roles.permissions_for), роль владельца — тем
+   * более: это зеркало прав владельца сервера, а не награда. */
+  const grantableRoles = data
+    ? roles.filter(
+      (r) => !r.is_default && !r.is_owner_role && !data.role_ids.includes(r.id),
+    )
+    : []
 
   return (
     <aside className="moderator-panel">
@@ -233,7 +306,22 @@ export default function ModeratorPanel({
         </button>
       </div>
 
-      <div className="moderator-panel-body">
+      {/* Мини-чат ЗАМЕЩАЕТ досье, а не рисуется поверх: колонка узкая, и
+          попап внутри неё оказался бы теснее того же места (см.
+          ModeratorMessages). Досье при этом остаётся загруженным в data —
+          возврат по «назад» мгновенный, без повторного запроса. */}
+      <div className={`moderator-panel-body ${openKind ? 'moderator-panel-body-messages' : ''}`}>
+        {openKind ? (
+          <ModeratorMessages
+            serverId={serverId}
+            userId={target.id}
+            kind={openKind}
+            title={KIND_TITLE[openKind]}
+            onBack={backToDossier}
+            onJump={onJumpToMessage}
+          />
+        ) : (
+        <>
         <div className="moderator-panel-title">
           <Shield size={14} /> Доступ модератора
           <button
@@ -256,22 +344,21 @@ export default function ModeratorPanel({
 
         {data && (
           <>
+            {/* Строка с ненулевым счётчиком — кнопка, открывающая мини-чат
+                этой категории; пустая остаётся обычной строкой, потому что
+                открывать в ней нечего (см. activityRow). Журнал аудита
+                никуда не ведёт: он и так развёрнут внизу этой же панели. */}
             <div className="moderator-panel-section-label">Активность сервера</div>
             <div className="moderator-panel-card">
-              <div className="moderator-panel-row">
-                <span><MessageSquare size={14} /> Сообщения</span>
-                <span className="moderator-panel-value">
-                  {data.stats.messages} <ChevronRight size={14} />
-                </span>
-              </div>
-              <div className="moderator-panel-row">
-                <span><LinkIcon size={14} /> Ссылки</span>
-                <span className="moderator-panel-value">{data.stats.links}</span>
-              </div>
-              <div className="moderator-panel-row">
-                <span><FileImage size={14} /> Медиаконтент</span>
-                <span className="moderator-panel-value">{data.stats.media}</span>
-              </div>
+              {activityRow(
+                'all', <MessageSquare size={14} />, 'Сообщения', data.stats.messages,
+              )}
+              {activityRow(
+                'links', <LinkIcon size={14} />, 'Ссылки', data.stats.links,
+              )}
+              {activityRow(
+                'media', <FileImage size={14} />, 'Медиаконтент', data.stats.media,
+              )}
               <div className="moderator-panel-row">
                 <span><ScrollText size={14} /> Журнал аудита</span>
                 <span className="moderator-panel-value">{data.stats.audit_entries}</span>
@@ -300,15 +387,44 @@ export default function ModeratorPanel({
 
             <div className="moderator-panel-section-label">Роли</div>
             <div className="moderator-panel-card moderator-panel-roles">
-              {memberRoles.length === 0 ? (
+              {memberRoles.length === 0 && !onGrantRole && (
                 <span className="moderator-panel-empty">Ролей нет</span>
-              ) : (
-                memberRoles.map((r) => (
-                  <span key={r.id} className="moderator-panel-role">
-                    <span className="srv-role-dot" style={{ background: r.color }} />
-                    {r.name}
-                  </span>
-                ))
+              )}
+              {memberRoles.map((r) => (
+                <span key={r.id} className="moderator-panel-role">
+                  <span className="srv-role-dot" style={{ background: r.color }} />
+                  {r.name}
+                </span>
+              ))}
+              {/* «+» есть, только если выдавать И можно (право + иерархия),
+                  И есть что (все роли уже выданы — кнопка исчезает, а не
+                  открывает пустой список). */}
+              {onGrantRole && grantableRoles.length > 0 && (
+                <div className="moderator-role-add">
+                  <button
+                    type="button"
+                    className="moderator-role-add-btn"
+                    title="Выдать роль"
+                    onClick={() => setRolePickerOpen((v) => !v)}
+                  >
+                    <Plus size={14} />
+                  </button>
+                  {rolePickerOpen && (
+                    <RolePicker
+                      roles={grantableRoles}
+                      onClose={() => setRolePickerOpen(false)}
+                      onPick={(roleId) => {
+                        setRolePickerOpen(false)
+                        void (async () => {
+                          await onGrantRole(roleId)
+                          // Роль тут же появляется и в списке, и в правах, и
+                          // отдельной строкой в журнале аудита ниже.
+                          void load()
+                        })()
+                      }}
+                    />
+                  )}
+                </div>
               )}
             </div>
 
@@ -380,7 +496,56 @@ export default function ModeratorPanel({
             </div>
           </>
         )}
+        </>
+        )}
       </div>
     </aside>
+  )
+}
+
+/** Выпадающий список ролей под кнопкой «+». Закрывается по клику мимо и по
+ * Escape — тот же приём, что у контекстных меню проекта. Отдельным
+ * компонентом, а не инлайном: своя пара обработчиков документа, которую
+ * незачем держать в и без того длинной панели. */
+function RolePicker({
+  roles,
+  onPick,
+  onClose,
+}: {
+  roles: Role[]
+  onPick: (roleId: number) => void
+  onClose: () => void
+}) {
+  const ref = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    const onMouseDown = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) onClose()
+    }
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    document.addEventListener('mousedown', onMouseDown)
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.removeEventListener('mousedown', onMouseDown)
+      document.removeEventListener('keydown', onKeyDown)
+    }
+  }, [onClose])
+
+  return (
+    <div ref={ref} className="moderator-role-picker">
+      {roles.map((r) => (
+        <button
+          key={r.id}
+          type="button"
+          className="moderator-role-picker-item"
+          onClick={() => onPick(r.id)}
+        >
+          <span className="srv-role-dot" style={{ background: r.color }} />
+          {r.name}
+        </button>
+      ))}
+    </div>
   )
 }
