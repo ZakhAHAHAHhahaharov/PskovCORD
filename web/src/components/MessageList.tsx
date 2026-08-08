@@ -3,10 +3,10 @@ import {
   MouseEvent as ReactMouseEvent,
 } from 'react'
 import {
-  AlertCircle, Check, ChevronDown, Clock, Pin, PinOff, Reply, Pencil, RotateCw, SmilePlus,
-  Trash2,
+  AlertCircle, Check, ChevronDown, ChevronRight, Clock, MessagesSquare, Pin, PinOff,
+  Reply, Pencil, RotateCw, SmilePlus, Trash2,
 } from 'lucide-react'
-import { ChatMessageBase, Conversation, MentionCandidate, Server } from '../api'
+import { Channel, ChatMessageBase, Conversation, MentionCandidate, Server } from '../api'
 import { useContextMenuState } from '../contextMenuStack'
 import { escapeRegExp, WORD_CHAR } from '../mentions'
 import { styledNameProps } from '../nameStyle'
@@ -308,6 +308,9 @@ export default function MessageList({
   highlightMessageId,
   servers,
   conversations,
+  threadOf,
+  onOpenThread,
+  onCreateThread,
 }: {
   messages: ListMessage[]
   currentUserId: number
@@ -370,6 +373,16 @@ export default function MessageList({
    * переслать в канал другого сервера, который прямо сейчас не выбран. */
   servers: Server[]
   conversations: Conversation[]
+  /** Ветка, выросшая из этого сообщения, если она есть — под таким сообщением
+   * рисуется плашка «Ветка: имя» (как в Discord). Не задан — веток здесь нет
+   * вовсе (личка/группа). */
+  threadOf?: (messageId: number) => Channel | undefined
+  /** Клик по плашке — открыть ветку. */
+  onOpenThread?: (thread: Channel) => void
+  /** «Создать ветку» в контекстном меню сообщения. Не задан — пункта нет:
+   * в личке/группе веток не бывает, а внутри самой ветки её не завести
+   * (см. backend ChannelThreads). */
+  onCreateThread?: (message: ListMessage) => void
 }) {
   const bottomRef = useRef<HTMLDivElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
@@ -748,6 +761,33 @@ export default function MessageList({
                 </div>
               )}
               <MessageAttachments attachments={m.attachments} />
+              {/* Плашка «Ветка: имя» — вход в выросшее из этого сообщения
+                  обсуждение (см. Channel.source_message). Показывается и у
+                  закрытой ветки: закрытие убирает её из сайдбара, но не
+                  отсюда — иначе обсуждение стало бы недостижимым. */}
+              {(() => {
+                const thread = threadOf?.(m.id)
+                if (!thread || !onOpenThread) return null
+                return (
+                  <button
+                    type="button"
+                    className={`message-thread-chip ${thread.archived ? 'archived' : ''}`}
+                    onClick={() => onOpenThread(thread)}
+                    title={
+                      thread.archived
+                        ? 'Ветка закрыта — открыть и почитать'
+                        : 'Перейти в ветку'
+                    }
+                  >
+                    <MessagesSquare size={13} />
+                    <span className="message-thread-chip-name">{thread.name}</span>
+                    {thread.archived && (
+                      <span className="message-thread-chip-tag">закрыта</span>
+                    )}
+                    <ChevronRight size={13} />
+                  </button>
+                )
+              })()}
               {m.server_invite && (
                 <ServerInviteCard
                   invite={m.server_invite}
@@ -953,6 +993,12 @@ export default function MessageList({
             setForwardMessageId(contextMenu.message.id)
             setContextMenu(null)
           }}
+          // Ветка из этого сообщения уже есть — пункт ведёт в неё, а не
+          // заводит вторую (и бэкенд второй не создаст, см. ChannelThreads).
+          onCreateThread={
+            onCreateThread ? () => onCreateThread(contextMenu.message) : undefined
+          }
+          hasThread={Boolean(threadOf?.(contextMenu.message.id))}
         />
       )}
 

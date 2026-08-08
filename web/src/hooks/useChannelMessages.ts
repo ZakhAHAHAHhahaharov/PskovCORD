@@ -167,12 +167,15 @@ export function useChannelMessages(
   // уходящего канала на миг мелькнул бы в новом.
   useLayoutEffect(() => {
     setReplyTarget(null)
-    const key = currentChannel && currentChannel.kind === 'text' ? `channel-${currentChannel.id}` : null
+    // Сообщения есть у канала любого вида: у текстового, у ветки и у
+    // голосового (встроенный чат звонка, см. AppShellChat) — отдельной
+    // проверки на kind здесь поэтому нет вовсе.
+    const key = currentChannel ? `channel-${currentChannel.id}` : null
     const restored = key ? pendingEditsRef.current.get(key) ?? null : null
     setEditTargetTracked(restored)
     lastMarkedIdRef.current = null
     const token = ++loadTokenRef.current
-    if (!currentChannel || currentChannel.kind !== 'text') {
+    if (!currentChannel) {
       setMessages([])
       setScrollAnchor(null)
     } else {

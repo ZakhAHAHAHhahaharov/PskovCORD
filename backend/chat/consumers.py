@@ -243,7 +243,8 @@ from .models import (
     Message, Reaction, dm_conversation_id, dm_room, is_dm_room,
 )
 from .serializers import (
-    ConversationMessageSerializer, MessageSerializer, reactions_payload,
+    ChannelSerializer, ConversationMessageSerializer, MessageSerializer,
+    reactions_payload,
 )
 
 # Сколько недавних nonce'ов помнит соединение, чтобы узнать повторную попытку
@@ -503,6 +504,11 @@ class GatewayConsumer(AsyncWebsocketConsumer):
                 nonce, (result or {}).get("error") or "Нет доступа к каналу.")
             return
         self._remember_nonce(nonce, result["data"]["id"])
+        # Ветка вернулась из архива этой самой отправкой — сначала событие про
+        # неё, потом само сообщение: иначе клиент на миг получил бы сообщение в
+        # канал, которого у него в сайдбаре ещё нет.
+        if result.get("unarchived"):
+            await self._broadcast_channel_update(result["unarchived"])
         await self.channel_layer.group_send(
             f"server_{result['server_id']}",
             {"type": "broadcast", "payload": {
@@ -514,6 +520,26 @@ class GatewayConsumer(AsyncWebsocketConsumer):
                 "nonce": nonce,
             }},
         )
+
+    async def _broadcast_channel_update(self, event):
+        """channel_update по каналу из _channel_event_payload — всем участникам
+        сервера, а для приватного (и веток в нём) поимённо тем, кому он виден.
+        Ровно то же правило, что и у REST-ручек, см.
+        chat.views._broadcast_channel_event."""
+        channel = event["channel"]
+        payload = {
+            "op": "channel_update",
+            "server_id": channel["server"],
+            "channel": channel,
+        }
+        if event["user_ids"] is None:
+            await self.channel_layer.group_send(
+                f"server_{channel['server']}",
+                {"type": "broadcast", "payload": payload})
+            return
+        for user_id in event["user_ids"]:
+            await self.channel_layer.group_send(
+                f"user_{user_id}", {"type": "broadcast", "payload": payload})
 
     async def _handle_delete_message(self, data):
         message_id = data.get("message_id")
@@ -1276,7 +1302,11 @@ class GatewayConsumer(AsyncWebsocketConsumer):
         отправителя — совершенно разные ситуации, а раньше любой отказ
         выглядел одинаково."""
         try:
-            channel = Channel.objects.select_related("server").get(id=channel_id)
+            # parent — ради веток: и can_see_channel ниже, и разархивация в
+            # конце спрашивают родителя, иначе на каждое сообщение в ветке
+            # уходил бы лишний запрос за ним.
+            channel = Channel.objects.select_related("server", "parent").get(
+                id=channel_id)
         except Channel.DoesNotExist:
             return {"error": "Нет доступа к каналу."}
         if not Membership.objects.filter(
@@ -1311,11 +1341,39 @@ class GatewayConsumer(AsyncWebsocketConsumer):
                 channel=channel, author=self.user, content=content,
                 reply_to=reply_to)
             self._bind_attachments(attachment_ids, message=msg)
+        result = {"server_id": channel.server_id, "data": MessageSerializer(msg).data}
+        # Написали в закрытую ветку — она открывается обратно сама, как в
+        # Discord: закрытие ветки говорит «разговор окончен», а новое сообщение
+        # ровно это и опровергает. Заставлять человека сначала лезть в архив и
+        # жать «Восстановить» значило бы требовать лишний шаг ради состояния,
+        # которое он уже отменил самим фактом отправки.
+        if channel.kind == Channel.THREAD and channel.archived:
+            channel.archived = False
+            channel.save(update_fields=["archived"])
+            result["unarchived"] = self._channel_event_payload(channel)
         # Сериализация уже ПОСЛЕ коммита: msg.attachments — обратная связь без
         # prefetch, то есть отдельный запрос в момент обращения, и внутри
         # транзакции он бы отработал так же. Но так payload гарантированно
         # описывает то, что реально лежит в БД к моменту рассылки.
-        return {"server_id": channel.server_id, "data": MessageSerializer(msg).data}
+        return result
+
+    def _channel_event_payload(self, channel):
+        """Ветка для события channel_update: сам канал плюс поимённый список
+        получателей, если он приватный (см. chat.views._broadcast_channel_event
+        — здесь то же правило, но считать его надо синхронно, внутри уже
+        открытого database_sync_to_async, а не в асинхронном обработчике).
+
+        my_settings уходит нейтральным (сериализуем без request) — это общая
+        для всех копия, чужие уведомления/заглушение в ней светиться не должны,
+        см. chat.views._channel_broadcast_payload.
+        """
+        from .views import _channel_visible_user_ids
+
+        return {
+            "channel": ChannelSerializer(channel).data,
+            "user_ids": (
+                _channel_visible_user_ids(channel) if channel.is_private else None),
+        }
 
     def _slowmode_wait(self, channel, perms) -> int:
         """Сколько ещё секунд автору ждать в этом канале (0 — можно писать).

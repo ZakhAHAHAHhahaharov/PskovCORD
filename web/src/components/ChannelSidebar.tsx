@@ -1,9 +1,10 @@
 import {
-  DragEvent as ReactDragEvent, MouseEvent as ReactMouseEvent, useCallback, useState,
+  DragEvent as ReactDragEvent, Fragment, MouseEvent as ReactMouseEvent, useCallback,
+  useState,
 } from 'react'
 import {
-  ChevronDown, ChevronRight, Volume2, MicOff, HeadphoneOff, Monitor, Settings,
-  Pin, Timer, Lock,
+  ChevronDown, ChevronRight, CornerDownRight, Volume2, MicOff, HeadphoneOff, Monitor,
+  Settings, Pin, Timer, Lock,
 } from 'lucide-react'
 import { Channel, Member, Server, User } from '../api'
 import { styledNameProps } from '../nameStyle'
@@ -114,6 +115,66 @@ function VoiceStackedAvatars({
       })}
       {rest > 0 && <span className="voice-stack-rest">+{rest}</span>}
     </span>
+  )
+}
+
+/** Ветки одного канала — строками с отступом прямо под ним, как в Discord.
+ *
+ * Закрытые (Channel.archived) в общий список не попадают: ветку закрывают
+ * именно чтобы она перестала мозолить глаза. Но и совсем прятать их нельзя —
+ * иначе обсуждение исчезло бы без следа, поэтому под активными появляется
+ * строка «Архив (N)», разворачивающая закрытые. Разворот локальный и
+ * несохраняемый: это разовое «посмотреть, что там было», а не режим
+ * отображения, который стоит помнить между заходами (в отличие от свёрнутых
+ * категорий, см. useCollapsedCategories).
+ */
+function ChannelThreadRows({
+  threads,
+  activeChannelId,
+  onSelect,
+}: {
+  threads: Channel[]
+  activeChannelId: number | null
+  onSelect: (c: Channel) => void
+}) {
+  const [archiveOpen, setArchiveOpen] = useState(false)
+  const active = threads.filter((t) => !t.archived)
+  const archived = threads.filter((t) => t.archived)
+  // Открытая прямо сейчас закрытая ветка (в неё вошли из плашки под
+  // сообщением) показывается всегда — иначе строка, в которой ты находишься,
+  // просто отсутствовала бы в сайдбаре.
+  const shown = archiveOpen
+    ? [...active, ...archived]
+    : [...active, ...archived.filter((t) => t.id === activeChannelId)]
+  if (threads.length === 0) return null
+  return (
+    <>
+      {shown.map((t) => (
+        <button
+          key={t.id}
+          className={`channel-item channel-thread-item ${
+            activeChannelId === t.id ? 'active' : ''
+          } ${t.archived ? 'channel-thread-archived' : ''}`}
+          onClick={() => onSelect(t)}
+          title={t.archived ? `${t.name} — ветка закрыта` : t.name}
+        >
+          <span className="channel-thread-branch">
+            <CornerDownRight size={12} />
+          </span>
+          <span className="channel-name">{t.name}</span>
+        </button>
+      ))}
+      {archived.length > 0 && (
+        <button
+          type="button"
+          className="channel-thread-archive-toggle"
+          onClick={() => setArchiveOpen((v) => !v)}
+        >
+          {archiveOpen ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
+          Архив ({archived.length})
+        </button>
+      )}
+    </>
   )
 }
 
@@ -311,6 +372,11 @@ export default function ChannelSidebar({
   const micStateOf = (member: Member): { muted: boolean; deafened: boolean } =>
     member.id === user.id ? { muted, deafened } : { muted: member.muted, deafened: member.deafened }
   const textChannels = channels.filter((c) => c.kind === 'text')
+  // Ветки живут не отдельной категорией, а под своим каналом (см.
+  // ChannelThreadRows) — в списках каналов их поэтому нет вовсе, они
+  // раскладываются по родителям.
+  const threadsOf = (channelId: number) =>
+    channels.filter((c) => c.kind === 'thread' && c.parent === channelId)
   const pinnedIds = server?.my_settings.pinned_channel_ids ?? []
   // Закреплённые — первыми, сверху вниз, порядок закрепления; остальные —
   // как пришли с сервера (позиция канала), см. ChannelContextMenu «Закрепить
@@ -386,30 +452,43 @@ export default function ChannelSidebar({
             {/* Свёрнутая категория всё равно показывает открытый прямо сейчас
                 канал — иначе, свернув её, теряешь из виду, где находишься. */}
             {textChannels
-              .filter((c) => !textCollapsed || c.id === activeChannelId)
+              .filter((c) => {
+                if (!textCollapsed) return true
+                // Свёрнутая категория оставляет на виду не только открытый
+                // канал, но и канал открытой ВЕТКИ: иначе, сидя в ветке, не
+                // видно ни её, ни того, откуда она.
+                if (c.id === activeChannelId) return true
+                return threadsOf(c.id).some((t) => t.id === activeChannelId)
+              })
               .map((c) => (
-              <button
-                key={c.id}
-                className={`channel-item ${activeChannelId === c.id ? 'active' : ''}`}
-                onClick={() => onSelectText(c)}
-                onContextMenu={
-                  onChannelContextMenu
-                    ? (e) => {
-                        e.preventDefault()
-                        onChannelContextMenu(c, e)
-                      }
-                    : undefined
-                }
-              >
-                <span className="channel-icon">#</span>
-                <span className="channel-name">{c.name}</span>
-                {/* Медленный режим и приватность видны прямо в списке — иначе
-                    о них узнаёшь только упёршись в отказ при отправке. */}
-                {c.is_private && <Lock size={12} className="channel-badge-icon" />}
-                {c.slowmode_seconds > 0 && (
-                  <Timer size={12} className="channel-badge-icon" />
-                )}
-              </button>
+              <Fragment key={c.id}>
+                <button
+                  className={`channel-item ${activeChannelId === c.id ? 'active' : ''}`}
+                  onClick={() => onSelectText(c)}
+                  onContextMenu={
+                    onChannelContextMenu
+                      ? (e) => {
+                          e.preventDefault()
+                          onChannelContextMenu(c, e)
+                        }
+                      : undefined
+                  }
+                >
+                  <span className="channel-icon">#</span>
+                  <span className="channel-name">{c.name}</span>
+                  {/* Медленный режим и приватность видны прямо в списке — иначе
+                      о них узнаёшь только упёршись в отказ при отправке. */}
+                  {c.is_private && <Lock size={12} className="channel-badge-icon" />}
+                  {c.slowmode_seconds > 0 && (
+                    <Timer size={12} className="channel-badge-icon" />
+                  )}
+                </button>
+                <ChannelThreadRows
+                  threads={threadsOf(c.id)}
+                  activeChannelId={activeChannelId}
+                  onSelect={onSelectText}
+                />
+              </Fragment>
             ))}
 
             <div className="channel-category">
@@ -566,6 +645,14 @@ export default function ChannelSidebar({
                       />
                     )
                   })}
+                  {/* У голосового канала есть свой текстовый чат (см.
+                      AppShellChat), а значит бывают и ветки из его сообщений —
+                      показываются так же, как у текстового канала. */}
+                  <ChannelThreadRows
+                    threads={threadsOf(c.id)}
+                    activeChannelId={activeChannelId}
+                    onSelect={onSelectText}
+                  />
                 </div>
               )
             })}

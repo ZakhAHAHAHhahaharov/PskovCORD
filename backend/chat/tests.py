@@ -5512,3 +5512,323 @@ class ModeratorViewTests(APITestCase):
         self.assertFalse(ServerAuditLog.objects.filter(
             server=self.server, target=self.target,
             action=ServerAuditLog.JOIN).exists())
+
+
+class ThreadTests(APITestCase):
+    """Ветки (Channel.kind=thread): создание из сообщения и из канала,
+    наследование доступа от родителя, архив и возврат из него."""
+
+    def setUp(self):
+        self.owner = User.objects.create_user(username="th_owner", password="pw12345")
+        self.member = User.objects.create_user(username="th_member", password="pw12345")
+        self.outsider = User.objects.create_user(
+            username="th_outsider", password="pw12345")
+        self.server = Server.objects.create(name="s", owner=self.owner)
+        Membership.objects.create(user=self.owner, server=self.server)
+        self.member_ship = Membership.objects.create(
+            user=self.member, server=self.server)
+        self.default_role = roles.create_default_role(self.server)
+        self.channel = Channel.objects.create(
+            server=self.server, name="general", kind=Channel.TEXT, position=3)
+        self.message = Message.objects.create(
+            channel=self.channel, author=self.owner, content="обсудим отдельно")
+
+    def _create(self, user, channel=None, **payload):
+        self.client.force_authenticate(user)
+        return self.client.post(
+            "/api/channels/{}/threads".format((channel or self.channel).id),
+            payload, format="json")
+
+    def test_create_thread_from_message(self):
+        resp = self._create(
+            self.member, name="Про отдельное", message_id=self.message.id)
+        self.assertEqual(resp.status_code, 201)
+        self.assertEqual(resp.data["kind"], "thread")
+        self.assertEqual(resp.data["parent"], self.channel.id)
+        self.assertEqual(resp.data["source_message"], self.message.id)
+        self.assertEqual(resp.data["created_by"], self.member.id)
+        self.assertFalse(resp.data["archived"])
+        # Рядом с родителем, а не в хвосте списка каналов.
+        self.assertEqual(resp.data["position"], self.channel.position)
+
+    def test_create_thread_without_message(self):
+        """Кнопка «+» у канала — ветка без исходного сообщения, это законно."""
+        resp = self._create(self.member, name="Просто ветка")
+        self.assertEqual(resp.status_code, 201)
+        self.assertIsNone(resp.data["source_message"])
+
+    def test_name_falls_back_to_message_text(self):
+        resp = self._create(self.member, message_id=self.message.id)
+        self.assertEqual(resp.status_code, 201)
+        self.assertEqual(resp.data["name"], "обсудим отдельно")
+
+    def test_thread_without_name_and_message_is_rejected(self):
+        resp = self._create(self.member)
+        self.assertEqual(resp.status_code, 400)
+
+    def test_fallback_name_strips_sticker_and_emoji_tokens(self):
+        """В сыром content стикеры и кастомные эмодзи лежат токенами (см.
+        chat.emoji) — в названии канала они выглядели бы как «<sticker:7>»."""
+        message = Message.objects.create(
+            channel=self.channel, author=self.owner,
+            content="<sticker:7> смотри <:kot:12> сюда")
+        resp = self._create(self.member, message_id=message.id)
+        self.assertEqual(resp.status_code, 201)
+        self.assertEqual(resp.data["name"], "смотри kot сюда")
+
+    def test_message_of_only_stickers_needs_an_explicit_name(self):
+        """Вырезать нечего — остаётся пусто, и название придётся ввести."""
+        message = Message.objects.create(
+            channel=self.channel, author=self.owner, content="<sticker:7>")
+        resp = self._create(self.member, message_id=message.id)
+        self.assertEqual(resp.status_code, 400)
+
+    def test_second_thread_from_same_message_returns_the_first(self):
+        """Плашка под сообщением одна — «создать ветку» дважды не должно
+        плодить дубли (в том числе у двух человек разом)."""
+        first = self._create(self.member, name="Раз", message_id=self.message.id)
+        second = self._create(self.owner, name="Два", message_id=self.message.id)
+        self.assertEqual(second.status_code, 200)
+        self.assertEqual(second.data["id"], first.data["id"])
+        self.assertEqual(second.data["name"], "Раз")
+        self.assertEqual(Channel.objects.filter(kind=Channel.THREAD).count(), 1)
+
+    def test_message_from_another_channel_is_rejected(self):
+        other = Channel.objects.create(
+            server=self.server, name="other", kind=Channel.TEXT)
+        alien = Message.objects.create(
+            channel=other, author=self.owner, content="чужое")
+        resp = self._create(self.member, name="Ветка", message_id=alien.id)
+        self.assertEqual(resp.status_code, 400)
+
+    def test_thread_inside_thread_is_rejected(self):
+        thread = Channel.objects.create(
+            server=self.server, name="t", kind=Channel.THREAD, parent=self.channel)
+        resp = self._create(self.member, channel=thread, name="Вложенная")
+        self.assertEqual(resp.status_code, 400)
+
+    def test_outsider_cannot_create_thread(self):
+        resp = self._create(self.outsider, name="Чужая")
+        self.assertEqual(resp.status_code, 403)
+
+    def test_send_messages_required(self):
+        """Ветку заводит тот, кто и так может писать в канал."""
+        self.default_role.send_messages = False
+        self.default_role.save(update_fields=["send_messages"])
+        resp = self._create(self.member, name="Ветка")
+        self.assertEqual(resp.status_code, 403)
+
+    def test_thread_inherits_access_from_private_parent(self):
+        """Своих допусков у ветки нет — она видна ровно тем, кому виден её
+        родительский канал (см. chat.permissions.can_see_channel)."""
+        self.channel.is_private = True
+        self.channel.save(update_fields=["is_private"])
+        thread = Channel.objects.create(
+            server=self.server, name="t", kind=Channel.THREAD,
+            parent=self.channel, is_private=True)
+        self.assertFalse(can_see_channel(self.member, thread))
+        self.assertTrue(can_see_channel(self.owner, thread))
+
+        self.client.force_authenticate(self.member)
+        resp = self.client.get("/api/channels/{}/messages".format(thread.id))
+        self.assertEqual(resp.status_code, 403)
+
+        role = Role.objects.create(server=self.server, name="team", position=1)
+        self.member_ship.roles.add(role)
+        self.channel.allowed_roles.add(role)
+        resp = self.client.get("/api/channels/{}/messages".format(thread.id))
+        self.assertEqual(resp.status_code, 200)
+
+    def test_private_parent_hides_thread_from_server_payload(self):
+        self.channel.is_private = True
+        self.channel.save(update_fields=["is_private"])
+        thread = Channel.objects.create(
+            server=self.server, name="t", kind=Channel.THREAD,
+            parent=self.channel, is_private=True)
+        self.client.force_authenticate(self.member)
+        resp = self.client.get("/api/servers")
+        row = next(s for s in resp.data if s["id"] == self.server.id)
+        self.assertNotIn(thread.id, [c["id"] for c in row["channels"]])
+
+    def test_archived_thread_stays_in_server_payload(self):
+        """Архивная ветка из списка каналов не пропадает — её прячет фронт;
+        так плашка под исходным сообщением работает и после закрытия."""
+        thread = Channel.objects.create(
+            server=self.server, name="t", kind=Channel.THREAD,
+            parent=self.channel, archived=True)
+        self.client.force_authenticate(self.member)
+        resp = self.client.get("/api/servers")
+        row = next(s for s in resp.data if s["id"] == self.server.id)
+        found = next(c for c in row["channels"] if c["id"] == thread.id)
+        self.assertTrue(found["archived"])
+
+    def test_author_can_archive_and_restore_own_thread(self):
+        thread_id = self._create(self.member, name="Моя ветка").data["id"]
+        self.client.force_authenticate(self.member)
+        resp = self.client.post(
+            "/api/channels/{}/archive".format(thread_id),
+            {"archived": True}, format="json")
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(resp.data["archived"])
+        resp = self.client.post(
+            "/api/channels/{}/archive".format(thread_id),
+            {"archived": False}, format="json")
+        self.assertFalse(resp.data["archived"])
+
+    def test_stranger_cannot_archive_someone_elses_thread(self):
+        thread_id = self._create(self.owner, name="Не твоя").data["id"]
+        self.client.force_authenticate(self.member)
+        resp = self.client.post(
+            "/api/channels/{}/archive".format(thread_id),
+            {"archived": True}, format="json")
+        self.assertEqual(resp.status_code, 403)
+
+    def test_moderator_can_archive_someone_elses_thread(self):
+        thread_id = self._create(self.member, name="Чужая").data["id"]
+        self.client.force_authenticate(self.owner)
+        resp = self.client.post(
+            "/api/channels/{}/archive".format(thread_id),
+            {"archived": True}, format="json")
+        self.assertEqual(resp.status_code, 200)
+
+    def test_delete_messages_permission_allows_archiving(self):
+        """«Управление сообщениями» (delete_messages) — тоже основание закрыть
+        чужую ветку, не только manage_channels."""
+        thread_id = self._create(self.owner, name="Владельца").data["id"]
+        moderator = Role.objects.create(
+            server=self.server, name="mod", position=1, delete_messages=True)
+        self.member_ship.roles.add(moderator)
+        self.client.force_authenticate(self.member)
+        resp = self.client.post(
+            "/api/channels/{}/archive".format(thread_id),
+            {"archived": True}, format="json")
+        self.assertEqual(resp.status_code, 200)
+
+    def test_archive_rejects_regular_channel(self):
+        self.client.force_authenticate(self.owner)
+        resp = self.client.post(
+            "/api/channels/{}/archive".format(self.channel.id),
+            {"archived": True}, format="json")
+        self.assertEqual(resp.status_code, 400)
+
+    def test_deleting_parent_removes_its_threads(self):
+        thread_id = self._create(self.member, name="Уйдёт с родителем").data["id"]
+        self.client.force_authenticate(self.owner)
+        resp = self.client.delete("/api/channels/{}".format(self.channel.id))
+        self.assertEqual(resp.status_code, 204)
+        self.assertFalse(Channel.objects.filter(id=thread_id).exists())
+
+    def test_deleting_source_message_keeps_the_thread(self):
+        """Пропадает только плашка под сообщением, не само обсуждение."""
+        thread_id = self._create(
+            self.member, name="Живучая", message_id=self.message.id).data["id"]
+        self.message.delete()
+        thread = Channel.objects.get(id=thread_id)
+        self.assertIsNone(thread.source_message_id)
+
+    def test_thread_accepts_slowmode_unlike_voice(self):
+        thread_id = self._create(self.member, name="Медленная").data["id"]
+        self.client.force_authenticate(self.owner)
+        resp = self.client.patch(
+            "/api/channels/{}".format(thread_id),
+            {"slowmode_seconds": 15}, format="json")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data["slowmode_seconds"], 15)
+
+
+class VoiceChannelChatTests(APITestCase):
+    """Встроенный текстовый чат голосового канала — обычные Message с
+    channel=<голосовой канал>, отдельной модели под них нет."""
+
+    def setUp(self):
+        self.owner = User.objects.create_user(username="vc_owner", password="pw12345")
+        self.server = Server.objects.create(name="s", owner=self.owner)
+        Membership.objects.create(user=self.owner, server=self.server)
+        roles.create_default_role(self.server)
+        self.voice = Channel.objects.create(
+            server=self.server, name="Общий", kind=Channel.VOICE)
+
+    def test_voice_channel_serves_message_history(self):
+        Message.objects.create(
+            channel=self.voice, author=self.owner, content="во время звонка")
+        self.client.force_authenticate(self.owner)
+        resp = self.client.get("/api/channels/{}/messages".format(self.voice.id))
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual([m["content"] for m in resp.data], ["во время звонка"])
+
+    def test_voice_channel_still_rejects_slowmode(self):
+        """Темп разговора в звонке задаёт сам звонок."""
+        self.client.force_authenticate(self.owner)
+        resp = self.client.patch(
+            "/api/channels/{}".format(self.voice.id),
+            {"slowmode_seconds": 10}, format="json")
+        self.assertEqual(resp.status_code, 400)
+
+
+class ThreadGatewayTests(TransactionTestCase):
+    """Живые события веток по WebSocket: сообщение в ветку доходит до всех, а
+    закрытая ветка возвращается из архива самой отправкой."""
+
+    def setUp(self):
+        presence._r.flushdb()
+        self.owner = User.objects.create_user(username="tg_owner", password="pw12345")
+        self.member = User.objects.create_user(username="tg_member", password="pw12345")
+        self.server = Server.objects.create(name="s", owner=self.owner)
+        for u in (self.owner, self.member):
+            Membership.objects.create(user=u, server=self.server)
+        roles.create_default_role(self.server)
+        self.channel = Channel.objects.create(
+            server=self.server, name="general", kind=Channel.TEXT, position=0)
+        self.thread = Channel.objects.create(
+            server=self.server, name="ветка", kind=Channel.THREAD,
+            parent=self.channel, created_by=self.owner)
+
+    def tearDown(self):
+        presence._r.flushdb()
+
+    async def _connect(self, user):
+        token = str(AccessToken.for_user(user))
+        comm = WebsocketCommunicator(
+            JWTAuthMiddleware(GatewayConsumer.as_asgi()),
+            f"/ws/gateway?token={token}")
+        connected, _ = await comm.connect()
+        self.assertTrue(connected)
+        return comm
+
+    @staticmethod
+    async def _receive_until(comm, op, timeout=2, max_messages=10):
+        for _ in range(max_messages):
+            msg = await comm.receive_json_from(timeout=timeout)
+            if msg.get("op") == op:
+                return msg
+        raise AssertionError(f"op={op!r} не пришёл за {max_messages} сообщений")
+
+    async def test_message_in_thread_reaches_everyone(self):
+        owner_ws = await self._connect(self.owner)
+        member_ws = await self._connect(self.member)
+        await member_ws.send_json_to({
+            "op": "send_message", "channel_id": self.thread.id, "content": "в ветке",
+        })
+        seen = await self._receive_until(owner_ws, "message_create")
+        self.assertEqual(seen["message"]["channel"], self.thread.id)
+        await owner_ws.disconnect()
+        await member_ws.disconnect()
+
+    async def test_sending_restores_archived_thread(self):
+        await database_sync_to_async(
+            Channel.objects.filter(id=self.thread.id).update)(archived=True)
+        owner_ws = await self._connect(self.owner)
+        member_ws = await self._connect(self.member)
+        await member_ws.send_json_to({
+            "op": "send_message", "channel_id": self.thread.id, "content": "ожила",
+        })
+        # Сначала «ветка снова активна», и только потом само сообщение —
+        # иначе оно на миг приехало бы в канал, которого нет в сайдбаре.
+        update = await self._receive_until(owner_ws, "channel_update")
+        self.assertEqual(update["channel"]["id"], self.thread.id)
+        self.assertFalse(update["channel"]["archived"])
+        await self._receive_until(owner_ws, "message_create")
+        thread = await database_sync_to_async(Channel.objects.get)(id=self.thread.id)
+        self.assertFalse(thread.archived)
+        await owner_ws.disconnect()
+        await member_ws.disconnect()

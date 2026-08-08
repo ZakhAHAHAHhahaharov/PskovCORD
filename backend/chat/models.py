@@ -505,7 +505,18 @@ class ServerInvite(models.Model):
 class Channel(models.Model):
     TEXT = "text"
     VOICE = "voice"
-    KIND_CHOICES = [(TEXT, "Text"), (VOICE, "Voice")]
+    # Ветка (в Discord — «thread») — это тоже канал, а не отдельная модель:
+    # у неё те же сообщения, вложения, реакции, закрепления, курсор прочтения
+    # и личные настройки уведомлений, что и у обычного текстового канала.
+    # Заводить под всё это параллельный набор моделей значило бы дублировать
+    # половину приложения ради одного отличия — наличия родителя (см. parent).
+    THREAD = "thread"
+    KIND_CHOICES = [(TEXT, "Text"), (VOICE, "Voice"), (THREAD, "Thread")]
+    # Виды, в которых можно писать сообщения. Голосовой канал сюда тоже
+    # входит: у него есть встроенный текстовый чат (как в Discord) — те же
+    # Message с channel=<голосовой канал>, просто показанные не отдельной
+    # страницей, а панелью рядом со «сценой» звонка (см. web AppShellChat).
+    WRITABLE_KINDS = (TEXT, VOICE, THREAD)
 
     server = models.ForeignKey(
         Server,
@@ -574,6 +585,52 @@ class Channel(models.Model):
     # заводить НОВЫЕ приглашения именно В ЭТОТ канал (chat.views.ServerInvites/
     # ServerInviteLink) — уже разосланные и решения по ним не затрагивает.
     invites_paused = models.BooleanField(default=False)
+
+    # --- только для kind=THREAD ---------------------------------------------
+    # Канал, внутри которого живёт ветка. У обычных каналов пусто. Вложенность
+    # ровно одна: ветка в ветке запрещена в ручке (см. chat.views.ChannelThreads),
+    # и на это опирается chat.permissions.can_see_channel — там разбор родителя
+    # не рекурсивный, а в один шаг.
+    #
+    # CASCADE: удалили канал — уносим и его ветки. Они не могут пережить
+    # родителя, от которого берут и права доступа, и само место в списке.
+    parent = models.ForeignKey(
+        "self",
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        related_name="threads",
+    )
+    # Сообщение, из которого ветку создали (правый клик → «Создать ветку»).
+    # Пусто у веток, заведённых кнопкой в самом канале, — это законное
+    # состояние, а не полуфабрикат. Нужно ради плашки «Ветка: имя» под самим
+    # сообщением (её рисует фронт по этому полю, см. web MessageList) —
+    # поэтому SET_NULL, а не CASCADE: удаление исходного сообщения не должно
+    # уносить с собой обсуждение, которое из него выросло, пропадает только
+    # сама плашка.
+    source_message = models.ForeignKey(
+        "Message",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="threads",
+    )
+    # Архивная ветка не показывается в списке каналов сервера (см.
+    # ServerSerializer.get_channels) — обсуждение закончилось. Не удаление:
+    # сообщения остаются на месте, ветку можно вернуть (кнопка в её шапке,
+    # см. chat.views.ThreadArchive) — и она возвращается сама, если кто-то
+    # в неё написал (см. chat.consumers._create_message).
+    archived = models.BooleanField(default=False)
+    # Кто завёл ветку — ему можно её архивировать без права manage_channels
+    # (своё обсуждение закрывает автор, см. ThreadArchive). SET_NULL: удаление
+    # аккаунта не повод уносить ветку, просто «автор неизвестен».
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="created_threads",
+    )
 
     class Meta:
         ordering = ["position", "id"]

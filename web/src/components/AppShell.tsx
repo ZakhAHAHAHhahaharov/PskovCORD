@@ -245,8 +245,10 @@ export default function AppShell() {
     return () => outbox.setTransport(null)
   }, [gateway])
 
+  // Писать можно в канал любого вида: в текстовый, в ветку и в чат голосового
+  // канала (см. AppShellChat) — отдельной проверки на kind здесь поэтому нет.
   const channelTarget: OutboxTarget | null =
-    currentChannel?.kind === 'text' ? { kind: 'channel', id: currentChannel.id } : null
+    currentChannel ? { kind: 'channel', id: currentChannel.id } : null
   const conversationTarget: OutboxTarget | null =
     activeConversationId != null
       ? { kind: 'conversation', id: activeConversationId }
@@ -325,8 +327,12 @@ export default function AppShell() {
         // раньше сюда попадал только voice, а выключенный вручную список
         // участников в тексте оставлял пустую 240px-колонку серым блоком
         // (см. aside ниже), реально не освобождая ширину под чат.
+        // Ветка ведёт себя как текстовый канал и здесь тоже (см. isTextLike
+        // в AppShellChat — условие должно совпадать с тем, что там решает,
+        // рисовать ли колонку вообще).
         currentChannel?.kind === 'voice' ||
-        (currentChannel?.kind === 'text' && !showMembersList)
+        ((currentChannel?.kind === 'text' || currentChannel?.kind === 'thread') &&
+          !showMembersList)
           ? 'app-no-members-col'
           : ''
       } ${moderatorTarget ? 'app-moderator-open' : ''}`}

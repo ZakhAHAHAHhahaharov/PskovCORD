@@ -162,7 +162,10 @@ export interface Channel {
   id: number
   server: number
   name: string
-  kind: 'text' | 'voice'
+  /** 'thread' — ветка (Discord: thread). Это тоже канал, а не отдельная
+   * сущность: те же сообщения, реакции, закрепления и курсор прочтения,
+   * отличается только наличием parent (см. backend chat.models.Channel). */
+  kind: 'text' | 'voice' | 'thread'
   position: number
   /** Момент начала текущего разговора (unix-секунды), null если пусто. Только voice. */
   call_started_at: number | null
@@ -200,6 +203,19 @@ export interface Channel {
   invites_paused: boolean
   /** Мои личные настройки уведомлений/заглушения для ЭТОГО канала. */
   my_settings: ChannelMemberSettings
+  /** Канал, внутри которого живёт ветка; null у обычных каналов. Своих прав
+   * доступа у ветки нет — она видна ровно тем, кому виден родитель. */
+  parent: number | null
+  /** Сообщение, из которого выросла ветка (правый клик → «Создать ветку»).
+   * null у веток, заведённых кнопкой в самом канале, и у обычных каналов. По
+   * нему MessageList рисует плашку «Ветка: имя» под самим сообщением. */
+  source_message: number | null
+  /** Ветка закрыта — в сайдбаре её нет, но она никуда не делась: открывается
+   * из плашки под исходным сообщением и из «Архивные ветки» в меню канала.
+   * Возвращается сама, если кто-то в неё написал. */
+  archived: boolean
+  /** Кто завёл ветку — ему можно её закрыть без прав модератора. */
+  created_by: number | null
 }
 
 /** Права роли на сервере — 1:1 с булевыми полями chat.models.Role.
@@ -1550,9 +1566,31 @@ export const api = {
   cloneChannel: (channelId: number): Promise<Channel> =>
     req(`/api/channels/${channelId}/clone`, { method: 'POST' }),
   /** Безвозвратно удалить канал — каскадом уносит сообщения, вложения,
-   * закрепления. Нужно manage_channels. */
+   * закрепления и ветки канала. Нужно manage_channels. */
   deleteChannel: (channelId: number) =>
     req(`/api/channels/${channelId}`, { method: 'DELETE' }),
+
+  /** Завести ветку в канале. messageId — если ветка растёт из конкретного
+   * сообщения (правый клик → «Создать ветку»). Своего права не требует:
+   * достаточно уметь писать в этот канал. Ветка из того же сообщения уже
+   * есть — бэкенд вернёт её (200 вместо 201), а не заведёт вторую. Сам
+   * список веток отдельной ручкой не забирается: ветки приезжают обычными
+   * каналами в составе сервера. */
+  createThread: (
+    channelId: number,
+    opts: { name?: string; messageId?: number } = {},
+  ): Promise<Channel> =>
+    req(`/api/channels/${channelId}/threads`, {
+      method: 'POST',
+      body: JSON.stringify({ name: opts.name ?? '', message_id: opts.messageId ?? null }),
+    }),
+  /** Закрыть ветку или вернуть её из архива. Может автор ветки, а также
+   * manage_channels/delete_messages. Не удаление: сообщения остаются. */
+  setThreadArchived: (channelId: number, archived: boolean): Promise<Channel> =>
+    req(`/api/channels/${channelId}/archive`, {
+      method: 'POST',
+      body: JSON.stringify({ archived }),
+    }),
 
   /** Мои личные настройки уведомлений/заглушения ОДНОГО канала. */
   channelMemberSettings: (channelId: number): Promise<ChannelMemberSettings> =>
