@@ -1,5 +1,6 @@
-import { useState } from 'react'
+import { MouseEvent as ReactMouseEvent, useState } from 'react'
 import { api, Me, Server } from '../api'
+import type { useChannelMessages } from '../hooks/useChannelMessages'
 import type { useConversationContextMenu } from '../hooks/useConversationContextMenu'
 import type { useFriendContextMenu } from '../hooks/useFriendContextMenu'
 import type { useConversationsData } from '../hooks/useConversationsData'
@@ -8,7 +9,10 @@ import type { useParticipantContextMenu } from '../hooks/useParticipantContextMe
 import type { useServerData } from '../hooks/useServerData'
 import type { useVoiceCall } from '../hooks/useVoiceCall'
 import { conversationDisplayName } from '../conversation'
+import { ComposerDraft } from '../drafts'
 import { useNickname } from '../nicknames'
+import { PendingMessage } from '../outbox'
+import ThreadPanel from './ThreadPanel'
 import NewConversationModal from './NewConversationModal'
 import IncomingCallBanner from './IncomingCallBanner'
 import DiscoverModal from './DiscoverModal'
@@ -63,6 +67,17 @@ interface AppShellOverlaysProps {
    * ленту (см. AppShell.jumpToMessage). */
   onJumpToMessage: (channelId: number, messageId: number) => void
   setModeratorTarget: (v: ProfilePopupUser | null) => void
+  /** Лента открытой ветки — своя, отдельная от основного чата (см.
+   * ThreadPanel и AppShell: там второй экземпляр useChannelMessages). */
+  threadMessages: ReturnType<typeof useChannelMessages>
+  pendingThreadMessages: PendingMessage[]
+  loadDraft: (key: string) => ComposerDraft | undefined
+  saveDraft: (key: string, draft: ComposerDraft) => void
+  canDeleteMessages: boolean
+  canSendVoiceMessages: boolean
+  blockedUserIds: Set<number>
+  openProfilePopup: (user: ProfilePopupUser, e: ReactMouseEvent) => void
+  onUserContextMenu: (user: ProfilePopupUser, e: ReactMouseEvent) => void
 }
 
 /** Все модалки/попапы/контекстные меню, наложенные поверх основного layout'а
@@ -76,6 +91,9 @@ export default function AppShellOverlays({
   profilePopup, setProfilePopup,
   conversationMenu, friendMenu, servers,
   moderatorTarget, setModeratorTarget, onJumpToMessage,
+  threadMessages, pendingThreadMessages, loadDraft, saveDraft,
+  canDeleteMessages, canSendVoiceMessages, blockedUserIds,
+  openProfilePopup, onUserContextMenu,
 }: AppShellOverlaysProps) {
   // Кого баним прямо сейчас (модалка с причиной). Отдельно от
   // moderatorTarget: забанить можно и из контекстного меню, не открывая
@@ -253,13 +271,8 @@ export default function AppShellOverlays({
         // сервера (в личке/группе server.currentServer всегда null, см.
         // useServerData). Роли/никнейм-на-сервере/кик/бан имеют смысл только
         // тут — то самое «только в текстовых каналах на серверах» из задачи.
-        // Ветка — тот же текстовый канал сервера, только вложенный, и
-        // «сервером» быть не перестаёт (см. AppShellChat isTextLike).
         const currentChannel = server.currentChannel
-        const inServerTextChannel = !!(
-          server.currentServer
-          && (currentChannel?.kind === 'text' || currentChannel?.kind === 'thread')
-        )
+        const inServerTextChannel = !!(server.currentServer && currentChannel?.kind === 'text')
         const currentServer = server.currentServer
         const targetMember = inServerTextChannel
           ? server.members.find((m) => m.id === friend.id) ?? null
@@ -661,6 +674,43 @@ export default function AppShellOverlays({
                 )
                 : undefined
             }
+          />
+        )
+      })()}
+
+      {/* Панель ветки — та же колонка справа, что и у панели модератора (см.
+          .app.app-thread-open в index.css): рендерится ПОСЛЕ aside'а, и
+          авторасстановка grid ставит её последней. Открыты они никогда не
+          бывают одновременно — см. openModerator в AppShell. */}
+      {server.openThread && (() => {
+        const thread = server.openThread
+        const parent = server.channels.find((c) => c.id === thread.parent) ?? null
+        const canArchive =
+          thread.created_by === user.id
+          || !!server.currentServer?.my_permissions?.manage_channels
+          || canDeleteMessages
+        return (
+          <ThreadPanel
+            thread={thread}
+            parent={parent}
+            threadMessages={threadMessages}
+            pendingMessages={pendingThreadMessages}
+            user={user}
+            members={server.members}
+            servers={servers}
+            conversations={conv.conversations}
+            canModerate={canDeleteMessages}
+            canArchive={canArchive}
+            canSendVoiceMessages={canSendVoiceMessages}
+            blockedUserIds={blockedUserIds}
+            loadDraft={loadDraft}
+            saveDraft={saveDraft}
+            onClose={() => server.setOpenThreadId(null)}
+            onSetArchived={(archived) =>
+              void server.handleSetThreadArchived(thread, archived)
+            }
+            onOpenProfile={openProfilePopup}
+            onUserContextMenu={onUserContextMenu}
           />
         )
       })()}

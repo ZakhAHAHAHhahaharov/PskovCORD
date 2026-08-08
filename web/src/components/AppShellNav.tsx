@@ -84,6 +84,11 @@ export default function AppShellNav({
           server={server.currentServer}
           channels={server.channels}
           activeChannelId={server.channelId}
+          openThreadId={server.openThreadId}
+          onOpenThread={(c) => {
+            server.handleOpenThread(c)
+            navigateToContent()
+          }}
           members={server.members}
           voice={voice.voice}
           voiceRoster={voice.voiceRoster}

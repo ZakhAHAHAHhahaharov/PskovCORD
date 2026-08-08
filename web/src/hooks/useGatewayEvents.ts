@@ -38,6 +38,10 @@ interface IncomingCall {
 interface UseGatewayEventsParams {
   gateway: ReturnType<typeof useGateway>
   channelId: number | null
+  /** Ветка, открытая в правой панели (см. ThreadPanel) — вторая ЛЕНТА, живая
+   * одновременно с основной: события сообщений применяются к той из двух,
+   * чей это канал. null — панели нет. */
+  threadChannelId: number | null
   serverId: number | null
   activeConversationId: number | null
   userRef: MutableRefObject<Me | null | undefined>
@@ -50,6 +54,9 @@ interface UseGatewayEventsParams {
   conversationsRef: MutableRefObject<Conversation[]>
   serversRef: MutableRefObject<Server[]>
   messagesRef: MutableRefObject<Message[]>
+  /** Уже загруженная лента открытой ветки — по её хвосту добирается
+   * пропущенное на "ready" (см. messagesRef, тот же приём). */
+  threadMessagesRef: MutableRefObject<Message[]>
   dmMessagesRef: MutableRefObject<ConversationMessage[]>
   channelServerIdRef: MutableRefObject<Record<number, number>>
   shouldNotifyRef: MutableRefObject<(ownerServerId: number, authorId: number, content: string) => boolean>
@@ -58,6 +65,8 @@ interface UseGatewayEventsParams {
   ignoredUserIdsRef: MutableRefObject<Set<number>>
   fetchedServerDataIds: MutableRefObject<Set<number>>
   setMessages: Dispatch<SetStateAction<Message[]>>
+  /** Лента открытой в панели ветки — см. threadChannelId. */
+  setThreadMessages: Dispatch<SetStateAction<Message[]>>
   setMembers: Dispatch<SetStateAction<Member[]>>
   setServers: Dispatch<SetStateAction<Server[]>>
   setServerRoles: Dispatch<SetStateAction<Record<number, Role[]>>>
@@ -88,11 +97,11 @@ interface UseGatewayEventsParams {
  * подпиской, могло бы потеряться. */
 export function useGatewayEvents(params: UseGatewayEventsParams) {
   const {
-    gateway, channelId, serverId, activeConversationId,
+    gateway, channelId, threadChannelId, serverId, activeConversationId,
     userRef, voiceRef, handleJoinVoiceByIdRef,
-    conversationsRef, serversRef, messagesRef, dmMessagesRef,
+    conversationsRef, serversRef, messagesRef, threadMessagesRef, dmMessagesRef,
     channelServerIdRef, shouldNotifyRef, ignoredUserIdsRef, fetchedServerDataIds,
-    setMessages, setMembers, setServers, setServerRoles, setServerMembersCache,
+    setMessages, setThreadMessages, setMembers, setServers, setServerRoles, setServerMembersCache,
     setUnreadChannelIds, setChannelId, setServerId, setVoice, setDmCallParticipants,
     setActiveMuteVoteChannelId, setMuteVote, setIncomingCall,
     setConversations, setDmMessages, setUnreadConversationIds, setActiveConversationId,
@@ -101,17 +110,38 @@ export function useGatewayEvents(params: UseGatewayEventsParams) {
 
   // Realtime-события gateway.
   useEffect(() => {
+    /** Применить изменение к открытой ленте того канала, о котором событие.
+     *
+     * Открытых лент теперь ДВЕ: основной чат и панель ветки рядом с ним (см.
+     * threadChannelId). К обеим разом событие не относится никогда — ветка это
+     * отдельный канал со своим id, так что совпадение всегда ровно одно.
+     * Возвращает, нашлась ли лента: у message_create от этого зависит, считать
+     * ли сообщение непрочитанным (в открытой ленте — не считать).
+     */
+    const applyToOpenFeed = (
+      targetChannelId: number,
+      update: (prev: Message[]) => Message[],
+    ): boolean => {
+      if (targetChannelId === channelId) {
+        setMessages(update)
+        return true
+      }
+      if (targetChannelId === threadChannelId) {
+        setThreadMessages(update)
+        return true
+      }
+      return false
+    }
+
     const offMsg = gateway.on('message_create', (d) => {
       // Эхо собственной отправки: nonce закрывает статус «отправляется» и
       // убирает оптимистичную копию из очереди — настоящее сообщение
       // добавляется тут же строкой ниже (см. outbox.ack).
       if (d.nonce) outbox.ack(d.nonce)
-      if (d.message.channel === channelId) {
-        setMessages((prev) =>
-          prev.some((m) => m.id === d.message.id) ? prev : [...prev, d.message],
-        )
-        return
-      }
+      const shown = applyToOpenFeed(d.message.channel, (prev) =>
+        prev.some((m) => m.id === d.message.id) ? prev : [...prev, d.message],
+      )
+      if (shown) return
       // Не открытый прямо сейчас канал — решаем, поднимать ли непрочитанное
       // (мьют/уровень уведомлений/упоминание, см. shouldNotifyForChannel).
       const ownerServerId = channelServerIdRef.current[d.message.channel]
@@ -135,18 +165,15 @@ export function useGatewayEvents(params: UseGatewayEventsParams) {
       if (d.nonce) outbox.nack(d.nonce, d.reason)
     })
     const offReactions = gateway.on('message_reactions', (d) => {
-      if (d.channel_id !== channelId) return
-      setMessages((prev) =>
+      applyToOpenFeed(d.channel_id, (prev) =>
         prev.map((m) => (m.id === d.message_id ? { ...m, reactions: d.reactions } : m)),
       )
     })
     const offMsgDelete = gateway.on('message_delete', (d) => {
-      if (d.channel_id !== channelId) return
-      setMessages((prev) => prev.filter((m) => m.id !== d.message_id))
+      applyToOpenFeed(d.channel_id, (prev) => prev.filter((m) => m.id !== d.message_id))
     })
     const offMsgUpdate = gateway.on('message_update', (d) => {
-      if (d.message.channel !== channelId) return
-      setMessages((prev) =>
+      applyToOpenFeed(d.message.channel, (prev) =>
         prev.map((m) => (m.id === d.message.id ? d.message : m)),
       )
     })
@@ -615,20 +642,28 @@ export function useGatewayEvents(params: UseGatewayEventsParams) {
       // узнаёт попытку по nonce (см. chat/consumers.py).
       outbox.flush()
       void (async () => {
-        const lastMessage = messagesRef.current[messagesRef.current.length - 1]
-        if (channelId != null && lastMessage) {
+        // Добираем пропущенное в КАЖДОЙ открытой ленте — и в основном чате, и
+        // в панели ветки: пока сокет лежал, писать могли в обе.
+        const catchUp = async (
+          feedChannelId: number | null,
+          known: Message[],
+          setFeed: Dispatch<SetStateAction<Message[]>>,
+        ) => {
+          const last = known[known.length - 1]
+          if (feedChannelId == null || !last) return
           try {
-            const missed = await api.messages(channelId, { after: lastMessage.id })
-            if (missed.length) {
-              setMessages((prev) => {
-                const known = new Set(prev.map((m) => m.id))
-                return [...prev, ...missed.filter((m) => !known.has(m.id))]
-              })
-            }
+            const missed = await api.messages(feedChannelId, { after: last.id })
+            if (!missed.length) return
+            setFeed((prev) => {
+              const seen = new Set(prev.map((m) => m.id))
+              return [...prev, ...missed.filter((m) => !seen.has(m.id))]
+            })
           } catch {
             /* добор не критичен — история перечитается при смене канала */
           }
         }
+        await catchUp(channelId, messagesRef.current, setMessages)
+        await catchUp(threadChannelId, threadMessagesRef.current, setThreadMessages)
         const lastDm = dmMessagesRef.current[dmMessagesRef.current.length - 1]
         if (activeConversationId != null && lastDm) {
           try {
@@ -769,5 +804,5 @@ export function useGatewayEvents(params: UseGatewayEventsParams) {
     // не в зависимостях по той же причине, что и раньше, до вынесения этого
     // эффекта в отдельный хук.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [gateway, channelId, serverId, activeConversationId])
+  }, [gateway, channelId, threadChannelId, serverId, activeConversationId])
 }

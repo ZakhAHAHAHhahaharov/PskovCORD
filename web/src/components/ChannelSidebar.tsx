@@ -130,11 +130,14 @@ function VoiceStackedAvatars({
  */
 function ChannelThreadRows({
   threads,
-  activeChannelId,
+  openThreadId,
   onSelect,
 }: {
   threads: Channel[]
-  activeChannelId: number | null
+  /** Ветка, открытая в панели справа (см. ThreadPanel) — она и подсвечена.
+   * Не activeChannelId: ветка не подменяет канал, она открывается РЯДОМ с
+   * ним, и подсвеченными оказываются оба — и канал, и его ветка. */
+  openThreadId: number | null
   onSelect: (c: Channel) => void
 }) {
   const [archiveOpen, setArchiveOpen] = useState(false)
@@ -145,7 +148,7 @@ function ChannelThreadRows({
   // просто отсутствовала бы в сайдбаре.
   const shown = archiveOpen
     ? [...active, ...archived]
-    : [...active, ...archived.filter((t) => t.id === activeChannelId)]
+    : [...active, ...archived.filter((t) => t.id === openThreadId)]
   if (threads.length === 0) return null
   return (
     <>
@@ -153,7 +156,7 @@ function ChannelThreadRows({
         <button
           key={t.id}
           className={`channel-item channel-thread-item ${
-            activeChannelId === t.id ? 'active' : ''
+            openThreadId === t.id ? 'active' : ''
           } ${t.archived ? 'channel-thread-archived' : ''}`}
           onClick={() => onSelect(t)}
           title={t.archived ? `${t.name} — ветка закрыта` : t.name}
@@ -298,6 +301,8 @@ export default function ChannelSidebar({
   server,
   channels,
   activeChannelId,
+  openThreadId,
+  onOpenThread,
   members,
   voice,
   voiceRoster,
@@ -320,6 +325,12 @@ export default function ChannelSidebar({
   server: Server | null
   channels: Channel[]
   activeChannelId: number | null
+  /** Ветка, открытая в панели справа — подсвечена в списке отдельно от
+   * активного канала (см. ChannelThreadRows). */
+  openThreadId: number | null
+  /** Клик по строке ветки — открыть её панелью рядом с родительским каналом
+   * (см. useServerData.handleOpenThread), а не «перейти» в неё. */
+  onOpenThread: (c: Channel) => void
   members: Member[]
   voice: VoiceState | null
   /** Кто ещё сейчас в том же звонке, что и мы — для Блока 2 в StatusMenu. */
@@ -455,10 +466,11 @@ export default function ChannelSidebar({
               .filter((c) => {
                 if (!textCollapsed) return true
                 // Свёрнутая категория оставляет на виду не только открытый
-                // канал, но и канал открытой ВЕТКИ: иначе, сидя в ветке, не
-                // видно ни её, ни того, откуда она.
+                // канал, но и канал открытой ВЕТКИ: иначе строка ветки, в
+                // которой сейчас пишут, висела бы в свёрнутом списке без
+                // своего родителя.
                 if (c.id === activeChannelId) return true
-                return threadsOf(c.id).some((t) => t.id === activeChannelId)
+                return threadsOf(c.id).some((t) => t.id === openThreadId)
               })
               .map((c) => (
               <Fragment key={c.id}>
@@ -485,8 +497,8 @@ export default function ChannelSidebar({
                 </button>
                 <ChannelThreadRows
                   threads={threadsOf(c.id)}
-                  activeChannelId={activeChannelId}
-                  onSelect={onSelectText}
+                  openThreadId={openThreadId}
+                  onSelect={onOpenThread}
                 />
               </Fragment>
             ))}
@@ -650,8 +662,8 @@ export default function ChannelSidebar({
                       показываются так же, как у текстового канала. */}
                   <ChannelThreadRows
                     threads={threadsOf(c.id)}
-                    activeChannelId={activeChannelId}
-                    onSelect={onSelectText}
+                    openThreadId={openThreadId}
+                    onSelect={onOpenThread}
                   />
                 </div>
               )

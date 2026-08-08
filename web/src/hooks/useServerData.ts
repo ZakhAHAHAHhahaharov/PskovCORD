@@ -193,6 +193,8 @@ export function useServerData(userRef: RefObject<Me | null>) {
     const firstText = s.channels.find((c) => c.kind === 'text')
     const target = firstText ? firstText.id : (s.channels[0]?.id ?? null)
     setChannelId(target)
+    // Ветка чужого сервера в панели не имеет смысла — см. handleSelectChannel.
+    setOpenThreadId(null)
     // Заодно гасим непрочитанное у канала, в который переключаемся — иначе
     // клик по серверу открывал бы канал, у которого пилюля всё ещё "непрочитан".
     if (target != null) {
@@ -329,6 +331,11 @@ export function useServerData(userRef: RefObject<Me | null>) {
       acknowledgedSpoilerIds.current.add(c.id)
     }
     setChannelId(c.id)
+    // Ушли в другой канал — открытая ветка закрывается вместе с разговором,
+    // ответвлением от которого была: панель рядом с ЧУЖИМ каналом не значила
+    // бы ничего. Возврат в тот же канал ветку не восстанавливает — открыть её
+    // снова стоит один клик по строке в сайдбаре.
+    setOpenThreadId(null)
     setUnreadChannelIds((prev) => {
       if (!prev.has(c.id)) return prev
       const next = new Set(prev)
@@ -507,6 +514,32 @@ export function useServerData(userRef: RefObject<Me | null>) {
     suggestedName?: string
   } | null>(null)
 
+  /** Открытая ветка — id, а не channelId: ветка живёт КОЛОНКОЙ СПРАВА, рядом
+   * с родительским каналом (как панель модератора, см. ThreadPanel), а не
+   * подменяет собой основной чат. Иначе, уйдя в ветку, теряешь из виду
+   * разговор, ответвлением от которого она и является — а в Discord их видно
+   * одновременно, ради этого ветки и существуют.
+   *
+   * Держим только id, сам канал резолвим из currentServer при рендере — тот
+   * же приём, что у channelContextMenuId выше: ветку могли переименовать или
+   * закрыть, пока панель открыта, и снимок разъехался бы с реальностью. */
+  const [openThreadId, setOpenThreadId] = useState<number | null>(null)
+  const openThread = channels.find((c) => c.id === openThreadId) || null
+
+  /** Открыть ветку в панели. Основной чат при этом переключается на её
+   * РОДИТЕЛЯ: панель показывает ответвление, а слева от неё должен быть тот
+   * разговор, от которого оно ответвилось. */
+  const handleOpenThread = (thread: Channel) => {
+    if (thread.parent != null) setChannelId(thread.parent)
+    setOpenThreadId(thread.id)
+    setUnreadChannelIds((prev) => {
+      if (!prev.has(thread.id)) return prev
+      const next = new Set(prev)
+      next.delete(thread.id)
+      return next
+    })
+  }
+
   /** Ошибку наружу не глушим — её показывает модалка, не закрываясь, чтобы
    * набранное название не пропало (см. CreateThreadModal и тот же приём у
    * handleCreateChannelSubmit). Готовую ветку сразу открываем: её и создавали
@@ -518,6 +551,7 @@ export function useServerData(userRef: RefObject<Me | null>) {
       name,
       messageId: target.messageId,
     })
+    setOpenThreadId(thread.id)
     setServers((prev) =>
       prev.map((s) =>
         s.id === thread.server
@@ -533,19 +567,14 @@ export function useServerData(userRef: RefObject<Me | null>) {
           : s,
       ),
     )
-    setChannelId(thread.id)
   }
 
-  /** Закрыть ветку или вернуть её из архива. Закрытая ветка пропадает из
-   * сайдбара, поэтому, если закрыли ту, что открыта прямо сейчас, уходим в
-   * родительский канал — иначе остались бы в чате, которого в списке уже
-   * нет. */
+  /** Закрыть ветку или вернуть её из архива. Панель при этом не закрывается:
+   * закрытая ветка пропадает из сайдбара, но читать её можно как и раньше —
+   * шапка просто получает пометку «закрыта» (см. ThreadPanel). */
   const handleSetThreadArchived = async (thread: Channel, archived: boolean) => {
     try {
       applyChannelUpdate(await api.setThreadArchived(thread.id, archived))
-      if (archived && channelId === thread.id && thread.parent != null) {
-        setChannelId(thread.parent)
-      }
     } catch (e) {
       alert('Не удалось изменить состояние ветки: ' + (e as Error).message)
     }
@@ -793,5 +822,6 @@ export function useServerData(userRef: RefObject<Me | null>) {
     createChannelKind, setCreateChannelKind, handleCreateChannelSubmit,
     createThreadTarget, setCreateThreadTarget, handleCreateThreadSubmit,
     handleSetThreadArchived,
+    openThreadId, openThread, setOpenThreadId, handleOpenThread,
   }
 }
