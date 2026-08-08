@@ -118,6 +118,20 @@ export default function AppShell() {
   useEffect(() => {
     setModeratorTarget(null)
   }, [serverId])
+  // Панель модератора и панель ветки делят одну и ту же колонку справа: две
+  // сразу оставили бы чату между ними полосу, в которой уже не почитать
+  // переписку, ради которой их и открывали. Поэтому одна закрывает другую —
+  // здесь ветка закрывает досье, ниже (openModerator) досье закрывает ветку.
+  // Друг друга эти два обработчика не гоняют: каждый срабатывает только на
+  // своё открытие.
+  const { setOpenThreadId } = serverData
+  useEffect(() => {
+    if (serverData.openThreadId != null) setModeratorTarget(null)
+  }, [serverData.openThreadId])
+  const openModerator = useCallback((target: ProfilePopupUser | null) => {
+    if (target) setOpenThreadId(null)
+    setModeratorTarget(target)
+  }, [setOpenThreadId])
   // Черновики композера — по одному на канал/диалог, переживают переключение
   // между ними (и отлучку в голосовой канал/пустой экран): сам MessageInput
   // размонтируется при смене места (см. key={draftKey} у обоих <MessageInput>
@@ -218,6 +232,14 @@ export default function AppShell() {
     currentChannel, channelId, gateway, pendingEditsRef, messageJump,
   )
   const { setMessages, messagesRef } = channelMessages
+  // Ветка открывается КОЛОНКОЙ СПРАВА, рядом с родительским каналом (см.
+  // ThreadPanel), поэтому лент сообщений одновременно две — у каждой своя
+  // история, свой черновик и свой курсор прочтения. Второй экземпляр того же
+  // хука, а не общий на две: разделять его пришлось бы ветвлениями внутри
+  // почти каждого его эффекта.
+  const threadMessages = useChannelMessages(
+    serverData.openThread, serverData.openThreadId, gateway, pendingEditsRef,
+  )
 
   // «Попасть» в приглашённый канал — по виду: голосовой подключает, текстовый
   // просто выбирается в сайдбаре (см. докстринг useInviteLinks).
@@ -253,7 +275,10 @@ export default function AppShell() {
     activeConversationId != null
       ? { kind: 'conversation', id: activeConversationId }
       : null
+  const threadTarget: OutboxTarget | null =
+    serverData.openThread ? { kind: 'channel', id: serverData.openThread.id } : null
   const pendingChannelMessages = usePendingMessages(channelTarget)
+  const pendingThreadMessages = usePendingMessages(threadTarget)
   const pendingDmMessages = usePendingMessages(conversationTarget)
   // Модерация чата — по праву роли (владельцу chat/roles.py выдаёт всё).
   const canDeleteMessages = !!currentServer?.my_permissions?.delete_messages
@@ -263,11 +288,14 @@ export default function AppShell() {
   const canSendVoiceMessages = !!currentServer?.my_permissions?.send_voice_messages
 
   useGatewayEvents({
-    gateway, channelId, serverId, activeConversationId,
+    gateway, channelId, threadChannelId: serverData.openThreadId,
+    serverId, activeConversationId,
     userRef, voiceRef, handleJoinVoiceByIdRef,
-    conversationsRef, serversRef, messagesRef, dmMessagesRef,
+    conversationsRef, serversRef, messagesRef,
+    threadMessagesRef: threadMessages.messagesRef, dmMessagesRef,
     channelServerIdRef, shouldNotifyRef, ignoredUserIdsRef, fetchedServerDataIds,
-    setMessages, setMembers, setServers, setServerRoles, setServerMembersCache,
+    setMessages, setThreadMessages: threadMessages.setMessages,
+    setMembers, setServers, setServerRoles, setServerMembersCache,
     setUnreadChannelIds, setChannelId, setServerId, setVoice, setDmCallParticipants,
     setActiveMuteVoteChannelId, setMuteVote, setIncomingCall,
     setConversations, setDmMessages, setUnreadConversationIds, setActiveConversationId,
@@ -327,15 +355,13 @@ export default function AppShell() {
         // раньше сюда попадал только voice, а выключенный вручную список
         // участников в тексте оставлял пустую 240px-колонку серым блоком
         // (см. aside ниже), реально не освобождая ширину под чат.
-        // Ветка ведёт себя как текстовый канал и здесь тоже (см. isTextLike
-        // в AppShellChat — условие должно совпадать с тем, что там решает,
-        // рисовать ли колонку вообще).
         currentChannel?.kind === 'voice' ||
-        ((currentChannel?.kind === 'text' || currentChannel?.kind === 'thread') &&
-          !showMembersList)
+        (currentChannel?.kind === 'text' && !showMembersList)
           ? 'app-no-members-col'
           : ''
-      } ${moderatorTarget ? 'app-moderator-open' : ''}`}
+      } ${moderatorTarget ? 'app-moderator-open' : ''} ${
+        serverData.openThread ? 'app-thread-open' : ''
+      }`}
     >
       <AppShellNav
         server={serverData}
@@ -396,8 +422,17 @@ export default function AppShell() {
         friendMenu={friendMenu}
         servers={servers}
         moderatorTarget={moderatorTarget}
-        setModeratorTarget={setModeratorTarget}
+        setModeratorTarget={openModerator}
         onJumpToMessage={jumpToMessage}
+        threadMessages={threadMessages}
+        pendingThreadMessages={pendingThreadMessages}
+        loadDraft={loadDraft}
+        saveDraft={saveDraft}
+        canDeleteMessages={canDeleteMessages}
+        canSendVoiceMessages={canSendVoiceMessages}
+        blockedUserIds={blockedUserIds}
+        openProfilePopup={openProfilePopup}
+        onUserContextMenu={handleUserContextMenu}
       />
     </div>
     </VoiceProvider>

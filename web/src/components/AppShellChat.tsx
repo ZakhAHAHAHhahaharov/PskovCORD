@@ -1,9 +1,6 @@
 import { MouseEvent as ReactMouseEvent, useState } from 'react'
-import {
-  Archive, ArchiveRestore, ChevronLeft, Hash, MessageSquare, MessagesSquare, Phone,
-  PhoneOff, Pin, Users,
-} from 'lucide-react'
-import { Channel, Conversation, Me } from '../api'
+import { ChevronLeft, MessageSquare, Phone, PhoneOff, Pin, Users } from 'lucide-react'
+import { Conversation, Me } from '../api'
 import type { useChannelMessages } from '../hooks/useChannelMessages'
 import type { useConversationsData } from '../hooks/useConversationsData'
 import type { useInviteLinks } from '../hooks/useInviteLinks'
@@ -96,17 +93,6 @@ export default function AppShellChat({
   // а чат — дополнение к нему, а не то, ради чего сюда пришли.
   const [voiceChatOpen, setVoiceChatOpen] = useState(false)
 
-  // Ветка — такой же текстовый чат, как обычный канал: та же лента, тот же
-  // композер, отличается только шапка (см. ниже). Поэтому везде, где раньше
-  // проверялось kind === 'text', теперь спрашивается это.
-  const isThread = currentChannel?.kind === 'thread'
-  const isTextLike = currentChannel?.kind === 'text' || isThread
-  /** Родительский канал открытой ветки — нужен и хлебной крошке в шапке, и
-   * выходу «наверх» из закрытой ветки. */
-  const threadParent: Channel | null =
-    isThread && currentChannel?.parent != null
-      ? channels.find((c) => c.id === currentChannel.parent) ?? null
-      : null
   /** Ветка, выросшая из этого сообщения, — для плашки под ним (см.
    * MessageList.threadOf). Ищем среди каналов сервера: ветки приезжают
    * обычными каналами, отдельного их списка на клиенте нет. */
@@ -118,7 +104,7 @@ export default function AppShellChat({
     if (!currentChannel) return
     const existing = threadOf(messageId)
     if (existing) {
-      server.handleSelectChannel(existing)
+      server.handleOpenThread(existing)
       return
     }
     server.setCreateThreadTarget({
@@ -130,14 +116,6 @@ export default function AppShellChat({
       suggestedName: threadNameFromMessage(content),
     })
   }
-  // Закрыть/вернуть ветку может её автор либо тот, кто распоряжается каналами
-  // или сообщениями (те же три основания проверяет бэкенд, см. ThreadArchive
-  // — здесь это только про то, показывать ли кнопку).
-  const canArchiveThread =
-    isThread
-    && (currentChannel?.created_by === user.id
-      || !!currentServer?.my_permissions?.manage_channels
-      || canDeleteMessages)
   // Имя собеседника в шапке считает conversationDisplayName из стора
   // никнеймов — подписка на его версию перерисовывает шапку при смене
   // никнейма (сам activeConversation при этом не меняется).
@@ -321,7 +299,7 @@ export default function AppShellChat({
                   servers={server.servers}
                   conversations={conv.conversations}
                   threadOf={threadOf}
-                  onOpenThread={server.handleSelectChannel}
+                  onOpenThread={server.handleOpenThread}
                   onCreateThread={(m) => handleCreateThreadFromMessage(m.id, m.content)}
                 />
                 <MessageInput
@@ -343,7 +321,7 @@ export default function AppShellChat({
               </aside>
             )}
           </div>
-        ) : currentChannel && isTextLike ? (
+        ) : currentChannel && currentChannel.kind === 'text' ? (
           <>
             <header className="chat-header">
               {isMobile && (
@@ -351,53 +329,8 @@ export default function AppShellChat({
                   <ChevronLeft size={20} />
                 </button>
               )}
-              {isThread ? (
-                <>
-                  {/* Хлебная крошка «# канал ›» — и подпись «мы внутри ветки»,
-                      и выход наверх одним кликом. Без неё из закрытой ветки
-                      (её нет в сайдбаре) возвращаться было бы некуда. */}
-                  {threadParent && (
-                    <button
-                      type="button"
-                      className="chat-header-thread-parent"
-                      title={`К каналу #${threadParent.name}`}
-                      onClick={() => server.handleSelectChannel(threadParent)}
-                    >
-                      <Hash size={14} />
-                      {threadParent.name}
-                    </button>
-                  )}
-                  <span className="hash chat-header-thread-icon">
-                    <MessagesSquare size={16} />
-                  </span>
-                </>
-              ) : (
-                <span className="hash">#</span>
-              )}
+              <span className="hash">#</span>
               <span className="chat-header-name">{currentChannel.name}</span>
-              {isThread && currentChannel.archived && (
-                <span className="chat-header-thread-archived">закрыта</span>
-              )}
-              {isThread && canArchiveThread && (
-                <button
-                  type="button"
-                  className="icon-btn"
-                  title={
-                    currentChannel.archived
-                      ? 'Вернуть ветку из архива'
-                      : 'Закрыть ветку — она уйдёт из списка каналов, сообщения останутся'
-                  }
-                  onClick={() =>
-                    void server.handleSetThreadArchived(
-                      currentChannel, !currentChannel.archived,
-                    )
-                  }
-                >
-                  {currentChannel.archived
-                    ? <ArchiveRestore size={16} />
-                    : <Archive size={16} />}
-                </button>
-              )}
               {currentChannel.status && (
                 <>
                   <span className="chat-header-topic-divider" />
@@ -458,14 +391,8 @@ export default function AppShellChat({
               servers={server.servers}
               conversations={conv.conversations}
               threadOf={threadOf}
-              onOpenThread={server.handleSelectChannel}
-              // Ветка в ветке не заводится (см. backend ChannelThreads) —
-              // внутри ветки пункта «Создать ветку» просто нет.
-              onCreateThread={
-                isThread
-                  ? undefined
-                  : (m) => handleCreateThreadFromMessage(m.id, m.content)
-              }
+              onOpenThread={server.handleOpenThread}
+              onCreateThread={(m) => handleCreateThreadFromMessage(m.id, m.content)}
             />
             <MessageInput
               key={`channel-${currentChannel.id}`}
@@ -501,7 +428,7 @@ export default function AppShellChat({
           в AppShell): иначе выключение тумблера просто гасило бы содержимое,
           оставляя пустую 240px-полосу серым блоком вместо реального
           освобождения ширины под чат. */}
-      {serverId != null && isTextLike && showMembersList ? (
+      {serverId != null && currentChannel?.kind === 'text' && showMembersList ? (
         <MembersList
           members={members}
           channels={channels}
@@ -510,7 +437,7 @@ export default function AppShellChat({
           onOpenProfile={openProfilePopup}
           onUserContextMenu={onUserContextMenu}
         />
-      ) : currentChannel?.kind === 'voice' || (isTextLike && !showMembersList) ? null : (
+      ) : currentChannel?.kind === 'voice' || (currentChannel?.kind === 'text' && !showMembersList) ? null : (
         <aside className="members-list" />
       )}
     </>

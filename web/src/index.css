@@ -583,12 +583,27 @@ input {
    панели совсем — из двух правых колонок остаётся та, на которую сейчас
    смотрят. Тумблер участников при этом не трогаем: закрыл панель — список
    вернулся сам. */
+/* Панель ветки (см. ThreadPanel.tsx) занимает ровно ту же колонку, что и
+   панель модератора, и по тем же причинам: ветка это разговор рядом с
+   каналом, а не вместо него. Открыты одновременно они не бывают — открытие
+   одной закрывает другую (см. AppShell openModerator), поэтому комбинации
+   .app-moderator-open.app-thread-open здесь нет. */
+.app.app-thread-open {
+  grid-template-columns: 312px 1fr 240px 420px;
+}
+
+.app.app-thread-open.app-no-members-col {
+  grid-template-columns: 312px 1fr 420px;
+}
+
 @media (max-width: 1400px) {
-  .app.app-moderator-open {
+  .app.app-moderator-open,
+  .app.app-thread-open {
     grid-template-columns: 312px 1fr 420px;
   }
 
-  .app-moderator-open .members-list {
+  .app-moderator-open .members-list,
+  .app-thread-open .members-list {
     display: none;
   }
 }
@@ -3517,36 +3532,66 @@ textarea.inline-editable-input {
   font-size: calc(14px * var(--font-scale, 1));
 }
 
-/* Шапка ветки: «# родительский-канал ›» слева от её названия — и подпись
-   «мы внутри ветки», и выход наверх. Приглушена относительно самого
-   названия: это контекст, а не заголовок (см. AppShellChat). */
-.chat-header-thread-parent {
+/* ---- панель ветки (ThreadPanel.tsx) ----
+   Колонку в сетке ей выдаёт .app.app-thread-open выше в файле; здесь — только
+   внутреннее устройство. Устроена как .moderator-panel: закреплённая шапка,
+   прокручивается только лента, композер прибит к низу. */
+.thread-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  background: var(--chat-bg);
+  border-left: 1px solid var(--input-border);
+}
+
+.thread-panel-head {
   display: flex;
   align-items: center;
-  gap: 3px;
-  flex-shrink: 1;
-  min-width: 0;
-  padding: 2px 6px;
-  border-radius: 4px;
+  gap: 8px;
+  height: 48px;
+  padding: 0 8px 0 12px;
+  flex-shrink: 0;
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.2), 0 1.5px 0 rgba(0, 0, 0, 0.05);
+}
+
+.thread-panel-icon {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
   color: var(--text-muted);
-  font-size: calc(14px * var(--font-scale, 1));
+}
+
+.thread-panel-identity {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+
+.thread-panel-name {
+  font-weight: 700;
+  color: var(--heading-text);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.chat-header-thread-parent:hover {
-  background: var(--channel-hover);
-  color: var(--text-normal);
-}
-
-.chat-header-thread-icon {
-  display: inline-flex;
+/* «в #канал» — контекст, а не заголовок: мельче и приглушённее имени ветки.
+   Кнопкой не делаем: родительский канал и так открыт слева, вести отсюда
+   некуда. */
+.thread-panel-parent {
+  display: flex;
   align-items: center;
-  flex-shrink: 0;
+  gap: 2px;
+  color: var(--text-faint);
+  font-size: calc(12px * var(--font-scale, 1));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.chat-header-thread-archived {
+.thread-panel-archived-tag {
   flex-shrink: 0;
   padding: 1px 6px;
   border-radius: 8px;
@@ -3555,6 +3600,29 @@ textarea.inline-editable-input {
   font-size: calc(11px * var(--font-scale, 1));
   text-transform: uppercase;
   letter-spacing: 0.4px;
+}
+
+.thread-panel-action {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  flex-shrink: 0;
+  border-radius: 4px;
+  color: var(--text-muted);
+}
+
+.thread-panel-action:hover {
+  background: var(--channel-hover);
+  color: var(--text-normal);
+}
+
+/* Колонка узкая — ленте нужны отступы поменьше, чем в основном чате (тот же
+   приём, что у .voice-chat-panel). */
+.thread-panel .message-list {
+  padding-left: 8px;
+  padding-right: 8px;
 }
 
 /* Тумблер видимости списка участников — справа в шапке текстового канала
@@ -9230,7 +9298,11 @@ button.settings-row-clickable:hover .settings-row-label {
      десктопного правила ни на что не влияет, а в обычном потоке панель
      уехала бы под чат. Тот же приём, что у настроек (см. AppShell —
      «полноэкранный слой поверх текущего экрана»). */
-  .moderator-panel {
+  .moderator-panel,
+  /* Панель ветки — по той же причине и тем же способом (см. ThreadPanel):
+     колонки рядом с чатом на мобилке нет, а в обычном потоке она уехала бы
+     под него. Закрывается крестиком в своей же шапке. */
+  .thread-panel {
     position: fixed;
     inset: 0;
     z-index: 60;
