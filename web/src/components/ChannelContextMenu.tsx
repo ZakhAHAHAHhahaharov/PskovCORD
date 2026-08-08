@@ -1,7 +1,7 @@
 import { RefObject, useLayoutEffect, useRef, useState } from 'react'
 import {
-  Bell, Check, CheckCheck, ChevronRight, Copy, Eye, EyeOff, Link as LinkIcon, Settings,
-  Trash2, UserPlus, Pin, Volume2, VolumeX,
+  Bell, Check, CheckCheck, ChevronRight, Copy, Eye, EyeOff, Link as LinkIcon,
+  MessagesSquare, Settings, Trash2, UserPlus, Pin, Volume2, VolumeX,
 } from 'lucide-react'
 import { ChannelMemberSettings, ChannelNotifyLevel } from '../api'
 import { useHiddenNames } from '../hiddenNames'
@@ -9,7 +9,11 @@ import { useHiddenNames } from '../hiddenNames'
 export interface ChannelContextMenuChannel {
   id: number
   name: string
-  kind: 'text' | 'voice'
+  /** 'thread' сюда не приходит: у строк веток в сайдбаре контекстного меню
+   * нет — всё, что с веткой делают (закрыть/вернуть), живёт в её собственной
+   * шапке (см. AppShellChat). Вариант оставлен в типе, чтобы Channel
+   * подходил сюда без сужения. */
+  kind: 'text' | 'voice' | 'thread'
   my_settings: ChannelMemberSettings
 }
 
@@ -59,6 +63,7 @@ export default function ChannelContextMenu({
   onSetNotificationLevel,
   onOpenSettings,
   onCloneChannel,
+  onCreateThread,
   onRequestDelete,
 }: {
   channel: ChannelContextMenuChannel
@@ -76,6 +81,10 @@ export default function ChannelContextMenu({
   onSetNotificationLevel: (level: ChannelNotifyLevel) => void
   onOpenSettings: () => void
   onCloneChannel: () => void
+  /** Завести ветку в этом канале — без исходного сообщения (из сообщения её
+   * заводят правым кликом по нему, см. MessageContextMenu). Прав сверх
+   * «писать в канал» не требует, поэтому пункт виден всем. */
+  onCreateThread: () => void
   onRequestDelete: () => void
 }) {
   const ref = useRef<HTMLDivElement>(null)
@@ -144,6 +153,9 @@ export default function ChannelContextMenu({
         <div className="profile-popup-menu">
           <button type="button" className="profile-popup-item" onClick={act(onMarkRead)}>
             <CheckCheck size={15} /> Пометить как прочитанное
+          </button>
+          <button type="button" className="profile-popup-item" onClick={act(onCreateThread)}>
+            <MessagesSquare size={15} /> Создать ветку
           </button>
           <button type="button" className="profile-popup-item" onClick={act(onInvite)}>
             <UserPlus size={15} /> {isVoice ? 'Пригласить в голосовой чат' : 'Пригласить на канал'}

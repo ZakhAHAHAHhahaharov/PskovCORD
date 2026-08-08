@@ -48,8 +48,10 @@ export function useParticipantContextMenu(
         setMentionPrefill({ token: Date.now(), text: `@${member.username} ` })
         return
       }
+      // Уже открыт канал, куда можно писать (текстовый или ветка) — упоминание
+      // остаётся здесь же; иначе уводим в первый текстовый канал сервера.
       const target =
-        currentChannel && currentChannel.kind === 'text'
+        currentChannel && (currentChannel.kind === 'text' || currentChannel.kind === 'thread')
           ? currentChannel
           : channels.find((c) => c.kind === 'text')
       if (!target) return

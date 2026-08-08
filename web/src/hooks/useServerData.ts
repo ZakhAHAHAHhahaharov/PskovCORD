@@ -497,6 +497,60 @@ export function useServerData(userRef: RefObject<Me | null>) {
     )
   }
 
+  /** Где сейчас заводим ветку — канал и, если ветка растёт из сообщения, оно
+   * само (нужно и для message_id, и чтобы предложить название по его тексту).
+   * null — модалки нет. Тот же приём, что и createChannelKind выше. */
+  const [createThreadTarget, setCreateThreadTarget] = useState<{
+    channelId: number
+    messageId?: number
+    /** Текст исходного сообщения — подставляется в поле названия. */
+    suggestedName?: string
+  } | null>(null)
+
+  /** Ошибку наружу не глушим — её показывает модалка, не закрываясь, чтобы
+   * набранное название не пропало (см. CreateThreadModal и тот же приём у
+   * handleCreateChannelSubmit). Готовую ветку сразу открываем: её и создавали
+   * ради того, чтобы в ней писать. */
+  const handleCreateThreadSubmit = async (name: string) => {
+    const target = createThreadTarget
+    if (!target) return
+    const thread = await api.createThread(target.channelId, {
+      name,
+      messageId: target.messageId,
+    })
+    setServers((prev) =>
+      prev.map((s) =>
+        s.id === thread.server
+          ? {
+              ...s,
+              // Ветка из этого сообщения могла уже существовать — бэкенд тогда
+              // возвращает её, а не создаёт вторую (см. api.createThread), и
+              // добавлять её в список второй раз незачем.
+              channels: s.channels.some((c) => c.id === thread.id)
+                ? s.channels.map((c) => (c.id === thread.id ? thread : c))
+                : [...s.channels, thread],
+            }
+          : s,
+      ),
+    )
+    setChannelId(thread.id)
+  }
+
+  /** Закрыть ветку или вернуть её из архива. Закрытая ветка пропадает из
+   * сайдбара, поэтому, если закрыли ту, что открыта прямо сейчас, уходим в
+   * родительский канал — иначе остались бы в чате, которого в списке уже
+   * нет. */
+  const handleSetThreadArchived = async (thread: Channel, archived: boolean) => {
+    try {
+      applyChannelUpdate(await api.setThreadArchived(thread.id, archived))
+      if (archived && channelId === thread.id && thread.parent != null) {
+        setChannelId(thread.parent)
+      }
+    } catch (e) {
+      alert('Не удалось изменить состояние ветки: ' + (e as Error).message)
+    }
+  }
+
   // Оптимистичный патч my_settings ОДНОГО канала — тот же приём, что и
   // patchServerSettings для сервера целиком, только адресован конкретному
   // каналу внутри своего сервера.
@@ -737,5 +791,7 @@ export function useServerData(userRef: RefObject<Me | null>) {
     handleSetChannelVisibility, handleCloneChannel, handleDeleteChannel,
     handleSetChannelMute, handleSetChannelNotificationLevel, handleSetChannelInvitesPaused,
     createChannelKind, setCreateChannelKind, handleCreateChannelSubmit,
+    createThreadTarget, setCreateThreadTarget, handleCreateThreadSubmit,
+    handleSetThreadArchived,
   }
 }

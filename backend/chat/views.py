@@ -2022,12 +2022,13 @@ def _parse_slowmode(raw, kind):
         return None, Response(
             {"detail": f"Медленный режим — от 0 до {MAX_SLOWMODE_SECONDS} секунд."},
             status=400)
-    # Голосовому каналу медленный режим нечего ограничивать: сообщений в нём
-    # нет, а молча сохранённое значение позже выглядело бы как работающая,
-    # но ничего не делающая настройка.
-    if seconds and kind != Channel.TEXT:
+    # Голосовому каналу медленный режим нечего ограничивать: его текстовый чат
+    # — это разговор во время звонка, темп которого задаёт сам звонок. Ветка
+    # же ограничивается наравне с текстовым каналом: там это обычная лента.
+    if seconds and kind not in (Channel.TEXT, Channel.THREAD):
         return None, Response(
-            {"detail": "Медленный режим — только для текстовых каналов."}, status=400)
+            {"detail": "Медленный режим — только для текстовых каналов и веток."},
+            status=400)
     return seconds, None
 
 
@@ -2056,6 +2057,31 @@ def _channel_broadcast_payload(channel_data: dict) -> dict:
     copy = dict(channel_data)
     copy["my_settings"] = channel_member_settings_payload(None)
     return copy
+
+
+def _broadcast_channel_event(channel, payload, visible_user_ids=None):
+    """Событие про канал — участникам сервера.
+
+    В группе сервера сидят ВСЕ его участники, поэтому приватный канал
+    рассылается поимённо тем, кому он виден: иначе само событие (с названием
+    канала) утекло бы тем, кому его видеть нельзя. Ветка приватного канала
+    наследует его приватность (см. ChannelThreads: is_private ставится по
+    родителю) и потому попадает в ту же ветку рассылки без отдельной проверки.
+
+    visible_user_ids — заранее посчитанный список получателей; нужен удалению,
+    где после channel.delete() разбирать, кому канал был открыт, уже не по
+    чему (M2M-таблицы уходят вместе со строкой).
+    """
+    channel_layer = get_channel_layer()
+    if not channel.is_private:
+        async_to_sync(channel_layer.group_send)(
+            f"server_{channel.server_id}", {"type": "broadcast", "payload": payload})
+        return
+    if visible_user_ids is None:
+        visible_user_ids = _channel_visible_user_ids(channel)
+    for user_id in visible_user_ids:
+        async_to_sync(channel_layer.group_send)(
+            f"user_{user_id}", {"type": "broadcast", "payload": payload})
 
 
 class ChannelCreate(APIView):
@@ -2088,22 +2114,11 @@ class ChannelCreate(APIView):
         # Живое обновление списка каналов у остальных участников сервера —
         # без этого им приходилось перезагружать страницу, чтобы увидеть
         # новый канал (тот же паттерн, что и voice_state_update).
-        payload = {
+        _broadcast_channel_event(channel, {
             "op": "channel_create",
             "server_id": server_id,
             "channel": _channel_broadcast_payload(data),
-        }
-        channel_layer = get_channel_layer()
-        if channel.is_private:
-            # В группе сервера сидят ВСЕ его участники, поэтому приватный
-            # канал рассылаем поимённо — иначе само событие (с названием
-            # канала) утекло бы тем, кому его видеть нельзя.
-            for user_id in _channel_visible_user_ids(channel):
-                async_to_sync(channel_layer.group_send)(
-                    f"user_{user_id}", {"type": "broadcast", "payload": payload})
-        else:
-            async_to_sync(channel_layer.group_send)(
-                f"server_{server_id}", {"type": "broadcast", "payload": payload})
+        })
         return Response(data, status=201)
 
 
@@ -2199,20 +2214,11 @@ class ChannelDetail(APIView):
                 User.objects.filter(
                     memberships__server=server, id__in=allowed_user_ids))
         data = ChannelSerializer(channel, context={"request": request}).data
-        payload = {
+        _broadcast_channel_event(channel, {
             "op": "channel_update",
             "server_id": server.id,
             "channel": _channel_broadcast_payload(data),
-        }
-        channel_layer = get_channel_layer()
-        if channel.is_private:
-            # Приватный канал — поимённо тем, кому он виден (см. ChannelCreate).
-            for user_id in _channel_visible_user_ids(channel):
-                async_to_sync(channel_layer.group_send)(
-                    f"user_{user_id}", {"type": "broadcast", "payload": payload})
-        else:
-            async_to_sync(channel_layer.group_send)(
-                f"server_{server.id}", {"type": "broadcast", "payload": payload})
+        })
         return Response(data)
 
     def delete(self, request, channel_id):
@@ -2222,8 +2228,10 @@ class ChannelDetail(APIView):
         не спрашивает — той же логике следуют удаление сервера/сообщения).
 
         Каскадом уносит сообщения, вложения, реакции, закрепления, курсор
-        прочтения — всё, что ссылается на канал (см. related_name с
-        on_delete=CASCADE у соответствующих моделей)."""
+        прочтения и ветки канала целиком — всё, что ссылается на канал (см.
+        related_name с on_delete=CASCADE у соответствующих моделей). Отдельного
+        события про ветки при этом не шлётся: фронт убирает их вместе с
+        родителем сам (см. web useGatewayEvents channel_delete)."""
         channel = get_object_or_404(Channel, id=channel_id)
         server = channel.server
         denied = _require_permission(request, server, "manage_channels")
@@ -2232,21 +2240,162 @@ class ChannelDetail(APIView):
         # Список видящих и приватность — ДО удаления: после него разбирать,
         # кому был открыт уже удалённый канал, будет не по чему (M2M-таблицы
         # уйдут вместе со строкой).
-        is_private = channel.is_private
-        visible_user_ids = _channel_visible_user_ids(channel) if is_private else None
+        visible_user_ids = (
+            _channel_visible_user_ids(channel) if channel.is_private else None)
         channel.delete()
-        payload = {
-            "op": "channel_delete", "server_id": server.id, "channel_id": channel_id,
-        }
-        channel_layer = get_channel_layer()
-        if is_private:
-            for user_id in visible_user_ids:
-                async_to_sync(channel_layer.group_send)(
-                    f"user_{user_id}", {"type": "broadcast", "payload": payload})
-        else:
-            async_to_sync(channel_layer.group_send)(
-                f"server_{server.id}", {"type": "broadcast", "payload": payload})
+        _broadcast_channel_event(
+            channel,
+            {"op": "channel_delete", "server_id": server.id, "channel_id": channel_id},
+            visible_user_ids,
+        )
         return Response(status=204)
+
+
+# Из чего лепится название ветки, если его не прислали, — начало исходного
+# сообщения. Обрезка грубая, по символам: это не заголовок статьи, а подпись
+# строки в сайдбаре, и фронт всё равно предлагает своё название в поле ввода
+# (см. web CreateThreadModal) — сюда попадает только то, что отправили молча.
+THREAD_NAME_FROM_MESSAGE = 60
+
+
+def _thread_name_from_message(message) -> str:
+    """Название ветки по тексту сообщения — без токенов стикеров и кастомных
+    эмодзи: в сыром content они лежат как «<sticker:7>»/«<:кот:1>» (см.
+    chat.emoji), и попади они в имя канала как есть, в сайдбаре висела бы
+    строка вида «<sticker:7>». Сообщение из одних стикеров и картинок даёт
+    пустую строку — это не ошибка разбора, просто название придётся ввести
+    руками (вызывающий ответит 400)."""
+    text = emoji_keys.STICKER_TOKEN_RE.sub("", message.content)
+    # У эмодзи от токена остаётся его ИМЯ: «<:кот:1> смотри» — это «кот
+    # смотри», а не просто «смотри». Стикер имени в токене не несёт вовсе
+    # (см. chat.emoji.STICKER_TOKEN_RE), поэтому он и вырезается целиком.
+    text = emoji_keys.EMOJI_TOKEN_RE.sub(lambda m: m.group(2), text)
+    return " ".join(text.split())[:THREAD_NAME_FROM_MESSAGE]
+
+
+class ChannelThreads(APIView):
+    """POST /api/channels/<id>/threads {"name"?, "message_id"?} — завести ветку
+    в этом канале: правый клик по сообщению → «Создать ветку» (тогда приходит
+    message_id) либо кнопка «+» у канала в сайдбаре (тогда только name).
+
+    Своего права у создания ветки нет: ветку заводит тот, кто и так может
+    писать в этот канал (send_messages). Отдельное право «создавать ветки»
+    имело бы смысл, если бы ветка давала что-то сверх обычного разговора в
+    канале — она не даёт: то же место, те же собеседники, тот же доступ (см.
+    chat.permissions.can_see_channel).
+
+    Список веток отдельной ручкой не отдаётся: ветки — обычные каналы сервера
+    и приезжают вместе с ним (см. ServerSerializer.get_channels, там же про
+    архивные).
+    """
+
+    def post(self, request, channel_id):
+        channel = get_object_or_404(
+            Channel.objects.select_related("server", "parent"), id=channel_id)
+        if channel.parent_id:
+            return Response(
+                {"detail": "Ветку можно создать только в канале, а не в другой ветке."},
+                status=400)
+        denied = _require_channel_access(request, channel, "send_messages")
+        if denied:
+            return denied
+        source = None
+        message_id = request.data.get("message_id")
+        if message_id is not None:
+            # Только сообщение ИЗ ЭТОГО канала — иначе ветку можно было бы
+            # привязать к сообщению из чужого (в том числе невидимого) канала
+            # и вытащить его текст в название по умолчанию (тот же приём, что
+            # у reply_to в chat.consumers._create_message).
+            source = Message.objects.filter(id=message_id, channel=channel).first()
+            if source is None:
+                return Response(
+                    {"detail": "Сообщение не из этого канала."}, status=400)
+            existing = Channel.objects.filter(
+                kind=Channel.THREAD, source_message=source).first()
+            if existing is not None:
+                # Ветка из этого сообщения уже есть — отдаём её, а не заводим
+                # вторую: плашка под сообщением одна, и «создать ветку» из
+                # меню должно вести в неё же, а не плодить дубли на каждый
+                # клик (в том числе у второго человека, кликнувшего
+                # одновременно).
+                return Response(
+                    ChannelSerializer(existing, context={"request": request}).data)
+        name = (request.data.get("name") or "").strip()
+        if not name and source is not None:
+            name = _thread_name_from_message(source)
+        if not name:
+            return Response({"detail": "Нужно название ветки."}, status=400)
+        thread = Channel.objects.create(
+            server=channel.server,
+            name=name[:100],
+            kind=Channel.THREAD,
+            parent=channel,
+            source_message=source,
+            created_by=request.user,
+            # Рядом с родителем: сортировка по position ставит ветку сразу за
+            # ним, а не в хвост списка каналов (сам сайдбар всё равно
+            # раскладывает ветки под родителем, но и сырой порядок должен быть
+            # осмысленным — например, в списке каналов редактора сервера).
+            position=channel.position,
+            # Приватность ветка не решает сама (can_see_channel спрашивает
+            # родителя ещё до этого поля) — флаг копируется только ради
+            # адресной рассылки событий, см. _broadcast_channel_event.
+            is_private=channel.is_private,
+        )
+        data = ChannelSerializer(thread, context={"request": request}).data
+        _broadcast_channel_event(thread, {
+            "op": "channel_create",
+            "server_id": channel.server_id,
+            "channel": _channel_broadcast_payload(data),
+        })
+        return Response(data, status=201)
+
+
+class ThreadArchive(APIView):
+    """POST /api/channels/<id>/archive {"archived": bool} — закрыть ветку или
+    вернуть её из архива (кнопка в шапке ветки, см. web AppShellChat).
+
+    Не удаление: сообщения остаются на месте, ветка просто исчезает из
+    сайдбара (фронт фильтрует по Channel.archived). Ветка вернётся и сама,
+    если кто-то в неё напишет — см. chat.consumers._create_message.
+
+    Закрыть может автор ветки — своё обсуждение закрывает тот, кто его начал,
+    и права модератора для этого требовать незачем — либо тот, кто и так
+    распоряжается каналом (manage_channels) или сообщениями в нём
+    (delete_messages, в редакторе ролей — «Управление сообщениями»). Удаление
+    ветки насовсем — по-прежнему только manage_channels, обычным
+    DELETE /api/channels/<id> (см. ChannelDetail).
+    """
+
+    def post(self, request, channel_id):
+        thread = get_object_or_404(
+            Channel.objects.select_related("server", "parent"), id=channel_id)
+        if thread.kind != Channel.THREAD:
+            return Response(
+                {"detail": "Архивировать можно только ветку."}, status=400)
+        denied = _require_channel_access(request, thread)
+        if denied:
+            return denied
+        perms = roles.permissions_for(request.user, thread.server)
+        if thread.created_by_id != request.user.id and not (
+            perms.get("manage_channels") or perms.get("delete_messages")
+        ):
+            return Response(
+                {"detail": "Закрыть ветку может её автор или модератор."}, status=403)
+        archived = bool(request.data.get("archived", True))
+        if thread.archived != archived:
+            thread.archived = archived
+            thread.save(update_fields=["archived"])
+        data = ChannelSerializer(thread, context={"request": request}).data
+        # Обычный channel_update, а не create/delete: архивная ветка из списка
+        # каналов не пропадает (см. ServerSerializer.get_channels) — меняется
+        # только флаг, по которому сайдбар решает, показывать ли её.
+        _broadcast_channel_event(thread, {
+            "op": "channel_update",
+            "server_id": thread.server_id,
+            "channel": _channel_broadcast_payload(data),
+        })
+        return Response(data)
 
 
 def _hide_old_history(request, server, qs):

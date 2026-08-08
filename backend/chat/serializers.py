@@ -42,8 +42,11 @@ class ChannelSerializer(serializers.ModelSerializer):
         fields = ["id", "server", "name", "kind", "position",
                   "call_started_at", "topic", "status", "slowmode_seconds",
                   "is_spoiler", "age_restricted", "is_private", "allowed_role_ids",
-                  "allowed_user_ids", "invites_paused", "my_settings"]
-        read_only_fields = ["server"]
+                  "allowed_user_ids", "invites_paused", "my_settings",
+                  # Только у веток (kind=thread), у остальных каналов пусто —
+                  # см. Channel.parent/source_message/archived/created_by.
+                  "parent", "source_message", "archived", "created_by"]
+        read_only_fields = ["server", "parent", "source_message", "created_by"]
 
     def _state(self, obj):
         """Состояние звонка канала. Если вызывающий заранее сложил в контекст
@@ -190,6 +193,14 @@ class ServerSerializer(serializers.ModelSerializer):
     def get_channels(self, obj):
         from .permissions import visible_channels
 
+        # Архивные ветки отсюда НЕ вырезаются, хотя в сайдбаре их и не видно
+        # (фильтрует фронт, см. Channel.archived). Так плашка «Ветка: имя» под
+        # исходным сообщением продолжает работать и после закрытия ветки, а
+        # список «Архивные ветки» в меню канала обходится вообще без своей
+        # ручки — он фильтр по уже загруженному списку. Payload от этого
+        # растёт с числом когда-либо закрытых обсуждений, но в масштабе
+        # сервера для друзей это единицы строк, а не тот случай, ради которого
+        # заводят отдельную пагинированную ручку.
         channels = list(obj.channels.all())
         request = self.context.get("request")
         if request is None:

@@ -71,6 +71,12 @@ urlpatterns = [
          views.ChannelDetail.as_view(), name="channel-detail"),
     path("channels/<int:channel_id>/clone",
          views.ChannelClone.as_view(), name="channel-clone"),
+    # Ветки: создаются В канале, а архивируются САМИ (id ветки — тоже id
+    # канала, ветка это канал, см. chat.models.Channel.THREAD).
+    path("channels/<int:channel_id>/threads",
+         views.ChannelThreads.as_view(), name="channel-threads"),
+    path("channels/<int:channel_id>/archive",
+         views.ThreadArchive.as_view(), name="thread-archive"),
     path("channels/<int:channel_id>/settings",
          views.ChannelMemberSettingsView.as_view(), name="channel-member-settings"),
     path("channels/<int:channel_id>/invites",

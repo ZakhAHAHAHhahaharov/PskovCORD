@@ -27,6 +27,7 @@ import ChannelContextMenu from './ChannelContextMenu'
 import ChannelSettingsModal from './ChannelSettingsModal'
 import ChannelInviteModal from './ChannelInviteModal'
 import CreateChannelModal from './CreateChannelModal'
+import CreateThreadModal from './CreateThreadModal'
 import ConversationContextMenu from './ConversationContextMenu'
 import FriendContextMenu from './FriendContextMenu'
 import FriendNicknameModal from './FriendNicknameModal'
@@ -252,8 +253,13 @@ export default function AppShellOverlays({
         // сервера (в личке/группе server.currentServer всегда null, см.
         // useServerData). Роли/никнейм-на-сервере/кик/бан имеют смысл только
         // тут — то самое «только в текстовых каналах на серверах» из задачи.
+        // Ветка — тот же текстовый канал сервера, только вложенный, и
+        // «сервером» быть не перестаёт (см. AppShellChat isTextLike).
         const currentChannel = server.currentChannel
-        const inServerTextChannel = !!(server.currentServer && currentChannel?.kind === 'text')
+        const inServerTextChannel = !!(
+          server.currentServer
+          && (currentChannel?.kind === 'text' || currentChannel?.kind === 'thread')
+        )
         const currentServer = server.currentServer
         const targetMember = inServerTextChannel
           ? server.members.find((m) => m.id === friend.id) ?? null
@@ -516,6 +522,9 @@ export default function AppShellOverlays({
             }
             onOpenSettings={() => server.setShowChannelSettingsId(menuChannel.id)}
             onCloneChannel={() => void server.handleCloneChannel(menuChannel)}
+            onCreateThread={() =>
+              server.setCreateThreadTarget({ channelId: menuChannel.id })
+            }
             onRequestDelete={() => void server.handleDeleteChannel(menuChannel)}
           />
         )
@@ -564,6 +573,20 @@ export default function AppShellOverlays({
           onClose={() => server.setCreateChannelKind(null)}
         />
       )}
+      {server.createThreadTarget && (() => {
+        const parent = server.currentServer?.channels.find(
+          (c) => c.id === server.createThreadTarget!.channelId,
+        )
+        if (!parent) return null
+        return (
+          <CreateThreadModal
+            channelName={parent.name}
+            suggestedName={server.createThreadTarget.suggestedName}
+            onCreate={server.handleCreateThreadSubmit}
+            onClose={() => server.setCreateThreadTarget(null)}
+          />
+        )
+      })()}
       {server.showChannelInviteId != null && (() => {
         const inviteChannel = server.currentServer?.channels.find((c) => c.id === server.showChannelInviteId)
         if (!server.currentServer || !inviteChannel) return null

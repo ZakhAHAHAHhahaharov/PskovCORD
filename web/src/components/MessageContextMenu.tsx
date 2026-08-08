@@ -1,6 +1,6 @@
 import { RefObject, useLayoutEffect, useRef, useState } from 'react'
 import {
-  ChevronRight, Copy, Forward, Pin, PinOff, Reply, SmilePlus, Users,
+  ChevronRight, Copy, Forward, MessagesSquare, Pin, PinOff, Reply, SmilePlus, Users,
 } from 'lucide-react'
 import { CustomEmoji } from '../api'
 import { customEmojiKey, STICKER_TOKEN_RE } from '../emoji'
@@ -52,6 +52,8 @@ export default function MessageContextMenu({
   onTogglePin,
   onRequestShowReactions,
   onRequestForward,
+  onCreateThread,
+  hasThread,
 }: {
   message: ListMessage
   x: number
@@ -66,6 +68,13 @@ export default function MessageContextMenu({
   onTogglePin?: () => void
   onRequestShowReactions: () => void
   onRequestForward: () => void
+  /** Завести ветку из этого сообщения (либо открыть уже существующую — см.
+   * hasThread). Не задан — веток здесь нет вовсе: личка, группа или сама
+   * ветка (ветка в ветке не заводится, см. backend ChannelThreads). */
+  onCreateThread?: () => void
+  /** Ветка из этого сообщения уже есть — пункт ведёт в неё, а не создаёт
+   * вторую (второй бэкенд и не создаст, но подпись должна об этом говорить). */
+  hasThread?: boolean
 }) {
   const ref = useRef<HTMLDivElement>(null)
   const [flyoutOpen, setFlyoutOpen] = useState(false)
@@ -183,6 +192,19 @@ export default function MessageContextMenu({
           <button type="button" className="profile-popup-item" onClick={onRequestForward}>
             <Forward size={15} /> Переслать
           </button>
+          {onCreateThread && (
+            <button
+              type="button"
+              className="profile-popup-item"
+              onClick={() => {
+                onCreateThread()
+                onClose()
+              }}
+            >
+              <MessagesSquare size={15} />
+              {hasThread ? 'Перейти в ветку' : 'Создать ветку'}
+            </button>
+          )}
           {canCopyText && (
             <button
               type="button"

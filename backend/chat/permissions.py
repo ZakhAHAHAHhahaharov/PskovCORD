@@ -79,6 +79,13 @@ def _shares_server_allowing_dms(sender, recipient) -> bool:
 def can_see_channel(user, channel, perms=None) -> bool:
     """Виден ли пользователю ЭТОТ канал.
 
+    Ветка (Channel.parent, kind=thread) своих прав не имеет вовсе — она видна
+    ровно тем, кому виден её родительский канал. Отдельного набора допусков у
+    неё нет и заводить его незачем: ветка — это продолжение разговора в том же
+    канале, и разойтись с ним в доступе она не может по смыслу. Разбор в один
+    шаг, без рекурсии: ветка в ветке запрещена при создании (см.
+    chat.views.ChannelThreads), поэтому у родителя parent уже пуст.
+
     Публичный канал — по обычному view_channels. Приватный (Channel.is_private)
     им НЕ открывается: нужен либо manage_channels (тот, кто заводит каналы,
     обязан видеть все — иначе он мог бы создать канал и тут же потерять к нему
@@ -95,6 +102,8 @@ def can_see_channel(user, channel, perms=None) -> bool:
 
     if perms is None:
         perms = roles_module.permissions_for(user, channel.server)
+    if channel.parent_id:
+        return can_see_channel(user, channel.parent, perms)
     if not perms.get("view_channels"):
         return False
     if not channel.is_private:
@@ -113,10 +122,26 @@ def can_see_channel(user, channel, perms=None) -> bool:
 
 def visible_channels(user, server, channels=None) -> list:
     """Каналы сервера, которые пользователю можно показывать. Права считаются
-    ОДИН раз на весь список (см. can_see_channel)."""
+    ОДИН раз на весь список (см. can_see_channel).
+
+    Ветки решаются не поштучно через can_see_channel, а по уже посчитанному
+    множеству видимых родителей: иначе на каждую ветку в списке уходил бы свой
+    запрос за её parent'ом (та же причина, по которой perms считаются один раз
+    на весь список). Ветка, чей родитель в переданный список не попал, не
+    показывается — по построению этого не бывает (список всегда охватывает
+    сервер целиком), но умолчание тут должно быть «не показывать».
+    """
     from . import roles as roles_module
 
     perms = roles_module.permissions_for(user, server)
     if channels is None:
         channels = server.channels.all()
-    return [c for c in channels if can_see_channel(user, c, perms)]
+    channels = list(channels)
+    visible_parent_ids = {
+        c.id for c in channels
+        if c.parent_id is None and can_see_channel(user, c, perms)
+    }
+    return [
+        c for c in channels
+        if (c.id if c.parent_id is None else c.parent_id) in visible_parent_ids
+    ]

@@ -845,6 +845,48 @@ input {
   color: var(--text-muted);
 }
 
+/* Ветка в сайдбаре — строка с отступом под своим каналом (см.
+   ChannelSidebar.ChannelThreadRows). Уголок слева рисует связь с родителем,
+   как в Discord; отступ тот же, что у строк участников голосового канала
+   (.voice-user), чтобы вложенность в сайдбаре читалась одинаково. */
+.channel-thread-item {
+  padding-left: 20px;
+  font-size: calc(14px * var(--font-scale, 1));
+}
+
+.channel-thread-branch {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  flex-shrink: 0;
+  opacity: 0.5;
+}
+
+/* Закрытая ветка (Channel.archived) видна в списке только пока она открыта
+   или пока развёрнут архив — приглушена, чтобы не путать её с живой. */
+.channel-thread-archived .channel-name {
+  opacity: 0.6;
+  font-style: italic;
+}
+
+.channel-thread-archive-toggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  padding: 3px 8px 3px 34px;
+  border-radius: 4px;
+  color: var(--text-faint);
+  font-size: calc(12px * var(--font-scale, 1));
+  text-align: left;
+}
+
+.channel-thread-archive-toggle:hover {
+  background: var(--channel-hover);
+  color: var(--text-muted);
+}
+
 .voice-channel-block {
   display: flex;
   flex-direction: column;
@@ -2576,6 +2618,104 @@ textarea.inline-editable-input {
   padding: 0;
 }
 
+/* ---- голосовой канал + его текстовый чат (см. AppShellChat) ----
+   Сцена звонка занимает всё оставшееся место, чат — колонка справа
+   фиксированной ширины. Пока чат закрыт, в разметке его нет вовсе, и сцена
+   ведёт себя ровно как до появления этой панели. */
+.voice-with-chat {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  height: 100%;
+}
+
+.voice-with-chat .voice-stage {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Кнопка «Чат канала» — поверх сцены, в правом верхнем углу. Всегда видима
+   (в отличие от плавающих элементов самой сцены, которые прячутся вместе с
+   панелью управления): это вход в другую часть канала, а не орган управления
+   звонком, и искать его наведением мыши было бы странно. */
+.voice-chat-toggle {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  z-index: 22;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 17px;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(12px);
+  color: #fff;
+  transition: background 0.15s ease;
+}
+
+.voice-chat-toggle:hover,
+.voice-chat-toggle.active {
+  background: rgba(0, 0, 0, 0.85);
+}
+
+/* Пока чат открыт, кнопка переезжает к его левому краю — иначе она висела бы
+   поверх ленты сообщений. */
+.voice-with-chat.chat-open .voice-chat-toggle {
+  right: calc(var(--voice-chat-width) + 14px);
+}
+
+.voice-chat-panel {
+  --voice-chat-width: 340px;
+  width: var(--voice-chat-width);
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  background: var(--chat-bg);
+  border-left: 1px solid var(--channel-hover);
+}
+
+.voice-with-chat.chat-open {
+  --voice-chat-width: 340px;
+}
+
+.voice-chat-panel-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 40px;
+  padding: 0 12px;
+  flex-shrink: 0;
+  color: var(--text-muted);
+  font-size: calc(13px * var(--font-scale, 1));
+  font-weight: 600;
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.2);
+}
+
+/* Узкая колонка — ленте сообщений нужны отступы поменьше стандартных,
+   иначе на 340px текст остаётся в две-три буквы шириной. */
+.voice-chat-panel .message-list {
+  padding-left: 8px;
+  padding-right: 8px;
+}
+
+/* На мобилке колонки рядом не помещаются — чат занимает экран целиком,
+   поверх сцены (сама сцена в это время не нужна: разговор идёт и так). */
+@media (max-width: 768px) {
+  .voice-chat-panel {
+    position: absolute;
+    inset: 0;
+    width: auto;
+    border-left: none;
+  }
+
+  .voice-with-chat.chat-open .voice-chat-toggle {
+    right: 14px;
+  }
+}
+
 .voice-stage {
   position: relative;
   display: flex;
@@ -3377,6 +3517,46 @@ textarea.inline-editable-input {
   font-size: calc(14px * var(--font-scale, 1));
 }
 
+/* Шапка ветки: «# родительский-канал ›» слева от её названия — и подпись
+   «мы внутри ветки», и выход наверх. Приглушена относительно самого
+   названия: это контекст, а не заголовок (см. AppShellChat). */
+.chat-header-thread-parent {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 1;
+  min-width: 0;
+  padding: 2px 6px;
+  border-radius: 4px;
+  color: var(--text-muted);
+  font-size: calc(14px * var(--font-scale, 1));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chat-header-thread-parent:hover {
+  background: var(--channel-hover);
+  color: var(--text-normal);
+}
+
+.chat-header-thread-icon {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.chat-header-thread-archived {
+  flex-shrink: 0;
+  padding: 1px 6px;
+  border-radius: 8px;
+  background: var(--channel-hover);
+  color: var(--text-faint);
+  font-size: calc(11px * var(--font-scale, 1));
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
 /* Тумблер видимости списка участников — справа в шапке текстового канала
    (margin-left:auto прибивает его к правому краю). Выключен — серая
    иконка, включён — обычный цвет текста; фона на самой кнопке нет, чтобы
@@ -3752,6 +3932,45 @@ textarea.inline-editable-input {
 .mention-pill:hover {
   background: rgba(88, 101, 242, 0.3);
   text-decoration: underline;
+}
+
+/* Плашка «Ветка: имя» под сообщением, из которого её завели (см.
+   MessageList.threadOf). Отдельная строка-кнопка, а не пилюля в ряд с
+   реакциями: это переход в другой чат, и путать его с реакцией нельзя. */
+.message-thread-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  margin-top: 4px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  background: var(--channel-hover);
+  color: var(--blurple-text, var(--text-normal));
+  font-size: calc(13px * var(--font-scale, 1));
+  text-align: left;
+}
+
+.message-thread-chip:hover {
+  background: var(--channel-active);
+}
+
+.message-thread-chip-name {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-weight: 600;
+}
+
+.message-thread-chip.archived {
+  color: var(--text-muted);
+}
+
+.message-thread-chip-tag {
+  flex-shrink: 0;
+  color: var(--text-faint);
+  font-size: calc(11px * var(--font-scale, 1));
 }
 
 .message-reply-quote {
