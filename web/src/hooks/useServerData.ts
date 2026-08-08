@@ -529,7 +529,7 @@ export function useServerData(userRef: RefObject<Me | null>) {
   /** Открыть ветку в панели. Основной чат при этом переключается на её
    * РОДИТЕЛЯ: панель показывает ответвление, а слева от неё должен быть тот
    * разговор, от которого оно ответвилось. */
-  const handleOpenThread = useCallback((thread: Channel) => {
+  const handleOpenThread = (thread: Channel) => {
     if (thread.parent != null) setChannelId(thread.parent)
     setOpenThreadId(thread.id)
     setUnreadChannelIds((prev) => {
@@ -538,7 +538,7 @@ export function useServerData(userRef: RefObject<Me | null>) {
       next.delete(thread.id)
       return next
     })
-  }, [])
+  }
 
   /** Ошибку наружу не глушим — её показывает модалка, не закрываясь, чтобы
    * набранное название не пропало (см. CreateThreadModal и тот же приём у
