@@ -815,9 +815,9 @@ export default function AppShellOverlays({
             onRename={() => server.setRenameThreadId(thread.id)}
             onMembers={() => server.setThreadMembersId(thread.id)}
             onCopyLink={() => void server.handleCopyThreadLink(thread)}
-            onMute={() =>
-              void server.handleSetChannelMute(
-                thread, thread.my_settings.muted ? null : 'forever')
+            onSetMute={(minutes) => void server.handleSetChannelMute(thread, minutes)}
+            onSetNotificationLevel={(level) =>
+              void server.handleSetChannelNotificationLevel(thread, level)
             }
             onDelete={() => void server.handleDeleteChannel(thread)}
             // Три пункта ниже — только у меню из шапки уже открытой панели.

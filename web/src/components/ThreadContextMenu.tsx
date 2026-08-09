@@ -1,9 +1,10 @@
-import { useLayoutEffect, useRef } from 'react'
+import { useLayoutEffect, useRef, useState } from 'react'
 import {
-  Archive, ArchiveRestore, Bell, CheckCheck, Link as LinkIcon, Lock, LogIn, LogOut,
-  Maximize2, Pencil, Pin, Search, Trash2, Unlock, Users, VolumeX,
+  Archive, ArchiveRestore, Bell, CheckCheck, ChevronRight, Link as LinkIcon, Lock,
+  LogIn, LogOut, Maximize2, Pencil, Pin, Search, Trash2, Unlock, Users, VolumeX,
 } from 'lucide-react'
-import { Channel } from '../api'
+import { Channel, ChannelNotifyLevel } from '../api'
+import { MUTE_PRESETS, NOTIFY_OPTIONS, OptionFlyout } from './ChannelContextMenu'
 
 /** Что можно делать с этой веткой — считается один раз в вызывающем и
  * передаётся сюда готовым: меню не должно само разбираться в ролях. */
@@ -43,7 +44,8 @@ export default function ThreadContextMenu({
   onRename,
   onMembers,
   onCopyLink,
-  onMute,
+  onSetMute,
+  onSetNotificationLevel,
   onDelete,
   onExpand,
   onSearch,
@@ -62,7 +64,10 @@ export default function ThreadContextMenu({
   onRename: () => void
   onMembers: () => void
   onCopyLink: () => void
-  onMute: () => void
+  /** minutes — заглушить на срок, 'forever' — «Пока не включу», null — снять
+   * (те же три варианта, что и у канала, см. ChannelContextMenu). */
+  onSetMute: (minutes: number | 'forever' | null) => void
+  onSetNotificationLevel: (level: ChannelNotifyLevel) => void
   onDelete: () => void
   /** Три пункта ниже есть только у меню-многоточия в шапке самой панели: они
    * про то, КАК смотреть уже открытую ветку. В меню по правому клику из
@@ -73,6 +78,10 @@ export default function ThreadContextMenu({
   onPins?: () => void
 }) {
   const ref = useRef<HTMLDivElement>(null)
+  const [muteFlyoutOpen, setMuteFlyoutOpen] = useState(false)
+  const [notifyFlyoutOpen, setNotifyFlyoutOpen] = useState(false)
+  const muteBtnRef = useRef<HTMLButtonElement>(null)
+  const notifyBtnRef = useRef<HTMLButtonElement>(null)
 
   useLayoutEffect(() => {
     const el = ref.current
@@ -91,10 +100,17 @@ export default function ThreadContextMenu({
     el.style.top = `${Math.max(margin, top)}px`
   }, [x, y])
 
+  // Клик мимо и Esc закрывают ВСЁ меню разом, включая открытый флайаут — тот
+  // не самостоятельный попап, а часть этого же меню. Сам флайаут — отдельный
+  // DOM-узел (сосед, а не потомок ref'а), и клик внутри НЕГО меню закрывать не
+  // должен: иначе mousedown срывал бы меню вместе с флайаутом ещё до того, как
+  // за ним придёт click с самим выбором (то же самое и в ChannelContextMenu).
   useLayoutEffect(() => {
     const onMouseDown = (e: MouseEvent) => {
       if (e.button !== 0) return
       if (ref.current?.contains(e.target as Node)) return
+      const flyoutEl = document.querySelector('.channel-ctx-flyout')
+      if (flyoutEl?.contains(e.target as Node)) return
       onClose()
     }
     const onKeyDown = (e: KeyboardEvent) => {
@@ -116,7 +132,8 @@ export default function ThreadContextMenu({
   }
 
   return (
-    <div ref={ref} className="profile-popup channel-context-menu" style={{ left: x, top: y }}>
+    <>
+      <div ref={ref} className="profile-popup channel-context-menu" style={{ left: x, top: y }}>
       <div className="profile-popup-label">{thread.name}</div>
       <div className="profile-popup-menu">
         {/* В шапке уже открытой ветки «открыть» бессмысленно — там вместо
@@ -189,9 +206,42 @@ export default function ThreadContextMenu({
 
         <div className="profile-popup-divider" />
 
-        <button type="button" className="profile-popup-item" onClick={act(onMute)}>
-          {thread.my_settings.muted ? <Bell size={15} /> : <VolumeX size={15} />}
-          {thread.my_settings.muted ? 'Включить уведомления' : 'Заглушить ветку'}
+        {/* Заглушено — предлагаем снять одним кликом, без выбора срока: срок у
+            уже действующего заглушения выбирать не из чего (тот же приём, что
+            и в ChannelContextMenu). */}
+        {thread.my_settings.muted ? (
+          <button
+            type="button"
+            className="profile-popup-item"
+            onClick={act(() => onSetMute(null))}
+          >
+            <Bell size={15} /> Включить уведомления
+          </button>
+        ) : (
+          <button
+            ref={muteBtnRef}
+            type="button"
+            className={`profile-popup-item ${muteFlyoutOpen ? 'active' : ''}`}
+            onClick={() => {
+              setMuteFlyoutOpen((v) => !v)
+              setNotifyFlyoutOpen(false)
+            }}
+          >
+            <VolumeX size={15} /> Заглушить ветку
+            <ChevronRight size={14} className="message-ctx-chevron" />
+          </button>
+        )}
+        <button
+          ref={notifyBtnRef}
+          type="button"
+          className={`profile-popup-item ${notifyFlyoutOpen ? 'active' : ''}`}
+          onClick={() => {
+            setNotifyFlyoutOpen((v) => !v)
+            setMuteFlyoutOpen(false)
+          }}
+        >
+          <Bell size={15} /> Параметры уведомлений
+          <ChevronRight size={14} className="message-ctx-chevron" />
         </button>
 
         {abilities.moderate && (
@@ -207,6 +257,34 @@ export default function ThreadContextMenu({
           </>
         )}
       </div>
-    </div>
+      </div>
+
+      {muteFlyoutOpen && (
+        <OptionFlyout
+          triggerRef={muteBtnRef}
+          options={MUTE_PRESETS.map((p) => ({ key: String(p.minutes), label: p.label }))}
+          extra={{ key: 'forever', label: 'Пока не включу' }}
+          onPick={(key) => {
+            onSetMute(key === 'forever' ? 'forever' : Number(key))
+            onClose()
+          }}
+        />
+      )}
+
+      {notifyFlyoutOpen && (
+        <OptionFlyout
+          triggerRef={notifyBtnRef}
+          options={NOTIFY_OPTIONS.map((o) => ({
+            key: o.value,
+            label: o.label,
+            selected: o.value === thread.my_settings.notification_level,
+          }))}
+          onPick={(key) => {
+            onSetNotificationLevel(key as ChannelNotifyLevel)
+            onClose()
+          }}
+        />
+      )}
+    </>
   )
 }
