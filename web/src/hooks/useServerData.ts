@@ -207,11 +207,35 @@ export function useServerData(userRef: RefObject<Me | null>) {
     }
   }, [])
 
-  // Начальная загрузка серверов.
+  // Начальная загрузка серверов. Ссылка на ветку (?thread=<id>, см.
+  // handleCopyThreadLink) разбирается прямо здесь: открыть ветку можно только
+  // ПОСЛЕ того, как список серверов приехал — до этого неизвестно ни в каком
+  // она сервере, ни в каком канале.
   useEffect(() => {
     ;(async () => {
       const list = await api.servers()
       setServers(list)
+      const params = new URLSearchParams(location.search)
+      const threadParam = Number(params.get('thread'))
+      if (threadParam) {
+        // Параметр убираем сразу: перезагрузка страницы не должна снова
+        // насильно открывать ветку, которую человек уже закрыл (тот же приём,
+        // что и у ?voiceInvite=, см. useInviteLinks).
+        const url = new URL(location.href)
+        url.searchParams.delete('thread')
+        window.history.replaceState({}, '', url.toString())
+        const owner = list.find((s) => s.channels.some((c) => c.id === threadParam))
+        const thread = owner?.channels.find((c) => c.id === threadParam)
+        if (owner && thread && thread.parent != null) {
+          setServerId(owner.id)
+          setChannelId(thread.parent)
+          setOpenThreadId(thread.id)
+          return
+        }
+        // Ветка не нашлась — её удалили либо к ней нет доступа (приватная,
+        // куда не звали). Открываем как обычно и молчим: ссылка могла быть
+        // и не нам предназначена.
+      }
       if (list.length) selectServer(list[0])
     })()
   }, [selectServer])
@@ -544,12 +568,13 @@ export function useServerData(userRef: RefObject<Me | null>) {
    * набранное название не пропало (см. CreateThreadModal и тот же приём у
    * handleCreateChannelSubmit). Готовую ветку сразу открываем: её и создавали
    * ради того, чтобы в ней писать. */
-  const handleCreateThreadSubmit = async (name: string) => {
+  const handleCreateThreadSubmit = async (name: string, inviteOnly: boolean) => {
     const target = createThreadTarget
     if (!target) return
     const thread = await api.createThread(target.channelId, {
       name,
       messageId: target.messageId,
+      inviteOnly,
     })
     setOpenThreadId(thread.id)
     setServers((prev) =>
@@ -586,6 +611,14 @@ export function useServerData(userRef: RefObject<Me | null>) {
   const [threadListChannelId, setThreadListChannelId] = useState<number | null>(null)
   /** Открыт ли поиск внутри панели ветки. */
   const [threadSearchOpen, setThreadSearchOpen] = useState(false)
+  /** Ветка, чей состав участников сейчас смотрим («Участники ветки»). */
+  const [threadMembersId, setThreadMembersId] = useState<number | null>(null)
+
+  /** Переименовать ветку. Ошибку наружу не глушим — её показывает модалка,
+   * не закрываясь, чтобы набранное имя не пропало. */
+  const handleRenameThread = async (thread: Channel, name: string) => {
+    applyChannelUpdate(await api.renameChannel(thread.id, name))
+  }
 
   /** Присоединиться к ветке или выйти из неё. Ответ ручки — сама ветка со
    * свежим joined, его и применяем: от него зависит и сайдбар, и подпись
@@ -881,6 +914,8 @@ export function useServerData(userRef: RefObject<Me | null>) {
     renameThreadId, setRenameThreadId,
     threadListChannelId, setThreadListChannelId,
     threadSearchOpen, setThreadSearchOpen,
+    threadMembersId, setThreadMembersId,
     handleToggleThreadJoin, handleSetThreadLocked, handleCopyThreadLink,
+    handleRenameThread,
   }
 }

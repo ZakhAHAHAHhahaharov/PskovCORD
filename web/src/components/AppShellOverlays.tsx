@@ -14,6 +14,9 @@ import { useNickname } from '../nicknames'
 import { PendingMessage } from '../outbox'
 import ThreadPanel from './ThreadPanel'
 import ThreadContextMenu from './ThreadContextMenu'
+import ThreadListModal from './ThreadListModal'
+import ThreadMembersModal from './ThreadMembersModal'
+import RenameThreadModal from './RenameThreadModal'
 import NewConversationModal from './NewConversationModal'
 import IncomingCallBanner from './IncomingCallBanner'
 import DiscoverModal from './DiscoverModal'
@@ -601,6 +604,48 @@ export default function AppShellOverlays({
           />
         )
       })()}
+      {server.renameThreadId != null && (() => {
+        const thread = server.channels.find((c) => c.id === server.renameThreadId)
+        if (!thread) return null
+        return (
+          <RenameThreadModal
+            currentName={thread.name}
+            onRename={(name) => server.handleRenameThread(thread, name)}
+            onClose={() => server.setRenameThreadId(null)}
+          />
+        )
+      })()}
+      {server.threadListChannelId != null && (() => {
+        const channel = server.channels.find((c) => c.id === server.threadListChannelId)
+        if (!channel) return null
+        return (
+          <ThreadListModal
+            channel={channel}
+            onOpenThread={server.handleOpenThread}
+            onThreadContextMenu={(thread, e) =>
+              server.setThreadContextMenu({ id: thread.id, x: e.clientX, y: e.clientY })
+            }
+            onClose={() => server.setThreadListChannelId(null)}
+          />
+        )
+      })()}
+      {server.threadMembersId != null && (() => {
+        const thread = server.channels.find((c) => c.id === server.threadMembersId)
+        if (!thread || !server.currentServer) return null
+        const perms = server.currentServer.my_permissions
+        const canAdd =
+          thread.created_by === user.id
+          || !!perms?.manage_channels
+          || canDeleteMessages
+        return (
+          <ThreadMembersModal
+            thread={thread}
+            roster={server.members}
+            canAdd={canAdd}
+            onClose={() => server.setThreadMembersId(null)}
+          />
+        )
+      })()}
       {server.showChannelInviteId != null && (() => {
         const inviteChannel = server.currentServer?.channels.find((c) => c.id === server.showChannelInviteId)
         if (!server.currentServer || !inviteChannel) return null
@@ -761,6 +806,7 @@ export default function AppShellOverlays({
               void server.handleSetThreadLocked(thread, !thread.locked)
             }
             onRename={() => server.setRenameThreadId(thread.id)}
+            onMembers={() => server.setThreadMembersId(thread.id)}
             onCopyLink={() => void server.handleCopyThreadLink(thread)}
             onMute={() =>
               void server.handleSetChannelMute(

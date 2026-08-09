@@ -4247,6 +4247,137 @@ textarea.inline-editable-input {
   color: var(--danger, #ed4245);
 }
 
+/* ---- список всех веток канала (ThreadListModal) ----
+   Шире обычной модалки: у строки две линии (имя со счётчиком и превью
+   последнего сообщения), и на узкой они обе схлопывались бы в многоточие. */
+.thread-list-modal,
+.thread-members-modal {
+  width: 520px;
+  max-width: 100%;
+}
+
+.thread-list,
+.thread-members-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 50vh;
+  overflow-y: auto;
+  margin-bottom: 12px;
+}
+
+.thread-list-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 24px;
+  color: var(--text-muted);
+  font-size: calc(13px * var(--font-scale, 1));
+  text-align: center;
+}
+
+.thread-list-item {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: 6px;
+  text-align: left;
+}
+
+.thread-list-item:hover {
+  background: var(--channel-hover);
+}
+
+.thread-list-item.archived .thread-list-item-name {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.thread-list-item-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: var(--text-normal);
+}
+
+.thread-list-item-name {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-weight: 600;
+}
+
+.thread-list-item-badge {
+  flex-shrink: 0;
+  color: var(--text-faint);
+}
+
+.thread-list-item-count {
+  margin-left: auto;
+  flex-shrink: 0;
+  color: var(--text-faint);
+  font-size: calc(12px * var(--font-scale, 1));
+}
+
+.thread-list-item-preview {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: var(--text-muted);
+  font-size: calc(12px * var(--font-scale, 1));
+}
+
+.thread-list-item-author {
+  flex-shrink: 0;
+  font-weight: 600;
+}
+
+.thread-list-item-text {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.thread-list-item-joined {
+  color: var(--green);
+  font-size: calc(11px * var(--font-scale, 1));
+}
+
+/* ---- состав приватной ветки (ThreadMembersModal) ---- */
+.thread-members-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 5px 8px;
+  border-radius: 6px;
+  color: var(--text-normal);
+  text-align: left;
+}
+
+.thread-members-row.pick:hover {
+  background: var(--channel-hover);
+}
+
+.thread-members-row.picked {
+  background: var(--channel-active);
+}
+
+.thread-members-name {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
 .message-reply-quote {
   display: flex;
   align-items: center;

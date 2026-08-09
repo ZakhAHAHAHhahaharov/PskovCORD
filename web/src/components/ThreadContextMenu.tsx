@@ -1,7 +1,7 @@
 import { useLayoutEffect, useRef } from 'react'
 import {
   Archive, ArchiveRestore, Bell, CheckCheck, Link as LinkIcon, Lock, LogIn, LogOut,
-  Maximize2, Pencil, Search, Trash2, Unlock, VolumeX,
+  Maximize2, Pencil, Search, Trash2, Unlock, Users, VolumeX,
 } from 'lucide-react'
 import { Channel } from '../api'
 
@@ -41,6 +41,7 @@ export default function ThreadContextMenu({
   onToggleArchived,
   onToggleLocked,
   onRename,
+  onMembers,
   onCopyLink,
   onMute,
   onDelete,
@@ -58,6 +59,7 @@ export default function ThreadContextMenu({
   onToggleArchived: () => void
   onToggleLocked: () => void
   onRename: () => void
+  onMembers: () => void
   onCopyLink: () => void
   onMute: () => void
   onDelete: () => void
@@ -149,6 +151,13 @@ export default function ThreadContextMenu({
               <Pencil size={15} /> Редактировать ветку
             </button>
           </>
+        )}
+        {/* Состав есть у любой ветки, но управлять им осмысленно только у
+            приватной: в обычную человек заходит сам (см. ThreadMembersModal). */}
+        {thread.invite_only && (
+          <button type="button" className="profile-popup-item" onClick={act(onMembers)}>
+            <Users size={15} /> Участники ветки
+          </button>
         )}
         {abilities.moderate && (
           <button
