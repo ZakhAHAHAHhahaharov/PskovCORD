@@ -1,7 +1,7 @@
 import { useLayoutEffect, useRef } from 'react'
 import {
   Archive, ArchiveRestore, Bell, CheckCheck, Link as LinkIcon, Lock, LogIn, LogOut,
-  Maximize2, Pencil, Search, Trash2, Unlock, Users, VolumeX,
+  Maximize2, Pencil, Pin, Search, Trash2, Unlock, Users, VolumeX,
 } from 'lucide-react'
 import { Channel } from '../api'
 
@@ -47,6 +47,7 @@ export default function ThreadContextMenu({
   onDelete,
   onExpand,
   onSearch,
+  onPins,
 }: {
   thread: Channel
   x: number
@@ -170,13 +171,16 @@ export default function ThreadContextMenu({
           </button>
         )}
 
+        {(onSearch || onPins) && <div className="profile-popup-divider" />}
         {onSearch && (
-          <>
-            <div className="profile-popup-divider" />
-            <button type="button" className="profile-popup-item" onClick={act(onSearch)}>
-              <Search size={15} /> Поиск
-            </button>
-          </>
+          <button type="button" className="profile-popup-item" onClick={act(onSearch)}>
+            <Search size={15} /> Поиск
+          </button>
+        )}
+        {onPins && (
+          <button type="button" className="profile-popup-item" onClick={act(onPins)}>
+            <Pin size={15} /> Закреплённые
+          </button>
         )}
 
         <button type="button" className="profile-popup-item" onClick={act(onCopyLink)}>

@@ -4247,6 +4247,33 @@ textarea.inline-editable-input {
   color: var(--danger, #ed4245);
 }
 
+/* Закреплённые внутри панели ветки — не попап, а обычный блок на месте ленты
+   (см. PinnedMessages variant='inline'): в 420px колонке всплывашка накрыла бы
+   ровно ту переписку, к которой закрепления и относятся. Отсюда сброс всего
+   попапного — позиционирования, тени, ограничения высоты. */
+.pinned-panel-inline {
+  position: static;
+  width: auto;
+  max-height: none;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+  background: none;
+}
+
+.pinned-panel-inline .pinned-panel-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  position: sticky;
+  top: 0;
+  background: var(--chat-bg);
+}
+
 /* ---- список всех веток канала (ThreadListModal) ----
    Шире обычной модалки: у строки две линии (имя со счётчиком и превью
    последнего сообщения), и на узкой они обе схлопывались бы в многоточие. */

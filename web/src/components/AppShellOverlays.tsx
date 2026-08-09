@@ -764,9 +764,16 @@ export default function AppShellOverlays({
                 fromPanel: true,
               })
             }
-            searchOpen={server.threadSearchOpen}
-            onCloseSearch={() => server.setThreadSearchOpen(false)}
-            onJumpToMessage={(messageId) => onJumpToMessage(thread.id, messageId)}
+            searchOpen={server.threadPane === 'search'}
+            onCloseSearch={() => server.setThreadPane('messages')}
+            pinsOpen={server.threadPane === 'pins'}
+            onClosePins={() => server.setThreadPane('messages')}
+            onJumpToMessage={(messageId) => {
+              onJumpToMessage(thread.id, messageId)
+              // Переход из поиска возвращает к переписке — иначе прыжок
+              // произошёл бы в ленте, которой на экране нет.
+              server.setThreadPane('messages')
+            }}
             onOpenProfile={openProfilePopup}
             onUserContextMenu={onUserContextMenu}
           />
@@ -815,9 +822,8 @@ export default function AppShellOverlays({
             onDelete={() => void server.handleDeleteChannel(thread)}
             // Три пункта ниже — только у меню из шапки уже открытой панели.
             onExpand={menu.fromPanel ? () => server.handleSelectChannel(thread) : undefined}
-            onSearch={
-              menu.fromPanel ? () => server.setThreadSearchOpen(true) : undefined
-            }
+            onSearch={menu.fromPanel ? () => server.setThreadPane('search') : undefined}
+            onPins={menu.fromPanel ? () => server.setThreadPane('pins') : undefined}
           />
         )
       })()}

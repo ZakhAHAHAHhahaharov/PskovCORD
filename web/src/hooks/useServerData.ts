@@ -556,6 +556,9 @@ export function useServerData(userRef: RefObject<Me | null>) {
   const handleOpenThread = (thread: Channel) => {
     if (thread.parent != null) setChannelId(thread.parent)
     setOpenThreadId(thread.id)
+    // Открыли другую ветку — показываем её переписку, а не поиск или
+    // закреплённые, оставшиеся от предыдущей: они были про неё, не про эту.
+    setThreadPane('messages')
     setUnreadChannelIds((prev) => {
       if (!prev.has(thread.id)) return prev
       const next = new Set(prev)
@@ -609,8 +612,11 @@ export function useServerData(userRef: RefObject<Me | null>) {
   const [renameThreadId, setRenameThreadId] = useState<number | null>(null)
   /** Открыт ли список всех веток канала («Показать все ветки»). */
   const [threadListChannelId, setThreadListChannelId] = useState<number | null>(null)
-  /** Открыт ли поиск внутри панели ветки. */
-  const [threadSearchOpen, setThreadSearchOpen] = useState(false)
+  /** Что сейчас показано в панели ветки вместо ленты — поиск, закреплённые
+   * или ничего. Одним состоянием, а не двумя флагами: обе панели занимают
+   * одно и то же место, и «открыты обе» — состояние, которого не бывает. */
+  const [threadPane, setThreadPane] = useState<'messages' | 'search' | 'pins'>(
+    'messages')
   /** Ветка, чей состав участников сейчас смотрим («Участники ветки»). */
   const [threadMembersId, setThreadMembersId] = useState<number | null>(null)
 
@@ -913,7 +919,7 @@ export function useServerData(userRef: RefObject<Me | null>) {
     threadContextMenu, setThreadContextMenu,
     renameThreadId, setRenameThreadId,
     threadListChannelId, setThreadListChannelId,
-    threadSearchOpen, setThreadSearchOpen,
+    threadPane, setThreadPane,
     threadMembersId, setThreadMembersId,
     handleToggleThreadJoin, handleSetThreadLocked, handleCopyThreadLink,
     handleRenameThread,

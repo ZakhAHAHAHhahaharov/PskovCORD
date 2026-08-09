@@ -2,6 +2,7 @@ import { MouseEvent as ReactMouseEvent } from 'react'
 import { Bell, BellOff, Hash, Lock, MessagesSquare, MoreHorizontal, X } from 'lucide-react'
 import { Channel, Conversation, MentionCandidate, Me, Server } from '../api'
 import ThreadSearch from './ThreadSearch'
+import PinnedMessages from './PinnedMessages'
 import type { useChannelMessages } from '../hooks/useChannelMessages'
 import { ComposerDraft } from '../drafts'
 import { outbox, pendingAsMessage, PendingMessage } from '../outbox'
@@ -45,6 +46,8 @@ export default function ThreadPanel({
   onOpenMenu,
   searchOpen,
   onCloseSearch,
+  pinsOpen,
+  onClosePins,
   onJumpToMessage,
   onOpenProfile,
   onUserContextMenu,
@@ -72,6 +75,8 @@ export default function ThreadPanel({
   onOpenMenu: (anchor: DOMRect) => void
   searchOpen: boolean
   onCloseSearch: () => void
+  pinsOpen: boolean
+  onClosePins: () => void
   /** Клик по найденному сообщению — перейти к нему в ленте ветки. */
   onJumpToMessage: (messageId: number) => void
   onOpenProfile: (user: ProfilePopupUser, e: ReactMouseEvent) => void
@@ -135,17 +140,27 @@ export default function ThreadPanel({
         </button>
       </header>
 
-      {/* Поиск и закреплённые занимают место ленты, а не наслаиваются на неё:
-          в 420px колонке всплывающая панель накрыла бы ровно то, ради чего её
-          открыли. Возврат — крестиком в их собственной шапке. */}
-      {searchOpen && (
+      {/* Поиск и закреплённые ЗАМЕЩАЮТ ленту с композером, а не встают над
+          ними: в 420px колонке две прокручиваемые области, поделившие высоту
+          пополам, бесполезны обе. Возврат — крестиком в их собственной шапке.
+          Одновременно открытым может быть только одно: их открывают из одного
+          меню, и второе закрывает первое (см. AppShellOverlays). */}
+      {searchOpen ? (
         <ThreadSearch
           channelId={thread.id}
           onClose={onCloseSearch}
           onPick={onJumpToMessage}
         />
-      )}
-
+      ) : pinsOpen ? (
+        <PinnedMessages
+          channelId={thread.id}
+          canPin={canModerate}
+          onUnpin={(messageId) => threadMessages.handleTogglePin(messageId, false)}
+          onClose={onClosePins}
+          variant="inline"
+        />
+      ) : (
+        <>
       <MessageList
         messages={[
           ...visible,
@@ -190,6 +205,8 @@ export default function ThreadPanel({
         onCancelEdit={() => threadMessages.setEditTargetTracked(null)}
         canSendVoice={canSendVoiceMessages}
       />
+        </>
+      )}
     </aside>
   )
 }
