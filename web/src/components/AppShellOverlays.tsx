@@ -13,6 +13,10 @@ import { ComposerDraft } from '../drafts'
 import { useNickname } from '../nicknames'
 import { PendingMessage } from '../outbox'
 import ThreadPanel from './ThreadPanel'
+import ThreadContextMenu from './ThreadContextMenu'
+import ThreadListModal from './ThreadListModal'
+import ThreadMembersModal from './ThreadMembersModal'
+import RenameThreadModal from './RenameThreadModal'
 import NewConversationModal from './NewConversationModal'
 import IncomingCallBanner from './IncomingCallBanner'
 import DiscoverModal from './DiscoverModal'
@@ -600,6 +604,48 @@ export default function AppShellOverlays({
           />
         )
       })()}
+      {server.renameThreadId != null && (() => {
+        const thread = server.channels.find((c) => c.id === server.renameThreadId)
+        if (!thread) return null
+        return (
+          <RenameThreadModal
+            currentName={thread.name}
+            onRename={(name) => server.handleRenameThread(thread, name)}
+            onClose={() => server.setRenameThreadId(null)}
+          />
+        )
+      })()}
+      {server.threadListChannelId != null && (() => {
+        const channel = server.channels.find((c) => c.id === server.threadListChannelId)
+        if (!channel) return null
+        return (
+          <ThreadListModal
+            channel={channel}
+            onOpenThread={server.handleOpenThread}
+            onThreadContextMenu={(thread, e) =>
+              server.setThreadContextMenu({ id: thread.id, x: e.clientX, y: e.clientY })
+            }
+            onClose={() => server.setThreadListChannelId(null)}
+          />
+        )
+      })()}
+      {server.threadMembersId != null && (() => {
+        const thread = server.channels.find((c) => c.id === server.threadMembersId)
+        if (!thread || !server.currentServer) return null
+        const perms = server.currentServer.my_permissions
+        const canAdd =
+          thread.created_by === user.id
+          || !!perms?.manage_channels
+          || canDeleteMessages
+        return (
+          <ThreadMembersModal
+            thread={thread}
+            roster={server.members}
+            canAdd={canAdd}
+            onClose={() => server.setThreadMembersId(null)}
+          />
+        )
+      })()}
       {server.showChannelInviteId != null && (() => {
         const inviteChannel = server.currentServer?.channels.find((c) => c.id === server.showChannelInviteId)
         if (!server.currentServer || !inviteChannel) return null
@@ -700,17 +746,84 @@ export default function AppShellOverlays({
             servers={servers}
             conversations={conv.conversations}
             canModerate={canDeleteMessages}
-            canArchive={canArchive}
             canSendVoiceMessages={canSendVoiceMessages}
             blockedUserIds={blockedUserIds}
             loadDraft={loadDraft}
             saveDraft={saveDraft}
             onClose={() => server.setOpenThreadId(null)}
-            onSetArchived={(archived) =>
-              void server.handleSetThreadArchived(thread, archived)
+            onToggleMuted={(muted) =>
+              void server.handleSetChannelMute(thread, muted ? 'forever' : null)
             }
+            onOpenMenu={(anchor) =>
+              server.setThreadContextMenu({
+                id: thread.id,
+                // Меню разворачивается ПОД кнопкой и прижимается к её правому
+                // краю — само оно умеет только не вылезать за экран.
+                x: anchor.right - 240,
+                y: anchor.bottom + 4,
+                fromPanel: true,
+              })
+            }
+            searchOpen={server.threadPane === 'search'}
+            onCloseSearch={() => server.setThreadPane('messages')}
+            pinsOpen={server.threadPane === 'pins'}
+            onClosePins={() => server.setThreadPane('messages')}
+            onJumpToMessage={(messageId) => {
+              onJumpToMessage(thread.id, messageId)
+              // Переход из поиска возвращает к переписке — иначе прыжок
+              // произошёл бы в ленте, которой на экране нет.
+              server.setThreadPane('messages')
+            }}
             onOpenProfile={openProfilePopup}
             onUserContextMenu={onUserContextMenu}
+          />
+        )
+      })()}
+
+      {/* Меню ветки — одно на все места, откуда её открывают правым кликом
+          (плашка под сообщением, строка в сайдбаре, ссылка в системной
+          записи) и на многоточие в шапке панели. Ветку резолвим из списка
+          каналов при рендере, а не таскаем снимок: её могли переименовать или
+          закрыть, пока меню открыто. */}
+      {server.threadContextMenu && (() => {
+        const menu = server.threadContextMenu
+        const thread = server.channels.find((c) => c.id === menu.id)
+        if (!thread || !server.currentServer) return null
+        const perms = server.currentServer.my_permissions
+        const moderate = !!(perms?.manage_channels || canDeleteMessages)
+        const abilities = {
+          manage: thread.created_by === user.id || moderate,
+          moderate,
+        }
+        const close = () => server.setThreadContextMenu(null)
+        return (
+          <ThreadContextMenu
+            thread={thread}
+            x={menu.x}
+            y={menu.y}
+            abilities={abilities}
+            onClose={close}
+            onOpen={() => server.handleOpenThread(thread)}
+            onMarkRead={() => server.handleMarkChannelRead(thread)}
+            onToggleJoin={() => void server.handleToggleThreadJoin(thread)}
+            onToggleArchived={() =>
+              void server.handleSetThreadArchived(thread, !thread.archived)
+            }
+            onToggleLocked={() =>
+              void server.handleSetThreadLocked(thread, !thread.locked)
+            }
+            onRename={() => server.setRenameThreadId(thread.id)}
+            onMembers={() => server.setThreadMembersId(thread.id)}
+            onCopyLink={() => void server.handleCopyThreadLink(thread)}
+            onMute={() =>
+              void server.handleSetChannelMute(
+                thread, thread.my_settings.muted ? null : 'forever')
+            }
+            onDelete={() => void server.handleDeleteChannel(thread)}
+            // Три пункта ниже — только у меню из шапки уже открытой панели.
+            onExpand={menu.fromPanel ? () => server.handleSelectChannel(thread) : undefined}
+            onSearch={menu.fromPanel ? () => server.setThreadPane('search') : undefined}
+            onPins={menu.fromPanel ? () => server.setThreadPane('pins') : undefined}
           />
         )
       })()}

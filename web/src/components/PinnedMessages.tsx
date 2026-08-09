@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { PinOff } from 'lucide-react'
+import { PinOff, X } from 'lucide-react'
 import { api, Message } from '../api'
 import Avatar from './Avatar'
 import { styledNameProps } from '../nameStyle'
@@ -13,18 +13,27 @@ import { styledNameProps } from '../nameStyle'
  * истории, до которой постраничная лента не доехала, а само закрепление
  * происходит редко — держать ради него ещё один синхронизируемый по
  * WebSocket список дороже, чем один запрос на открытие панели.
+ *
+ * В панели ветки тот же список показывается не попапом, а на месте ленты
+ * (variant='inline', см. ThreadPanel): колонка узкая, и всплывающая панель
+ * накрыла бы ровно ту переписку, к которой закрепления и относятся. Отсюда же
+ * и разница в закрытии — попап уходит по клику мимо, встроенная панель только
+ * по крестику: «мимо» для неё это вся остальная страница, включая её же
+ * собственный чат.
  */
 export default function PinnedMessages({
   channelId,
   canPin,
   onUnpin,
   onClose,
+  variant = 'popup',
 }: {
   channelId: number
   /** Есть ли право модерации сообщений — от него зависит крестик «открепить». */
   canPin: boolean
   onUnpin: (messageId: number) => void
   onClose: () => void
+  variant?: 'popup' | 'inline'
 }) {
   const ref = useRef<HTMLDivElement>(null)
   const [messages, setMessages] = useState<Message[] | null>(null)
@@ -46,7 +55,17 @@ export default function PinnedMessages({
   }, [channelId])
 
   // Закрытие по клику вне себя/Escape — тот же приём, что у контекстных меню.
+  // Только для попапа: встроенная панель занимает место ленты, и «клик мимо»
+  // для неё это в том числе её же собственный чат (см. докстринг выше).
+  const inline = variant === 'inline'
   useEffect(() => {
+    if (inline) {
+      const onKeyDownOnly = (e: KeyboardEvent) => {
+        if (e.key === 'Escape') onClose()
+      }
+      document.addEventListener('keydown', onKeyDownOnly)
+      return () => document.removeEventListener('keydown', onKeyDownOnly)
+    }
     const onMouseDown = (e: MouseEvent) => {
       if (ref.current && !ref.current.contains(e.target as Node)) onClose()
     }
@@ -59,16 +78,30 @@ export default function PinnedMessages({
       document.removeEventListener('mousedown', onMouseDown)
       document.removeEventListener('keydown', onKeyDown)
     }
-  }, [onClose])
+  }, [onClose, inline])
 
   return (
-    <div className="pinned-panel" ref={ref}>
-      <div className="pinned-panel-title">Закреплённые сообщения</div>
+    <div className={`pinned-panel ${inline ? 'pinned-panel-inline' : ''}`} ref={ref}>
+      <div className="pinned-panel-title">
+        Закреплённые сообщения
+        {inline && (
+          <button
+            type="button"
+            className="thread-panel-action"
+            title="Закрыть закреплённые"
+            onClick={onClose}
+          >
+            <X size={16} />
+          </button>
+        )}
+      </div>
       {error && <div className="pinned-panel-empty">{error}</div>}
       {!error && messages == null && <div className="pinned-panel-empty">Загрузка…</div>}
       {!error && messages != null && messages.length === 0 && (
         <div className="pinned-panel-empty">
-          В этом канале пока ничего не закреплено.
+          {inline
+            ? 'В этой ветке пока ничего не закреплено.'
+            : 'В этом канале пока ничего не закреплено.'}
         </div>
       )}
       {messages?.map((m) => (

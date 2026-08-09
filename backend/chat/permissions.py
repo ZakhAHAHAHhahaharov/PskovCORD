@@ -79,12 +79,18 @@ def _shares_server_allowing_dms(sender, recipient) -> bool:
 def can_see_channel(user, channel, perms=None) -> bool:
     """Виден ли пользователю ЭТОТ канал.
 
-    Ветка (Channel.parent, kind=thread) своих прав не имеет вовсе — она видна
-    ровно тем, кому виден её родительский канал. Отдельного набора допусков у
-    неё нет и заводить его незачем: ветка — это продолжение разговора в том же
-    канале, и разойтись с ним в доступе она не может по смыслу. Разбор в один
-    шаг, без рекурсии: ветка в ветке запрещена при создании (см.
-    chat.views.ChannelThreads), поэтому у родителя parent уже пуст.
+    Ветка (Channel.parent, kind=thread) сперва наследует доступ родительского
+    канала — разойтись с ним в доступе она не может по смыслу: это продолжение
+    того же разговора. Разбор в один шаг, без рекурсии: ветка в ветке запрещена
+    при создании (см. chat.views.ChannelThreads), поэтому у родителя parent
+    уже пуст.
+
+    Приватная ветка (Channel.invite_only) сверх этого требует участия
+    (ThreadMember) — либо manage_channels, по той же причине, по какой
+    управляющий каналами видит приватные каналы: иначе он мог бы завести
+    ветку и тут же потерять её из виду. Порядок важен: сначала родитель,
+    потом участие — приватность ветки НЕ открывает канал, в котором её не
+    должно быть видно.
 
     Публичный канал — по обычному view_channels. Приватный (Channel.is_private)
     им НЕ открывается: нужен либо manage_channels (тот, кто заводит каналы,
@@ -103,7 +109,15 @@ def can_see_channel(user, channel, perms=None) -> bool:
     if perms is None:
         perms = roles_module.permissions_for(user, channel.server)
     if channel.parent_id:
-        return can_see_channel(user, channel.parent, perms)
+        if not can_see_channel(user, channel.parent, perms):
+            return False
+        if not channel.invite_only:
+            return True
+        if perms.get("manage_channels"):
+            return True
+        from .models import ThreadMember
+
+        return ThreadMember.objects.filter(thread=channel, user=user).exists()
     if not perms.get("view_channels"):
         return False
     if not channel.is_private:
@@ -130,8 +144,12 @@ def visible_channels(user, server, channels=None) -> list:
     на весь список). Ветка, чей родитель в переданный список не попал, не
     показывается — по построению этого не бывает (список всегда охватывает
     сервер целиком), но умолчание тут должно быть «не показывать».
+
+    Приватные ветки (Channel.invite_only) точно так же: участие спрашивается
+    ОДНИМ запросом на весь список, а не по ветке.
     """
     from . import roles as roles_module
+    from .models import ThreadMember
 
     perms = roles_module.permissions_for(user, server)
     if channels is None:
@@ -141,7 +159,24 @@ def visible_channels(user, server, channels=None) -> list:
         c.id for c in channels
         if c.parent_id is None and can_see_channel(user, c, perms)
     }
-    return [
-        c for c in channels
-        if (c.id if c.parent_id is None else c.parent_id) in visible_parent_ids
-    ]
+    invite_only_ids = [c.id for c in channels if c.parent_id and c.invite_only]
+    # Управляющему каналами участие не нужно — он видит все ветки, как и все
+    # приватные каналы; запрос в этом случае просто не делаем.
+    joined_ids: set = set()
+    if invite_only_ids and not perms.get("manage_channels"):
+        joined_ids = set(
+            ThreadMember.objects.filter(
+                user=user, thread_id__in=invite_only_ids,
+            ).values_list("thread_id", flat=True)
+        )
+
+    def visible(channel) -> bool:
+        if channel.parent_id is None:
+            return channel.id in visible_parent_ids
+        if channel.parent_id not in visible_parent_ids:
+            return False
+        if not channel.invite_only:
+            return True
+        return perms.get("manage_channels") or channel.id in joined_ids
+
+    return [c for c in channels if visible(c)]

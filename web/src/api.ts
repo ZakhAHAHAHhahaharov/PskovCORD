@@ -216,6 +216,26 @@ export interface Channel {
   archived: boolean
   /** Кто завёл ветку — ему можно её закрыть без прав модератора. */
   created_by: number | null
+  /** Приватная ветка: видна только тем, кого в неё добавили, и управляющим
+   * каналами. Не то же самое, что is_private у канала — там допуск решают
+   * роли, здесь только участие. */
+  invite_only: boolean
+  /** Заблокированная ветка: читать можно, писать — только модераторам, и сама
+   * из архива она уже не вернётся (в отличие от просто закрытой). */
+  locked: boolean
+  /** Сколько сообщений в ветке — цифра в плашке «N сообщений ›». 0 у обычных
+   * каналов: плашки у них нет. */
+  message_count: number
+  /** Последнее сообщение ветки — превью в плашке. null, если пусто. */
+  last_message: {
+    id: number
+    author: User
+    content: string
+    created_at: string
+  } | null
+  /** Участвую ли я — от этого зависит, висит ли ветка в сайдбаре (там только
+   * свои) и что предлагает меню: «Присоединиться» или «Покинуть». */
+  joined: boolean
 }
 
 /** Права роли на сервере — 1:1 с булевыми полями chat.models.Role.
@@ -645,8 +665,18 @@ export interface ChatMessageBase {
   pinned?: boolean
 }
 
+/** Системная запись в ленте — её никто не писал, текст собирает клиент из
+ * полей (см. MessageList), а не берёт из content: иначе он был бы прибит к
+ * языку, на котором его сочинили в момент создания. Пустая строка — обычное
+ * сообщение, так у подавляющего большинства. */
+export type MessageSystemKind = '' | 'thread_created'
+
 export interface Message extends ChatMessageBase {
   channel: number
+  system_kind: MessageSystemKind
+  /** Ветка, о которой сообщает системная запись, — по ней строка и
+   * кликабельна. null у обычных сообщений. */
+  system_thread: { id: number; name: string; archived: boolean } | null
 }
 
 export interface Member extends Omit<User, 'status' | 'dm_privacy'> {
@@ -1578,12 +1608,48 @@ export const api = {
    * каналами в составе сервера. */
   createThread: (
     channelId: number,
-    opts: { name?: string; messageId?: number } = {},
+    opts: { name?: string; messageId?: number; inviteOnly?: boolean } = {},
   ): Promise<Channel> =>
     req(`/api/channels/${channelId}/threads`, {
       method: 'POST',
-      body: JSON.stringify({ name: opts.name ?? '', message_id: opts.messageId ?? null }),
+      body: JSON.stringify({
+        name: opts.name ?? '',
+        message_id: opts.messageId ?? null,
+        invite_only: opts.inviteOnly ?? false,
+      }),
     }),
+  /** ВСЕ ветки канала, включая закрытые и те, где я не участвую, — «Показать
+   * все ветки». В составе сервера приезжают не все: сайдбар показывает только
+   * свои. Приватные, куда не звали, не попадают и сюда. */
+  channelThreads: (channelId: number): Promise<Channel[]> =>
+    req(`/api/channels/${channelId}/threads`),
+  /** «Присоединиться к ветке» / «Покинуть ветку». Написать в ветку — то же
+   * самое участие, только без отдельного нажатия. */
+  joinThread: (channelId: number): Promise<Channel> =>
+    req(`/api/channels/${channelId}/membership`, { method: 'POST' }),
+  leaveThread: (channelId: number): Promise<Channel> =>
+    req(`/api/channels/${channelId}/membership`, { method: 'DELETE' }),
+  /** Кто в ветке. Нужно вкладке участников приватной ветки. */
+  threadMembers: (channelId: number): Promise<User[]> =>
+    req(`/api/channels/${channelId}/members`),
+  /** Добавить людей в приватную ветку. Можно автору ветки и модератору; тех,
+   * кому не виден родительский канал, бэкенд молча пропустит. */
+  addThreadMembers: (channelId: number, userIds: number[]): Promise<User[]> =>
+    req(`/api/channels/${channelId}/members`, {
+      method: 'POST',
+      body: JSON.stringify({ user_ids: userIds }),
+    }),
+  /** Заблокировать ветку — сильнее закрытия: писать нельзя никому, кроме
+   * модераторов, и сама она из архива уже не вернётся. Только модератору. */
+  setThreadLocked: (channelId: number, locked: boolean): Promise<Channel> =>
+    req(`/api/channels/${channelId}/lock`, {
+      method: 'POST',
+      body: JSON.stringify({ locked }),
+    }),
+  /** Поиск по сообщениям канала или ветки — по вхождению подстроки, с теми же
+   * правами, что и чтение истории. */
+  searchMessages: (channelId: number, query: string): Promise<Message[]> =>
+    req(`/api/channels/${channelId}/search?q=${encodeURIComponent(query)}`),
   /** Закрыть ветку или вернуть её из архива. Может автор ветки, а также
    * manage_channels/delete_messages. Не удаление: сообщения остаются. */
   setThreadArchived: (channelId: number, archived: boolean): Promise<Channel> =>

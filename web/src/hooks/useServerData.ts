@@ -207,11 +207,35 @@ export function useServerData(userRef: RefObject<Me | null>) {
     }
   }, [])
 
-  // Начальная загрузка серверов.
+  // Начальная загрузка серверов. Ссылка на ветку (?thread=<id>, см.
+  // handleCopyThreadLink) разбирается прямо здесь: открыть ветку можно только
+  // ПОСЛЕ того, как список серверов приехал — до этого неизвестно ни в каком
+  // она сервере, ни в каком канале.
   useEffect(() => {
     ;(async () => {
       const list = await api.servers()
       setServers(list)
+      const params = new URLSearchParams(location.search)
+      const threadParam = Number(params.get('thread'))
+      if (threadParam) {
+        // Параметр убираем сразу: перезагрузка страницы не должна снова
+        // насильно открывать ветку, которую человек уже закрыл (тот же приём,
+        // что и у ?voiceInvite=, см. useInviteLinks).
+        const url = new URL(location.href)
+        url.searchParams.delete('thread')
+        window.history.replaceState({}, '', url.toString())
+        const owner = list.find((s) => s.channels.some((c) => c.id === threadParam))
+        const thread = owner?.channels.find((c) => c.id === threadParam)
+        if (owner && thread && thread.parent != null) {
+          setServerId(owner.id)
+          setChannelId(thread.parent)
+          setOpenThreadId(thread.id)
+          return
+        }
+        // Ветка не нашлась — её удалили либо к ней нет доступа (приватная,
+        // куда не звали). Открываем как обычно и молчим: ссылка могла быть
+        // и не нам предназначена.
+      }
       if (list.length) selectServer(list[0])
     })()
   }, [selectServer])
@@ -532,6 +556,9 @@ export function useServerData(userRef: RefObject<Me | null>) {
   const handleOpenThread = (thread: Channel) => {
     if (thread.parent != null) setChannelId(thread.parent)
     setOpenThreadId(thread.id)
+    // Открыли другую ветку — показываем её переписку, а не поиск или
+    // закреплённые, оставшиеся от предыдущей: они были про неё, не про эту.
+    setThreadPane('messages')
     setUnreadChannelIds((prev) => {
       if (!prev.has(thread.id)) return prev
       const next = new Set(prev)
@@ -544,12 +571,13 @@ export function useServerData(userRef: RefObject<Me | null>) {
    * набранное название не пропало (см. CreateThreadModal и тот же приём у
    * handleCreateChannelSubmit). Готовую ветку сразу открываем: её и создавали
    * ради того, чтобы в ней писать. */
-  const handleCreateThreadSubmit = async (name: string) => {
+  const handleCreateThreadSubmit = async (name: string, inviteOnly: boolean) => {
     const target = createThreadTarget
     if (!target) return
     const thread = await api.createThread(target.channelId, {
       name,
       messageId: target.messageId,
+      inviteOnly,
     })
     setOpenThreadId(thread.id)
     setServers((prev) =>
@@ -567,6 +595,71 @@ export function useServerData(userRef: RefObject<Me | null>) {
           : s,
       ),
     )
+  }
+
+  /** Правый клик по ветке — где угодно: по плашке под сообщением, по строке в
+   * сайдбаре, по ссылке в системной записи. Держим id и координаты, сам канал
+   * резолвим при рендере — тот же приём, что и у channelContextMenuId. */
+  const [threadContextMenu, setThreadContextMenu] = useContextMenuState<{
+    id: number
+    x: number
+    y: number
+    /** Меню-многоточие в шапке самой панели: у него есть пункты «на весь
+     * экран», «поиск» и «закреплённые», которых нет у меню из списка. */
+    fromPanel?: boolean
+  }>()
+  /** Ветка, которую сейчас переименовываем («Редактировать ветку»). */
+  const [renameThreadId, setRenameThreadId] = useState<number | null>(null)
+  /** Открыт ли список всех веток канала («Показать все ветки»). */
+  const [threadListChannelId, setThreadListChannelId] = useState<number | null>(null)
+  /** Что сейчас показано в панели ветки вместо ленты — поиск, закреплённые
+   * или ничего. Одним состоянием, а не двумя флагами: обе панели занимают
+   * одно и то же место, и «открыты обе» — состояние, которого не бывает. */
+  const [threadPane, setThreadPane] = useState<'messages' | 'search' | 'pins'>(
+    'messages')
+  /** Ветка, чей состав участников сейчас смотрим («Участники ветки»). */
+  const [threadMembersId, setThreadMembersId] = useState<number | null>(null)
+
+  /** Переименовать ветку. Ошибку наружу не глушим — её показывает модалка,
+   * не закрываясь, чтобы набранное имя не пропало. */
+  const handleRenameThread = async (thread: Channel, name: string) => {
+    applyChannelUpdate(await api.renameChannel(thread.id, name))
+  }
+
+  /** Присоединиться к ветке или выйти из неё. Ответ ручки — сама ветка со
+   * свежим joined, его и применяем: от него зависит и сайдбар, и подпись
+   * пункта меню. */
+  const handleToggleThreadJoin = async (thread: Channel) => {
+    try {
+      applyChannelUpdate(
+        thread.joined
+          ? await api.leaveThread(thread.id)
+          : await api.joinThread(thread.id),
+      )
+    } catch (e) {
+      alert('Не удалось изменить участие в ветке: ' + (e as Error).message)
+    }
+  }
+
+  const handleSetThreadLocked = async (thread: Channel, locked: boolean) => {
+    try {
+      applyChannelUpdate(await api.setThreadLocked(thread.id, locked))
+    } catch (e) {
+      alert('Не удалось изменить блокировку ветки: ' + (e as Error).message)
+    }
+  }
+
+  /** «Копировать ссылку» — прямая ссылка на ветку, по которой она открывается
+   * панелью (см. useInviteLinks: параметр разбирается при загрузке). Не
+   * приглашение: приглашают на сервер, а сюда зовут человека, который на
+   * сервере уже есть. */
+  const handleCopyThreadLink = async (thread: Channel) => {
+    const link = `${location.origin}${location.pathname}?thread=${thread.id}`
+    try {
+      await navigator.clipboard.writeText(link)
+    } catch (e) {
+      alert('Не удалось скопировать ссылку: ' + (e as Error).message)
+    }
   }
 
   /** Закрыть ветку или вернуть её из архива. Панель при этом не закрывается:
@@ -823,5 +916,12 @@ export function useServerData(userRef: RefObject<Me | null>) {
     createThreadTarget, setCreateThreadTarget, handleCreateThreadSubmit,
     handleSetThreadArchived,
     openThreadId, openThread, setOpenThreadId, handleOpenThread,
+    threadContextMenu, setThreadContextMenu,
+    renameThreadId, setRenameThreadId,
+    threadListChannelId, setThreadListChannelId,
+    threadPane, setThreadPane,
+    threadMembersId, setThreadMembersId,
+    handleToggleThreadJoin, handleSetThreadLocked, handleCopyThreadLink,
+    handleRenameThread,
   }
 }

@@ -1,6 +1,7 @@
 import { FormEvent, useState } from 'react'
-import { Loader2, MessagesSquare } from 'lucide-react'
+import { Loader2, Lock, MessagesSquare } from 'lucide-react'
 import { useEscToClose } from '../modalStack'
+import ToggleSwitch from './ToggleSwitch'
 
 /**
  * Создание ветки — та же форма, что и CreateChannelModal, но короче: у ветки
@@ -26,11 +27,12 @@ export default function CreateThreadModal({
   /** Возвращает промис: пока идёт запрос, кнопка заблокирована, а ошибка
    * показывается не закрывая модалку — набранное название не пропадает
    * (тот же приём, что и в CreateChannelModal). */
-  onCreate: (name: string) => Promise<void>
+  onCreate: (name: string, inviteOnly: boolean) => Promise<void>
   onClose: () => void
 }) {
   useEscToClose(onClose)
   const [name, setName] = useState(suggestedName ?? '')
+  const [inviteOnly, setInviteOnly] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
 
@@ -42,7 +44,7 @@ export default function CreateThreadModal({
     setSaving(true)
     setError('')
     try {
-      await onCreate(trimmed)
+      await onCreate(trimmed, inviteOnly)
       onClose()
     } catch (err) {
       setError((err as Error).message)
@@ -73,10 +75,27 @@ export default function CreateThreadModal({
               onFocus={(e) => e.currentTarget.select()}
             />
           </div>
+          <div className="create-channel-option">
+            <div className="create-channel-option-head">
+              <span className="create-channel-option-label">
+                <Lock size={15} /> Приватная ветка
+              </span>
+              <ToggleSwitch
+                checked={inviteOnly}
+                onChange={setInviteOnly}
+                ariaLabel="Приватная ветка"
+              />
+            </div>
+            <div className="create-channel-option-hint">
+              {inviteOnly
+                ? 'Ветку увидят только те, кого в неё добавят, и те, кто управляет каналами. Добавить людей можно потом — в меню ветки.'
+                : 'Ветку увидят все, кому виден сам канал.'}
+            </div>
+          </div>
+
           <div className="create-channel-option-hint">
-            Ветку увидят все, кому виден сам канал — своих настроек доступа у
-            неё нет. Когда обсуждение закончится, ветку можно закрыть: она
-            уйдёт из списка каналов, но сообщения останутся.
+            Когда обсуждение закончится, ветку можно закрыть: она уйдёт из
+            списка каналов, но сообщения останутся.
           </div>
 
           {error && <div className="login-error">{error}</div>}

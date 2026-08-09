@@ -1,6 +1,6 @@
 import { MouseEvent as ReactMouseEvent, useState } from 'react'
 import { ChevronLeft, MessageSquare, Phone, PhoneOff, Pin, Users } from 'lucide-react'
-import { Conversation, Me } from '../api'
+import { Channel, Conversation, Me } from '../api'
 import type { useChannelMessages } from '../hooks/useChannelMessages'
 import type { useConversationsData } from '../hooks/useConversationsData'
 import type { useInviteLinks } from '../hooks/useInviteLinks'
@@ -98,6 +98,14 @@ export default function AppShellChat({
    * обычными каналами, отдельного их списка на клиенте нет. */
   const threadOf = (messageId: number) =>
     channels.find((c) => c.kind === 'thread' && c.source_message === messageId)
+  /** Ветка по id — для системной записи «X начинает ветку»: её собственный
+   * снимок сделан в момент создания, показывать надо текущее состояние. */
+  const threadById = (threadId: number) => channels.find((c) => c.id === threadId)
+  const openThreadMenu = (thread: Channel, e: ReactMouseEvent) =>
+    server.setThreadContextMenu({ id: thread.id, x: e.clientX, y: e.clientY })
+  const showAllThreads = () => {
+    if (currentChannel) server.setThreadListChannelId(currentChannel.id)
+  }
   /** «Создать ветку» из сообщения — если ветка уже есть, просто открываем её
    * (модалку с названием спрашивать не о чем). */
   const handleCreateThreadFromMessage = (messageId: number, content: string) => {
@@ -299,8 +307,11 @@ export default function AppShellChat({
                   servers={server.servers}
                   conversations={conv.conversations}
                   threadOf={threadOf}
+                  threadById={threadById}
                   onOpenThread={server.handleOpenThread}
                   onCreateThread={(m) => handleCreateThreadFromMessage(m.id, m.content)}
+                  onThreadContextMenu={openThreadMenu}
+                  onShowAllThreads={showAllThreads}
                 />
                 <MessageInput
                   key={`channel-${currentChannel.id}`}
@@ -391,8 +402,11 @@ export default function AppShellChat({
               servers={server.servers}
               conversations={conv.conversations}
               threadOf={threadOf}
+              threadById={threadById}
               onOpenThread={server.handleOpenThread}
               onCreateThread={(m) => handleCreateThreadFromMessage(m.id, m.content)}
+              onThreadContextMenu={openThreadMenu}
+              onShowAllThreads={showAllThreads}
             />
             <MessageInput
               key={`channel-${currentChannel.id}`}
