@@ -43,7 +43,7 @@ from .models import (
     FriendNickname, Membership, Message, ProfileNote, Reaction, Role, Server,
     ServerAuditLog, ServerBan,
     ServerEmoji, ServerInvite, ServerJoinRequest, Sticker, StickerPack,
-    ChannelReadState,
+    ChannelReadState, ThreadMember,
     MAX_STICKER_BYTES, MAX_VOICE_MS, MAX_WAVEFORM_POINTS, STICKER_SIDE, dm_room,
 )
 from .permissions import can_dm, can_see_channel
@@ -5832,3 +5832,317 @@ class ThreadGatewayTests(TransactionTestCase):
         self.assertFalse(thread.archived)
         await owner_ws.disconnect()
         await member_ws.disconnect()
+
+
+class ThreadMembershipTests(APITestCase):
+    """Участие в ветке: кто её видит в сайдбаре, кто может войти и выйти,
+    и приватные ветки (Channel.invite_only)."""
+
+    def setUp(self):
+        self.owner = User.objects.create_user(username="tm_owner", password="pw12345")
+        self.member = User.objects.create_user(username="tm_member", password="pw12345")
+        self.other = User.objects.create_user(username="tm_other", password="pw12345")
+        self.server = Server.objects.create(name="s", owner=self.owner)
+        for u in (self.owner, self.member, self.other):
+            Membership.objects.create(user=u, server=self.server)
+        self.default_role = roles.create_default_role(self.server)
+        self.channel = Channel.objects.create(
+            server=self.server, name="general", kind=Channel.TEXT)
+
+    def _create_thread(self, user, **payload):
+        self.client.force_authenticate(user)
+        payload.setdefault("name", "Ветка")
+        return self.client.post(
+            "/api/channels/{}/threads".format(self.channel.id), payload,
+            format="json")
+
+    def test_author_joins_own_thread(self):
+        """Иначе своя же ветка не попала бы автору в сайдбар."""
+        data = self._create_thread(self.member).data
+        self.assertTrue(data["joined"])
+        self.assertTrue(ThreadMember.objects.filter(
+            thread_id=data["id"], user=self.member).exists())
+
+    def test_others_do_not_join_automatically(self):
+        thread_id = self._create_thread(self.member).data["id"]
+        self.client.force_authenticate(self.other)
+        resp = self.client.get("/api/servers")
+        row = next(s for s in resp.data if s["id"] == self.server.id)
+        found = next(c for c in row["channels"] if c["id"] == thread_id)
+        self.assertFalse(found["joined"])
+
+    def test_join_and_leave(self):
+        thread_id = self._create_thread(self.member).data["id"]
+        self.client.force_authenticate(self.other)
+        resp = self.client.post("/api/channels/{}/membership".format(thread_id))
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(resp.data["joined"])
+        resp = self.client.delete("/api/channels/{}/membership".format(thread_id))
+        self.assertEqual(resp.status_code, 200)
+        self.assertFalse(resp.data["joined"])
+
+    def test_membership_rejects_regular_channel(self):
+        self.client.force_authenticate(self.member)
+        resp = self.client.post(
+            "/api/channels/{}/membership".format(self.channel.id))
+        self.assertEqual(resp.status_code, 400)
+
+    def test_private_thread_hidden_from_non_members(self):
+        thread_id = self._create_thread(self.member, invite_only=True).data["id"]
+        self.client.force_authenticate(self.other)
+        resp = self.client.get("/api/channels/{}/messages".format(thread_id))
+        self.assertEqual(resp.status_code, 403)
+        listing = self.client.get("/api/servers")
+        row = next(s for s in listing.data if s["id"] == self.server.id)
+        self.assertNotIn(thread_id, [c["id"] for c in row["channels"]])
+
+    def test_private_thread_visible_to_manage_channels(self):
+        """Тот, кто заводит каналы, видит и приватные ветки — иначе мог бы
+        потерять из виду ветку, которую сам же и создал."""
+        thread_id = self._create_thread(self.member, invite_only=True).data["id"]
+        self.client.force_authenticate(self.owner)
+        resp = self.client.get("/api/channels/{}/messages".format(thread_id))
+        self.assertEqual(resp.status_code, 200)
+
+    def test_adding_member_opens_private_thread(self):
+        thread_id = self._create_thread(self.member, invite_only=True).data["id"]
+        self.client.force_authenticate(self.member)
+        resp = self.client.post(
+            "/api/channels/{}/members".format(thread_id),
+            {"user_ids": [self.other.id]}, format="json")
+        self.assertEqual(resp.status_code, 201)
+        self.client.force_authenticate(self.other)
+        resp = self.client.get("/api/channels/{}/messages".format(thread_id))
+        self.assertEqual(resp.status_code, 200)
+
+    def test_stranger_cannot_add_members(self):
+        thread_id = self._create_thread(self.member, invite_only=True).data["id"]
+        ThreadMember.objects.create(
+            thread_id=thread_id, user=self.other)
+        self.client.force_authenticate(self.other)
+        resp = self.client.post(
+            "/api/channels/{}/members".format(thread_id),
+            {"user_ids": [self.owner.id]}, format="json")
+        self.assertEqual(resp.status_code, 403)
+
+    def test_cannot_add_someone_who_cannot_see_the_parent(self):
+        """Иначе приватной веткой можно было бы протащить человека в разговор
+        канала, куда его не пускают."""
+        self.channel.is_private = True
+        self.channel.save(update_fields=["is_private"])
+        thread_id = self._create_thread(self.owner, invite_only=True).data["id"]
+        self.client.force_authenticate(self.owner)
+        resp = self.client.post(
+            "/api/channels/{}/members".format(thread_id),
+            {"user_ids": [self.other.id]}, format="json")
+        self.assertEqual(resp.status_code, 201)
+        self.assertEqual(resp.data, [])
+
+    def test_thread_list_shows_threads_you_are_not_in(self):
+        """«Показать все ветки» — затем и нужен, чтобы найти чужое обсуждение."""
+        mine = self._create_thread(self.member, name="Моя").data["id"]
+        self.client.force_authenticate(self.other)
+        resp = self.client.get("/api/channels/{}/threads".format(self.channel.id))
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn(mine, [t["id"] for t in resp.data])
+
+    def test_thread_list_hides_private_threads(self):
+        secret = self._create_thread(
+            self.member, name="Секрет", invite_only=True).data["id"]
+        self.client.force_authenticate(self.other)
+        resp = self.client.get("/api/channels/{}/threads".format(self.channel.id))
+        self.assertNotIn(secret, [t["id"] for t in resp.data])
+
+
+class ThreadLockAndNoticeTests(APITestCase):
+    """Блокировка ветки и системная запись «X начинает ветку» в канале."""
+
+    def setUp(self):
+        self.owner = User.objects.create_user(username="tl_owner", password="pw12345")
+        self.member = User.objects.create_user(username="tl_member", password="pw12345")
+        self.server = Server.objects.create(name="s", owner=self.owner)
+        for u in (self.owner, self.member):
+            Membership.objects.create(user=u, server=self.server)
+        roles.create_default_role(self.server)
+        self.channel = Channel.objects.create(
+            server=self.server, name="general", kind=Channel.TEXT)
+
+    def _create_thread(self, user, **payload):
+        self.client.force_authenticate(user)
+        payload.setdefault("name", "Ветка")
+        return self.client.post(
+            "/api/channels/{}/threads".format(self.channel.id), payload,
+            format="json")
+
+    def test_creating_thread_posts_a_system_message(self):
+        thread_id = self._create_thread(self.member).data["id"]
+        notice = Message.objects.filter(
+            channel=self.channel, system_kind=Message.SYSTEM_THREAD_CREATED).first()
+        self.assertIsNotNone(notice)
+        self.assertEqual(notice.system_thread_id, thread_id)
+        self.assertEqual(notice.author_id, self.member.id)
+        # Текст собирает клиент из полей — в content его нет намеренно.
+        self.assertEqual(notice.content, "")
+
+    def test_system_message_serialized_with_thread(self):
+        thread_id = self._create_thread(self.member).data["id"]
+        self.client.force_authenticate(self.member)
+        resp = self.client.get(
+            "/api/channels/{}/messages".format(self.channel.id))
+        notice = next(
+            m for m in resp.data if m["system_kind"] == Message.SYSTEM_THREAD_CREATED)
+        self.assertEqual(notice["system_thread"]["id"], thread_id)
+        self.assertEqual(notice["system_thread"]["name"], "Ветка")
+
+    def test_deleting_thread_removes_its_notice(self):
+        """Запись «создана ветка» без самой ветки вести некуда."""
+        thread_id = self._create_thread(self.member).data["id"]
+        self.client.force_authenticate(self.owner)
+        self.client.delete("/api/channels/{}".format(thread_id))
+        self.assertFalse(Message.objects.filter(
+            system_kind=Message.SYSTEM_THREAD_CREATED).exists())
+
+    def test_only_moderator_can_lock(self):
+        thread_id = self._create_thread(self.member).data["id"]
+        self.client.force_authenticate(self.member)
+        resp = self.client.post(
+            "/api/channels/{}/lock".format(thread_id),
+            {"locked": True}, format="json")
+        self.assertEqual(resp.status_code, 403)
+        self.client.force_authenticate(self.owner)
+        resp = self.client.post(
+            "/api/channels/{}/lock".format(thread_id),
+            {"locked": True}, format="json")
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(resp.data["locked"])
+
+    def test_author_can_rename_own_thread_without_manage_channels(self):
+        thread_id = self._create_thread(self.member).data["id"]
+        self.client.force_authenticate(self.member)
+        resp = self.client.patch(
+            "/api/channels/{}".format(thread_id),
+            {"name": "Переименовал"}, format="json")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data["name"], "Переименовал")
+
+    def test_author_cannot_change_other_fields(self):
+        """Послабление ровно на имя: приватность и допуски ветка наследует."""
+        thread_id = self._create_thread(self.member).data["id"]
+        self.client.force_authenticate(self.member)
+        resp = self.client.patch(
+            "/api/channels/{}".format(thread_id),
+            {"name": "Ок", "is_private": True}, format="json")
+        self.assertEqual(resp.status_code, 403)
+
+    def test_stranger_cannot_rename_thread(self):
+        stranger = User.objects.create_user(username="tl_x", password="pw12345")
+        Membership.objects.create(user=stranger, server=self.server)
+        thread_id = self._create_thread(self.member).data["id"]
+        self.client.force_authenticate(stranger)
+        resp = self.client.patch(
+            "/api/channels/{}".format(thread_id), {"name": "Моё"}, format="json")
+        self.assertEqual(resp.status_code, 403)
+
+
+class ThreadStatsSerializerTests(APITestCase):
+    """Счётчик и превью последнего сообщения в плашке ветки."""
+
+    def setUp(self):
+        self.owner = User.objects.create_user(username="ts_owner", password="pw12345")
+        self.server = Server.objects.create(name="s", owner=self.owner)
+        Membership.objects.create(user=self.owner, server=self.server)
+        roles.create_default_role(self.server)
+        self.channel = Channel.objects.create(
+            server=self.server, name="general", kind=Channel.TEXT)
+        self.thread = Channel.objects.create(
+            server=self.server, name="t", kind=Channel.THREAD, parent=self.channel,
+            created_by=self.owner)
+        ThreadMember.objects.create(thread=self.thread, user=self.owner)
+
+    def test_counts_and_preview(self):
+        Message.objects.create(
+            channel=self.thread, author=self.owner, content="первое")
+        last = Message.objects.create(
+            channel=self.thread, author=self.owner, content="последнее")
+        self.client.force_authenticate(self.owner)
+        resp = self.client.get("/api/servers")
+        row = next(s for s in resp.data if s["id"] == self.server.id)
+        found = next(c for c in row["channels"] if c["id"] == self.thread.id)
+        self.assertEqual(found["message_count"], 2)
+        self.assertEqual(found["last_message"]["id"], last.id)
+        self.assertEqual(found["last_message"]["content"], "последнее")
+        self.assertEqual(found["last_message"]["author"]["username"], "ts_owner")
+        # Дата — строкой, а не сырым datetime: этот же payload уезжает в
+        # WebSocket, где его пакует msgpack (см. get_last_message).
+        self.assertIsInstance(found["last_message"]["created_at"], str)
+
+    def test_empty_thread_has_no_preview(self):
+        self.client.force_authenticate(self.owner)
+        resp = self.client.get("/api/servers")
+        row = next(s for s in resp.data if s["id"] == self.server.id)
+        found = next(c for c in row["channels"] if c["id"] == self.thread.id)
+        self.assertEqual(found["message_count"], 0)
+        self.assertIsNone(found["last_message"])
+
+    def test_regular_channel_has_no_thread_stats(self):
+        found_id = self.channel.id
+        Message.objects.create(
+            channel=self.channel, author=self.owner, content="в канале")
+        self.client.force_authenticate(self.owner)
+        resp = self.client.get("/api/servers")
+        row = next(s for s in resp.data if s["id"] == self.server.id)
+        found = next(c for c in row["channels"] if c["id"] == found_id)
+        self.assertEqual(found["message_count"], 0)
+        self.assertIsNone(found["last_message"])
+
+
+class MessageSearchTests(APITestCase):
+    """Поиск по сообщениям канала/ветки — с теми же правами, что и чтение."""
+
+    def setUp(self):
+        self.owner = User.objects.create_user(username="ms_owner", password="pw12345")
+        self.member = User.objects.create_user(username="ms_member", password="pw12345")
+        self.server = Server.objects.create(name="s", owner=self.owner)
+        for u in (self.owner, self.member):
+            Membership.objects.create(user=u, server=self.server)
+        self.default_role = roles.create_default_role(self.server)
+        self.channel = Channel.objects.create(
+            server=self.server, name="general", kind=Channel.TEXT)
+        Message.objects.create(
+            channel=self.channel, author=self.owner, content="про котиков")
+        Message.objects.create(
+            channel=self.channel, author=self.owner, content="про собак")
+
+    def test_finds_by_substring(self):
+        self.client.force_authenticate(self.member)
+        resp = self.client.get(
+            "/api/channels/{}/search".format(self.channel.id), {"q": "котик"})
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual([m["content"] for m in resp.data], ["про котиков"])
+
+    def test_short_query_rejected(self):
+        self.client.force_authenticate(self.member)
+        resp = self.client.get(
+            "/api/channels/{}/search".format(self.channel.id), {"q": "к"})
+        self.assertEqual(resp.status_code, 400)
+
+    def test_no_access_no_search(self):
+        outsider = User.objects.create_user(username="ms_out", password="pw12345")
+        self.client.force_authenticate(outsider)
+        resp = self.client.get(
+            "/api/channels/{}/search".format(self.channel.id), {"q": "котик"})
+        self.assertEqual(resp.status_code, 403)
+
+    def test_system_notices_are_not_searchable(self):
+        """Их текста в content нет — совпасть они могли бы только пустотой."""
+        thread = Channel.objects.create(
+            server=self.server, name="котики", kind=Channel.THREAD,
+            parent=self.channel, created_by=self.owner)
+        Message.objects.create(
+            channel=self.channel, author=self.owner, content="",
+            system_kind=Message.SYSTEM_THREAD_CREATED, system_thread=thread)
+        self.client.force_authenticate(self.member)
+        resp = self.client.get(
+            "/api/channels/{}/search".format(self.channel.id), {"q": "про"})
+        self.assertTrue(all(
+            m["system_kind"] == "" for m in resp.data))

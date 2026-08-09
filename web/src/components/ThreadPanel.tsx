@@ -1,6 +1,7 @@
 import { MouseEvent as ReactMouseEvent } from 'react'
-import { Archive, ArchiveRestore, Hash, MessagesSquare, X } from 'lucide-react'
+import { Bell, BellOff, Hash, Lock, MessagesSquare, MoreHorizontal, X } from 'lucide-react'
 import { Channel, Conversation, MentionCandidate, Me, Server } from '../api'
+import ThreadSearch from './ThreadSearch'
 import type { useChannelMessages } from '../hooks/useChannelMessages'
 import { ComposerDraft } from '../drafts'
 import { outbox, pendingAsMessage, PendingMessage } from '../outbox'
@@ -35,13 +36,16 @@ export default function ThreadPanel({
   servers,
   conversations,
   canModerate,
-  canArchive,
   canSendVoiceMessages,
   blockedUserIds,
   loadDraft,
   saveDraft,
   onClose,
-  onSetArchived,
+  onToggleMuted,
+  onOpenMenu,
+  searchOpen,
+  onCloseSearch,
+  onJumpToMessage,
   onOpenProfile,
   onUserContextMenu,
 }: {
@@ -57,16 +61,19 @@ export default function ThreadPanel({
   servers: Server[]
   conversations: Conversation[]
   canModerate: boolean
-  /** Показывать ли кнопку «закрыть/вернуть ветку» — автор ветки либо тот, кто
-   * распоряжается каналами/сообщениями (те же три основания проверяет
-   * бэкенд, см. chat.views.ThreadArchive). */
-  canArchive: boolean
   canSendVoiceMessages: boolean
   blockedUserIds: Set<number>
   loadDraft: (key: string) => ComposerDraft | undefined
   saveDraft: (key: string, draft: ComposerDraft) => void
   onClose: () => void
-  onSetArchived: (archived: boolean) => void
+  onToggleMuted: (muted: boolean) => void
+  /** Многоточие в шапке — открыть меню ветки у этой кнопки (см.
+   * ThreadContextMenu; рисует его владелец состояния, а не панель). */
+  onOpenMenu: (anchor: DOMRect) => void
+  searchOpen: boolean
+  onCloseSearch: () => void
+  /** Клик по найденному сообщению — перейти к нему в ленте ветки. */
+  onJumpToMessage: (messageId: number) => void
   onOpenProfile: (user: ProfilePopupUser, e: ReactMouseEvent) => void
   onUserContextMenu: (user: ProfilePopupUser, e: ReactMouseEvent) => void
 }) {
@@ -91,23 +98,33 @@ export default function ThreadPanel({
             </span>
           )}
         </div>
-        {thread.archived && (
+        {thread.locked && (
+          <span className="thread-panel-archived-tag" title="Писать могут только модераторы">
+            <Lock size={10} /> закрыта на запись
+          </span>
+        )}
+        {thread.archived && !thread.locked && (
           <span className="thread-panel-archived-tag">закрыта</span>
         )}
-        {canArchive && (
-          <button
-            type="button"
-            className="thread-panel-action"
-            title={
-              thread.archived
-                ? 'Вернуть ветку из архива'
-                : 'Закрыть ветку — она уйдёт из списка каналов, сообщения останутся'
-            }
-            onClick={() => onSetArchived(!thread.archived)}
-          >
-            {thread.archived ? <ArchiveRestore size={16} /> : <Archive size={16} />}
-          </button>
-        )}
+        {/* Заглушение — отдельной кнопкой, а не пунктом меню: это переключатель
+            с двумя состояниями, и по перечёркнутому колокольчику видно
+            текущее, не открывая меню. */}
+        <button
+          type="button"
+          className={`thread-panel-action ${thread.my_settings.muted ? 'active' : ''}`}
+          title={thread.my_settings.muted ? 'Включить уведомления ветки' : 'Заглушить ветку'}
+          onClick={() => onToggleMuted(!thread.my_settings.muted)}
+        >
+          {thread.my_settings.muted ? <BellOff size={16} /> : <Bell size={16} />}
+        </button>
+        <button
+          type="button"
+          className="thread-panel-action"
+          title="Ещё"
+          onClick={(e) => onOpenMenu(e.currentTarget.getBoundingClientRect())}
+        >
+          <MoreHorizontal size={18} />
+        </button>
         <button
           type="button"
           className="thread-panel-action"
@@ -117,6 +134,17 @@ export default function ThreadPanel({
           <X size={18} />
         </button>
       </header>
+
+      {/* Поиск и закреплённые занимают место ленты, а не наслаиваются на неё:
+          в 420px колонке всплывающая панель накрыла бы ровно то, ради чего её
+          открыли. Возврат — крестиком в их собственной шапке. */}
+      {searchOpen && (
+        <ThreadSearch
+          channelId={thread.id}
+          onClose={onCloseSearch}
+          onPick={onJumpToMessage}
+        />
+      )}
 
       <MessageList
         messages={[

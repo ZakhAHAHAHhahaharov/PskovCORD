@@ -27,7 +27,7 @@ from .models import (
     Attachment, Channel, ChannelMemberSettings, Conversation, ConversationMessage,
     ConversationParticipant, FriendNickname, Membership, Message, ProfileNote, Role, Server,
     ServerAuditLog, ServerBan, ServerEmoji, ServerInvite, ServerJoinRequest, Sticker, StickerPack,
-    ChannelReadState, UserRelationState,
+    ChannelReadState, ThreadMember, UserRelationState,
     MAX_ATTACHMENT_BYTES, MAX_EMOJI_BYTES, MAX_EMOJI_PER_SERVER,
     MAX_VOICE_MS, MAX_WAVEFORM_POINTS,
     MAX_STICKER_NAME_LEN, MAX_STICKER_PACK_NAME_LEN, MAX_STICKER_PACKS_PER_SERVER,
@@ -213,6 +213,50 @@ def server_context(request, servers):
         "call_states": presence.call_states(voice_channel_ids),
         "my_memberships": my_memberships,
         "channel_settings": channel_settings,
+        **thread_stats_context(request, all_channels),
+    }
+
+
+def thread_stats_context(request, channels) -> dict:
+    """Счётчик сообщений, последнее сообщение и «участвую ли я» для ВСЕХ веток
+    списка — тремя запросами на весь список вместо трёх на каждую ветку (см.
+    ChannelSerializer.get_message_count/get_last_message/get_joined, тот же
+    приём, что и у channel_settings выше).
+
+    Пустой словарь, если веток в списке нет вовсе, — тогда сериализатор просто
+    не найдёт ключей в контексте и обойдётся без них (для не-веток он всё равно
+    возвращает нули, не заглядывая в базу)."""
+    thread_ids = [c.id for c in channels if c.kind == Channel.THREAD]
+    if not thread_ids:
+        return {}
+    counts = {
+        row["channel_id"]: row["n"]
+        for row in Message.objects.filter(channel_id__in=thread_ids)
+        .values("channel_id").annotate(n=Count("id"))
+    }
+    # Последнее сообщение каждой ветки за два запроса — тот же приём, что и у
+    # _last_messages для бесед выше.
+    latest_ids = (
+        Message.objects.filter(channel_id__in=thread_ids)
+        .values("channel_id").annotate(last_id=Max("id"))
+        .values_list("last_id", flat=True)
+    )
+    last_messages = {
+        m.channel_id: m
+        for m in Message.objects.filter(id__in=list(latest_ids))
+        .select_related("author")
+    }
+    joined_ids = set()
+    if request is not None and request.user and request.user.is_authenticated:
+        joined_ids = set(
+            ThreadMember.objects.filter(
+                user=request.user, thread_id__in=thread_ids,
+            ).values_list("thread_id", flat=True)
+        )
+    return {
+        "thread_counts": counts,
+        "thread_last_messages": last_messages,
+        "joined_thread_ids": joined_ids,
     }
 
 
@@ -2146,11 +2190,24 @@ class ChannelDetail(APIView):
     незачем, пока такой возможности не попросят отдельно."""
 
     def patch(self, request, channel_id):
-        channel = get_object_or_404(Channel, id=channel_id)
+        channel = get_object_or_404(
+            Channel.objects.select_related("server", "parent"), id=channel_id)
         server = channel.server
-        denied = _require_permission(request, server, "manage_channels")
-        if denied:
-            return denied
+        # У ветки своё правило: её автор переименовывает своё же обсуждение без
+        # manage_channels («Редактировать ветку» в меню, см. _can_manage_thread
+        # — там же почему основания те же, что у закрытия и блокировки).
+        # Остальные поля ветки — по-прежнему только управляющим каналами:
+        # приватность и допуски у неё наследуются от родителя, и трогать их
+        # отсюда нечего.
+        thread_rename = (
+            channel.kind == Channel.THREAD
+            and set(request.data) <= {"name"}
+            and _can_manage_thread(request.user, channel)
+        )
+        if not thread_rename:
+            denied = _require_permission(request, server, "manage_channels")
+            if denied:
+                return denied
         name = request.data.get("name")
         status_text = request.data.get("status")
         slowmode_raw = request.data.get("slowmode_seconds")
@@ -2284,10 +2341,25 @@ class ChannelThreads(APIView):
     канале — она не даёт: то же место, те же собеседники, тот же доступ (см.
     chat.permissions.can_see_channel).
 
-    Список веток отдельной ручкой не отдаётся: ветки — обычные каналы сервера
-    и приезжают вместе с ним (см. ServerSerializer.get_channels, там же про
-    архивные).
+    GET по тому же адресу — ВСЕ ветки канала, включая закрытые и те, где ты не
+    участвуешь: это «Показать все ветки» из системного сообщения. Со списком
+    серверов приезжают не все — сайдбар показывает только свои (см.
+    ThreadMember), а найти чужое обсуждение нужно уметь. Приватные, куда не
+    звали, не попадают и сюда — их отсекает та же can_see_channel.
     """
+
+    def get(self, request, channel_id):
+        channel = get_object_or_404(
+            Channel.objects.select_related("server"), id=channel_id)
+        denied = _require_channel_access(request, channel)
+        if denied:
+            return denied
+        threads = list(
+            channel.threads.select_related("server", "parent").order_by("-id"))
+        visible = [t for t in threads if can_see_channel(request.user, t)]
+        context = {"request": request, **thread_stats_context(request, visible)}
+        return Response(
+            ChannelSerializer(visible, many=True, context=context).data)
 
     def post(self, request, channel_id):
         channel = get_object_or_404(
@@ -2341,6 +2413,23 @@ class ChannelThreads(APIView):
             # родителя ещё до этого поля) — флаг копируется только ради
             # адресной рассылки событий, см. _broadcast_channel_event.
             is_private=channel.is_private,
+            # Приватная ветка (invite_only) — своя, отдельная от приватности
+            # канала: в неё пускают поимённо, см. Channel.invite_only.
+            invite_only=bool(request.data.get("invite_only")),
+        )
+        # Автор участвует в своей ветке с самого начала: иначе она не попала бы
+        # к нему же в сайдбар (там только свои, см. ThreadMember), а в приватную
+        # он и вовсе потерял бы доступ сразу после создания.
+        ThreadMember.objects.get_or_create(thread=thread, user=request.user)
+        # Запись в РОДИТЕЛЬСКОМ канале «X начинает ветку: имя» — так ветку
+        # видно тем, кто в неё не заходил: в сайдбаре чужих веток нет. Обычное
+        # сообщение ленты, только системное (см. Message.system_kind).
+        notice = Message.objects.create(
+            channel=channel,
+            author=request.user,
+            content="",
+            system_kind=Message.SYSTEM_THREAD_CREATED,
+            system_thread=thread,
         )
         data = ChannelSerializer(thread, context={"request": request}).data
         _broadcast_channel_event(thread, {
@@ -2348,6 +2437,16 @@ class ChannelThreads(APIView):
             "server_id": channel.server_id,
             "channel": _channel_broadcast_payload(data),
         })
+        # Системная запись уезжает обычным message_create — ленте всё равно,
+        # кем сообщение написано, ей важно только куда.
+        async_to_sync(get_channel_layer().group_send)(
+            f"server_{channel.server_id}",
+            {"type": "broadcast", "payload": {
+                "op": "message_create",
+                "message": MessageSerializer(notice).data,
+                "nonce": None,
+            }},
+        )
         return Response(data, status=201)
 
 
@@ -2398,6 +2497,165 @@ class ThreadArchive(APIView):
         return Response(data)
 
 
+def _thread_or_400(channel_id):
+    """(ветка, None) либо (None, Response 400) — общая преамбула ручек ниже:
+    все они работают ТОЛЬКО с ветками, и обычный канал сюда попадать не
+    должен."""
+    thread = get_object_or_404(
+        Channel.objects.select_related("server", "parent"), id=channel_id)
+    if thread.kind != Channel.THREAD:
+        return None, Response({"detail": "Это не ветка."}, status=400)
+    return thread, None
+
+
+def _can_manage_thread(user, thread, perms=None) -> bool:
+    """Может ли распоряжаться веткой: автор — своей, модератор — любой.
+
+    Один и тот же набор оснований у закрытия, блокировки и переименования:
+    все три — «распоряжаться обсуждением», и разводить их по разным правам
+    значило бы просить пользователя помнить, какое из трёх действий почему-то
+    требует другого допуска.
+    """
+    from . import roles as roles_module
+
+    if thread.created_by_id == user.id:
+        return True
+    if perms is None:
+        perms = roles_module.permissions_for(user, thread.server)
+    return bool(perms.get("manage_channels") or perms.get("delete_messages"))
+
+
+class ThreadMembership(APIView):
+    """POST/DELETE /api/channels/<id>/membership — «Присоединиться к ветке» и
+    «Покинуть ветку».
+
+    Присоединение обычно не требуется вовсе: написал в ветку — уже участник
+    (см. chat.consumers._create_message). Явная кнопка нужна тем, кто хочет
+    следить за обсуждением молча, и тем, кого позвали в приватную ветку.
+
+    В приватную ветку (Channel.invite_only) самому не вступить: _require_
+    channel_access её просто не откроет тому, кого не добавили, — туда
+    приглашают через ThreadMembers ниже.
+    """
+
+    def post(self, request, channel_id):
+        thread, error = _thread_or_400(channel_id)
+        if error:
+            return error
+        denied = _require_channel_access(request, thread)
+        if denied:
+            return denied
+        ThreadMember.objects.get_or_create(thread=thread, user=request.user)
+        return Response(
+            ChannelSerializer(thread, context={"request": request}).data)
+
+    def delete(self, request, channel_id):
+        thread, error = _thread_or_400(channel_id)
+        if error:
+            return error
+        denied = _require_channel_access(request, thread)
+        if denied:
+            return denied
+        ThreadMember.objects.filter(thread=thread, user=request.user).delete()
+        return Response(
+            ChannelSerializer(thread, context={"request": request}).data)
+
+
+class ThreadMembers(APIView):
+    """GET/POST /api/channels/<id>/members — кто в ветке и добавить туда людей.
+
+    Добавлять нужно только в приватную ветку: в обычную человек заходит сам.
+    Право на это — то же, что и на остальное распоряжение веткой
+    (см. _can_manage_thread): позвал обсуждение — тебе и решать состав.
+
+    Позвать можно только участника сервера, которому виден РОДИТЕЛЬСКИЙ канал:
+    иначе приватной веткой можно было бы протащить человека в разговор
+    канала, куда его не пускают.
+    """
+
+    def get(self, request, channel_id):
+        thread, error = _thread_or_400(channel_id)
+        if error:
+            return error
+        denied = _require_channel_access(request, thread)
+        if denied:
+            return denied
+        members = ThreadMember.objects.filter(
+            thread=thread).select_related("user")
+        return Response(UserSerializer([m.user for m in members], many=True).data)
+
+    def post(self, request, channel_id):
+        thread, error = _thread_or_400(channel_id)
+        if error:
+            return error
+        denied = _require_channel_access(request, thread)
+        if denied:
+            return denied
+        if not _can_manage_thread(request.user, thread):
+            return Response(
+                {"detail": "Добавлять участников может автор ветки или модератор."},
+                status=403)
+        user_ids = request.data.get("user_ids")
+        if not isinstance(user_ids, list):
+            return Response({"detail": "user_ids — список id."}, status=400)
+        added = []
+        for candidate in User.objects.filter(
+            memberships__server=thread.server, id__in=user_ids,
+        ):
+            if not can_see_channel(candidate, thread.parent):
+                continue
+            ThreadMember.objects.get_or_create(thread=thread, user=candidate)
+            added.append(candidate)
+        # Приватная ветка у добавленного до этого момента не существовала
+        # вовсе — шлём ему channel_create поимённо, иначе он увидел бы её
+        # только после перезагрузки страницы.
+        payload = {
+            "op": "channel_create",
+            "server_id": thread.server_id,
+            "channel": _channel_broadcast_payload(
+                ChannelSerializer(thread).data),
+        }
+        channel_layer = get_channel_layer()
+        for candidate in added:
+            async_to_sync(channel_layer.group_send)(
+                f"user_{candidate.id}", {"type": "broadcast", "payload": payload})
+        return Response(UserSerializer(added, many=True).data, status=201)
+
+
+class ThreadLock(APIView):
+    """POST /api/channels/<id>/lock {"locked": bool} — заблокировать ветку.
+
+    Сильнее архива: закрытая ветка оживает от нового сообщения, в
+    заблокированную писать нельзя вовсе (см. chat.consumers._create_message),
+    и сама она не откроется. Поэтому и право строже — только модератор:
+    автору своей ветки хватает «закрыть», а блокировка это уже модерация
+    чужого разговора.
+    """
+
+    def post(self, request, channel_id):
+        thread, error = _thread_or_400(channel_id)
+        if error:
+            return error
+        denied = _require_channel_access(request, thread)
+        if denied:
+            return denied
+        perms = roles.permissions_for(request.user, thread.server)
+        if not (perms.get("manage_channels") or perms.get("delete_messages")):
+            return Response(
+                {"detail": "Заблокировать ветку может только модератор."}, status=403)
+        locked = bool(request.data.get("locked", True))
+        if thread.locked != locked:
+            thread.locked = locked
+            thread.save(update_fields=["locked"])
+        data = ChannelSerializer(thread, context={"request": request}).data
+        _broadcast_channel_event(thread, {
+            "op": "channel_update",
+            "server_id": thread.server_id,
+            "channel": _channel_broadcast_payload(data),
+        })
+        return Response(data)
+
+
 def _hide_old_history(request, server, qs):
     """Режет выборку по праву read_message_history: без него участник видит
     только то, что пришло с момента ТЕКУЩЕГО входа в сеть (см.
@@ -2427,6 +2685,54 @@ class ChannelMessages(APIView):
         qs = _hide_old_history(request, channel.server, qs)
         messages = _paginate_messages(request, qs)
         return Response(MessageSerializer(messages, many=True).data)
+
+
+# Сколько найденного отдавать разом. Панель результатов — способ найти одно
+# сообщение и перейти к нему, а не выгрузка переписки: за пределами этой сотни
+# правильный ответ — уточнить запрос, а не листать дальше.
+SEARCH_LIMIT = 100
+# Совсем короткий запрос находит половину канала и ничего этим не сообщает.
+MIN_SEARCH_QUERY = 2
+
+
+class ChannelMessageSearch(APIView):
+    """GET /api/channels/<id>/search?q=… — поиск по сообщениям канала или ветки
+    («Поиск» в меню ветки, см. web ThreadPanel).
+
+    Ищет по вхождению подстроки, без морфологии и ранжирования: на масштабе
+    сервера для друзей это честно отвечает на вопрос «где я это писал», а
+    полнотекстовый индекс с разбором словоформ здесь был бы инфраструктурой
+    ради инфраструктуры.
+
+    Права те же, что у чтения истории этого канала: и допуск к самому каналу
+    (в том числе приватная ветка), и read_message_history — иначе поиск стал бы
+    дырой, через которую видно то, чего не видно в ленте. Заблокированных
+    авторов выдача тоже не показывает.
+    """
+
+    def get(self, request, channel_id):
+        channel = get_object_or_404(
+            Channel.objects.select_related("server", "parent"), id=channel_id)
+        denied = _require_channel_access(request, channel)
+        if denied:
+            return denied
+        query = (request.query_params.get("q") or "").strip()
+        if len(query) < MIN_SEARCH_QUERY:
+            return Response(
+                {"detail": f"Запрос — минимум {MIN_SEARCH_QUERY} символа."},
+                status=400)
+        qs = channel.messages.select_related(
+            "author", "reply_to__author"
+        ).prefetch_related("attachments", "reactions").filter(
+            content__icontains=query)
+        # Системные записи («X начинает ветку») в выдачу не попадают: их текста
+        # в content нет вовсе, он собирается на клиенте, и совпасть они могут
+        # только пустой строкой.
+        qs = qs.exclude(system_kind=Message.SYSTEM_THREAD_CREATED)
+        qs = _hide_blocked(request.user, qs)
+        qs = _hide_old_history(request, channel.server, qs)
+        found = list(qs.order_by("-created_at", "-id")[:SEARCH_LIMIT])
+        return Response(MessageSerializer(found, many=True).data)
 
 
 class ChannelMemberSettingsView(APIView):

@@ -13,6 +13,7 @@ import { ComposerDraft } from '../drafts'
 import { useNickname } from '../nicknames'
 import { PendingMessage } from '../outbox'
 import ThreadPanel from './ThreadPanel'
+import ThreadContextMenu from './ThreadContextMenu'
 import NewConversationModal from './NewConversationModal'
 import IncomingCallBanner from './IncomingCallBanner'
 import DiscoverModal from './DiscoverModal'
@@ -700,17 +701,77 @@ export default function AppShellOverlays({
             servers={servers}
             conversations={conv.conversations}
             canModerate={canDeleteMessages}
-            canArchive={canArchive}
             canSendVoiceMessages={canSendVoiceMessages}
             blockedUserIds={blockedUserIds}
             loadDraft={loadDraft}
             saveDraft={saveDraft}
             onClose={() => server.setOpenThreadId(null)}
-            onSetArchived={(archived) =>
-              void server.handleSetThreadArchived(thread, archived)
+            onToggleMuted={(muted) =>
+              void server.handleSetChannelMute(thread, muted ? 'forever' : null)
             }
+            onOpenMenu={(anchor) =>
+              server.setThreadContextMenu({
+                id: thread.id,
+                // Меню разворачивается ПОД кнопкой и прижимается к её правому
+                // краю — само оно умеет только не вылезать за экран.
+                x: anchor.right - 240,
+                y: anchor.bottom + 4,
+                fromPanel: true,
+              })
+            }
+            searchOpen={server.threadSearchOpen}
+            onCloseSearch={() => server.setThreadSearchOpen(false)}
+            onJumpToMessage={(messageId) => onJumpToMessage(thread.id, messageId)}
             onOpenProfile={openProfilePopup}
             onUserContextMenu={onUserContextMenu}
+          />
+        )
+      })()}
+
+      {/* Меню ветки — одно на все места, откуда её открывают правым кликом
+          (плашка под сообщением, строка в сайдбаре, ссылка в системной
+          записи) и на многоточие в шапке панели. Ветку резолвим из списка
+          каналов при рендере, а не таскаем снимок: её могли переименовать или
+          закрыть, пока меню открыто. */}
+      {server.threadContextMenu && (() => {
+        const menu = server.threadContextMenu
+        const thread = server.channels.find((c) => c.id === menu.id)
+        if (!thread || !server.currentServer) return null
+        const perms = server.currentServer.my_permissions
+        const moderate = !!(perms?.manage_channels || canDeleteMessages)
+        const abilities = {
+          manage: thread.created_by === user.id || moderate,
+          moderate,
+        }
+        const close = () => server.setThreadContextMenu(null)
+        return (
+          <ThreadContextMenu
+            thread={thread}
+            x={menu.x}
+            y={menu.y}
+            abilities={abilities}
+            onClose={close}
+            onOpen={() => server.handleOpenThread(thread)}
+            onMarkRead={() => server.handleMarkChannelRead(thread)}
+            onToggleJoin={() => void server.handleToggleThreadJoin(thread)}
+            onToggleArchived={() =>
+              void server.handleSetThreadArchived(thread, !thread.archived)
+            }
+            onToggleLocked={() =>
+              void server.handleSetThreadLocked(thread, !thread.locked)
+            }
+            onRename={() => server.setRenameThreadId(thread.id)}
+            onCopyLink={() => void server.handleCopyThreadLink(thread)}
+            onMute={() =>
+              void server.handleSetChannelMute(
+                thread, thread.my_settings.muted ? null : 'forever')
+            }
+            onDelete={() => void server.handleDeleteChannel(thread)}
+            // Три пункта ниже — только у меню из шапки уже открытой панели.
+            onExpand={menu.fromPanel ? () => server.handleSelectChannel(thread) : undefined}
+            onSearch={
+              menu.fromPanel ? () => server.setThreadSearchOpen(true) : undefined
+            }
           />
         )
       })()}

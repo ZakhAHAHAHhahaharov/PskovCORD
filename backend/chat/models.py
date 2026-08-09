@@ -631,12 +631,64 @@ class Channel(models.Model):
         on_delete=models.SET_NULL,
         related_name="created_threads",
     )
+    # Приватная ветка — видна только тем, кого в неё позвали (ThreadMember), и
+    # управляющим каналами. Это НЕ то же самое, что is_private у канала: та
+    # приватность решается ролями и списком допущенных, а здесь допуск ровно
+    # один — участие в самой ветке. Отдельным полем, а не переиспользованием
+    # is_private, потому что is_private у ветки занят под другое: он копируется
+    # с родителя и служит только адресной рассылке событий (см.
+    # chat.views.ChannelThreads).
+    #
+    # Приватность ветки НЕ отменяет приватности канала: ветка сперва должна
+    # быть видна по родителю, и только потом проверяется эта (см.
+    # chat.permissions.can_see_channel).
+    invite_only = models.BooleanField(default=False)
+    # Заблокированная ветка: читать можно, писать — только тем, кто
+    # распоряжается сообщениями. В отличие от archived, сама собой не
+    # снимается: закрытая ветка оживает от нового сообщения, а
+    # заблокированная на то и заблокирована, чтобы этого не произошло.
+    locked = models.BooleanField(default=False)
 
     class Meta:
         ordering = ["position", "id"]
 
     def __str__(self) -> str:
         return f"{self.server.name}#{self.name}"
+
+
+class ThreadMember(models.Model):
+    """Кто участвует в ветке.
+
+    Участие решает две вещи. Первая — что показывать в сайдбаре: там висят
+    только СВОИ ветки, как в Discord, а остальные достаются из списка «Все
+    ветки» (см. chat.views.ChannelThreadList). Без этого сайдбар канала с
+    десятком обсуждений превращался бы в стену, где своё не найти.
+
+    Вторая — доступ к приватной ветке (Channel.invite_only): туда пускают
+    поимённо, и эта же строка и есть пропуск.
+
+    Заводится сама: автор ветки участвует в ней с момента создания, остальные
+    присоединяются, написав в неё (см. chat.consumers._create_message) — или
+    явно, кнопкой «Присоединиться к ветке». Уйти можно тоже явно, и тогда
+    строка удаляется: «не участвую» — это её отсутствие, а не флаг, ровно как
+    у ChannelMemberSettings «стандартные настройки».
+    """
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+        related_name="thread_memberships")
+    thread = models.ForeignKey(
+        Channel, on_delete=models.CASCADE, related_name="thread_members")
+    joined_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["user", "thread"], name="unique_thread_member"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.user} in {self.thread}"
 
 
 class ChannelMemberSettings(models.Model):
@@ -724,6 +776,33 @@ class Message(models.Model):
     # именно по нему — «последнее закреплённое сверху», как в Discord, а не
     # по дате написания самого сообщения.
     pinned_at = models.DateTimeField(null=True, blank=True)
+
+    # --- системные сообщения -------------------------------------------------
+    # Пусто — обычное сообщение, написанное человеком; так у подавляющего
+    # большинства строк, поэтому дефолт именно такой. Непустое — служебная
+    # запись, которую никто не писал: её текст собирает клиент из полей
+    # (см. web MessageList), а не берёт из content — иначе он был бы намертво
+    # прибит к языку, на котором его сочинили в момент создания.
+    #
+    # Отдельным полем на Message, а не отдельной моделью: системная запись
+    # стоит в ленте наравне с обычными, участвует в той же пагинации и в том
+    # же курсоре прочтения — держать её в стороне значило бы сливать два
+    # источника при каждой выдаче истории.
+    SYSTEM_THREAD_CREATED = "thread_created"
+    SYSTEM_KIND_CHOICES = [(SYSTEM_THREAD_CREATED, "Создана ветка")]
+    system_kind = models.CharField(
+        max_length=20, blank=True, default="", choices=SYSTEM_KIND_CHOICES)
+    # Ветка, о которой сообщает системная запись (у SYSTEM_THREAD_CREATED).
+    # CASCADE: удалили ветку — запись «создана ветка» ссылаться больше не на
+    # что и смысла не имеет, в отличие от source_message у самой ветки (там
+    # SET_NULL: обсуждение переживает своё исходное сообщение).
+    system_thread = models.ForeignKey(
+        Channel,
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        related_name="creation_notices",
+    )
 
     class Meta:
         ordering = ["created_at", "id"]

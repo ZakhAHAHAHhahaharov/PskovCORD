@@ -18,6 +18,11 @@ from .models import (
 # в обход клиента, а не рабочий предел.
 MAX_ICON_BYTES = 1_500_000
 
+# Сколько символов последнего сообщения ветки уезжает в плашку под исходным
+# сообщением (см. ChannelSerializer.get_last_message). Строка в плашке одна,
+# и всё сверх неё всё равно обрезается многоточием уже на экране.
+THREAD_PREVIEW_CHARS = 120
+
 # Сколько «особенностей»/правил вообще имеет смысл хранить — не техническое
 # ограничение, а защита от бесконечного списка в JSONField.
 MAX_TAGS = 12
@@ -36,6 +41,11 @@ class ChannelSerializer(serializers.ModelSerializer):
     allowed_role_ids = serializers.SerializerMethodField()
     allowed_user_ids = serializers.SerializerMethodField()
     my_settings = serializers.SerializerMethodField()
+    # Для плашки ветки под исходным сообщением (см. web MessageList): сколько
+    # в ней сообщений и какое последнее. Только у веток.
+    message_count = serializers.SerializerMethodField()
+    last_message = serializers.SerializerMethodField()
+    joined = serializers.SerializerMethodField()
 
     class Meta:
         model = Channel
@@ -45,8 +55,71 @@ class ChannelSerializer(serializers.ModelSerializer):
                   "allowed_user_ids", "invites_paused", "my_settings",
                   # Только у веток (kind=thread), у остальных каналов пусто —
                   # см. Channel.parent/source_message/archived/created_by.
-                  "parent", "source_message", "archived", "created_by"]
-        read_only_fields = ["server", "parent", "source_message", "created_by"]
+                  "parent", "source_message", "archived", "created_by",
+                  "invite_only", "locked",
+                  "message_count", "last_message", "joined"]
+        read_only_fields = ["server", "parent", "source_message", "created_by",
+                            "message_count", "last_message", "joined"]
+
+    def get_message_count(self, obj):
+        """Сколько сообщений в ветке — цифра в плашке «N сообщений ›».
+
+        thread_counts в контексте — заранее посчитанные счётчики на весь
+        список (см. chat.views.thread_stats_context): без него на каждую ветку
+        уходил бы свой COUNT. Контекста нет (одиночная сериализация после
+        создания/правки) — считаем на месте, это один запрос на одну ветку.
+        """
+        if obj.kind != Channel.THREAD:
+            return 0
+        counts = self.context.get("thread_counts")
+        if counts is not None:
+            return counts.get(obj.id, 0)
+        return obj.messages.count()
+
+    def get_last_message(self, obj):
+        """Последнее сообщение ветки — превью в плашке (кто и что написал).
+
+        Обрезано по длине: в плашку помещается одна строка, а тащить в список
+        каналов сервера полные тексты со всеми вложениями и реакциями значило
+        бы раздувать payload ради превью.
+        """
+        if obj.kind != Channel.THREAD:
+            return None
+        latest = self.context.get("thread_last_messages")
+        message = (
+            latest.get(obj.id) if latest is not None
+            else obj.messages.select_related("author").order_by("-id").first()
+        )
+        if message is None:
+            return None
+        return {
+            "id": message.id,
+            "author": UserSerializer(message.author).data,
+            "content": message.content[:THREAD_PREVIEW_CHARS],
+            # Через поле DRF, а не сырым datetime: этот словарь собран руками, и
+            # автоматического приведения типов у него нет — а payload уезжает не
+            # только в JSON-ответ, но и в WebSocket, где его пакует msgpack,
+            # datetime не умеющий вовсе (channels_redis). Заодно формат даты
+            # выходит тот же, что у всех остальных дат API.
+            "created_at": serializers.DateTimeField().to_representation(
+                message.created_at),
+        }
+
+    def get_joined(self, obj):
+        """Участвую ли я в этой ветке — от этого зависит, висит ли она в
+        сайдбаре (там только свои, см. chat.models.ThreadMember) и что
+        предлагает меню: «Присоединиться» или «Покинуть»."""
+        if obj.kind != Channel.THREAD:
+            return False
+        joined_ids = self.context.get("joined_thread_ids")
+        if joined_ids is not None:
+            return obj.id in joined_ids
+        request = self.context.get("request")
+        if request is None or not request.user or not request.user.is_authenticated:
+            return False
+        from .models import ThreadMember
+
+        return ThreadMember.objects.filter(thread=obj, user=request.user).exists()
 
     def _state(self, obj):
         """Состояние звонка канала. Если вызывающий заранее сложил в контекст
@@ -624,6 +697,17 @@ class MessageReplySerializer(serializers.ModelSerializer):
         fields = ["id", "author", "content"]
 
 
+class ThreadNoticeSerializer(serializers.ModelSerializer):
+    """Ветка внутри системной записи «X начинает ветку» — только то, чем эта
+    строка кликабельна: имя на экране и id, чтобы открыть панель. Полный
+    ChannelSerializer сюда не годится — он тянет за собой состояние звонка,
+    списки допусков и превью последнего сообщения ради одной ссылки."""
+
+    class Meta:
+        model = Channel
+        fields = ["id", "name", "archived"]
+
+
 class MessageSerializer(serializers.ModelSerializer):
     author = UserSerializer(read_only=True)
     reply_to = MessageReplySerializer(read_only=True)
@@ -634,12 +718,19 @@ class MessageSerializer(serializers.ModelSerializer):
     # незачем знать, что внутри лежит момент закрепления.
     pinned = serializers.BooleanField(read_only=True)
 
+    # Системная запись («X начинает ветку»): пусто у обычных сообщений. Текст
+    # собирает клиент из этих полей, а не берёт из content — иначе он был бы
+    # прибит к языку, на котором его сочинили в момент создания (см.
+    # chat.models.Message.system_kind).
+    system_thread = ThreadNoticeSerializer(read_only=True)
+
     class Meta:
         model = Message
         fields = ["id", "channel", "author", "content", "reply_to",
                   "attachments", "reactions", "created_at", "edited_at",
-                  "pinned"]
-        read_only_fields = ["author", "created_at", "edited_at", "pinned"]
+                  "pinned", "system_kind", "system_thread"]
+        read_only_fields = ["author", "created_at", "edited_at", "pinned",
+                            "system_kind", "system_thread"]
 
     def get_reactions(self, obj):
         return reactions_payload(obj.reactions.all())

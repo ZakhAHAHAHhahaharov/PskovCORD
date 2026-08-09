@@ -6,7 +6,9 @@ import {
   AlertCircle, Check, ChevronDown, ChevronRight, Clock, MessagesSquare, Pin, PinOff,
   Reply, Pencil, RotateCw, SmilePlus, Trash2,
 } from 'lucide-react'
-import { Channel, ChatMessageBase, Conversation, MentionCandidate, Server } from '../api'
+import {
+  Channel, ChatMessageBase, Conversation, MentionCandidate, MessageSystemKind, Server,
+} from '../api'
 import { useContextMenuState } from '../contextMenuStack'
 import { escapeRegExp, WORD_CHAR } from '../mentions'
 import { styledNameProps } from '../nameStyle'
@@ -226,6 +228,39 @@ function renderContent(
 export type ListMessage = ChatMessageBase & {
   pendingNonce?: string
   deliveryStatus?: DeliveryStatus
+  /** Системная запись («X начинает ветку») — только у сообщений СЕРВЕРА (см.
+   * api.Message). В личке/группе их не бывает вовсе, поэтому поля
+   * необязательные: тот же список рисует и те, и другие. */
+  system_kind?: MessageSystemKind
+  system_thread?: { id: number; name: string; archived: boolean } | null
+}
+
+/** Русское склонение по числу: «1 сообщение», «2 сообщения», «5 сообщений».
+ * Своё, а не Intl.PluralRules: правило тут одно и на три формы, а тащить ради
+ * него локаль-зависимый API с его собственными названиями категорий («one»,
+ * «few», «many») — больше кода, чем самого правила. */
+function plural(n: number, one: string, few: string, many: string): string {
+  const mod100 = n % 100
+  if (mod100 >= 11 && mod100 <= 14) return many
+  const mod10 = n % 10
+  if (mod10 === 1) return one
+  if (mod10 >= 2 && mod10 <= 4) return few
+  return many
+}
+
+/** Насколько давно написано — «1 мин. назад» под плашкой ветки. Крупнее суток
+ * переходим на дату: «43 дн. назад» человек всё равно переводит в календарь
+ * сам. */
+function formatRelative(iso: string): string {
+  const diff = Date.now() - new Date(iso).getTime()
+  const minutes = Math.floor(diff / 60000)
+  if (minutes < 1) return 'только что'
+  if (minutes < 60) return `${minutes} мин. назад`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `${hours} ч. назад`
+  return new Date(iso).toLocaleDateString('ru-RU', {
+    day: '2-digit', month: '2-digit', year: 'numeric',
+  })
 }
 
 function isSameDay(a: Date, b: Date): boolean {
@@ -309,8 +344,11 @@ export default function MessageList({
   servers,
   conversations,
   threadOf,
+  threadById,
   onOpenThread,
   onCreateThread,
+  onThreadContextMenu,
+  onShowAllThreads,
 }: {
   messages: ListMessage[]
   currentUserId: number
@@ -377,12 +415,20 @@ export default function MessageList({
    * рисуется плашка «Ветка: имя» (как в Discord). Не задан — веток здесь нет
    * вовсе (личка/группа). */
   threadOf?: (messageId: number) => Channel | undefined
+  /** Ветка по её id — для системной записи «X начинает ветку»: её собственный
+   * снимок ветки сделан в момент создания, а показывать надо текущее имя. */
+  threadById?: (threadId: number) => Channel | undefined
   /** Клик по плашке — открыть ветку. */
   onOpenThread?: (thread: Channel) => void
   /** «Создать ветку» в контекстном меню сообщения. Не задан — пункта нет:
    * в личке/группе веток не бывает, а внутри самой ветки её не завести
    * (см. backend ChannelThreads). */
   onCreateThread?: (message: ListMessage) => void
+  /** Правый клик по плашке ветки — её контекстное меню (присоединиться,
+   * закрыть, переименовать и т.д., см. ThreadContextMenu). */
+  onThreadContextMenu?: (thread: Channel, e: ReactMouseEvent) => void
+  /** «Показать все ветки» в системной записи о создании ветки. */
+  onShowAllThreads?: () => void
 }) {
   const bottomRef = useRef<HTMLDivElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
@@ -643,6 +689,79 @@ export default function MessageList({
             ? 'delivered'
             : null
         const rowKey = m.pendingNonce ?? m.id
+        // Системная запись — своя строка: ни аватарки, ни ховер-действий, ни
+        // реакций. Это не чьё-то высказывание, а отметка о событии в канале,
+        // и вести себя как сообщение она не должна (см. Message.system_kind).
+        if (m.system_kind === 'thread_created') {
+          return (
+            <Fragment key={rowKey}>
+              {showDateDivider && (
+                <div className="date-divider">
+                  <span className="date-divider-line" />
+                  <span className="date-divider-label">
+                    {formatDateSeparator(m.created_at)}
+                  </span>
+                  <span className="date-divider-line" />
+                </div>
+              )}
+              <div className="message-system-row" data-message-id={m.id}>
+                <span className="message-system-icon">
+                  <MessagesSquare size={15} />
+                </span>
+                <span className="message-system-text">
+                  <span className="message-system-author">
+                    {displayNameOf(m.author)}
+                  </span>{' '}
+                  начинает ветку:{' '}
+                  {(() => {
+                    if (!m.system_thread) return null
+                    // Ветку берём из общего списка каналов: там она свежая
+                    // (могли переименовать или закрыть), а снимок внутри самой
+                    // записи сделан в момент создания и с тех пор не менялся.
+                    // Не нашлась — значит доступа к ней у нас нет (приватная,
+                    // куда не звали): показываем название без ссылки.
+                    const live = threadById?.(m.system_thread.id)
+                    if (!live || !onOpenThread) {
+                      return (
+                        <span className="message-system-thread-name">
+                          {m.system_thread.name}
+                        </span>
+                      )
+                    }
+                    return (
+                      <button
+                        type="button"
+                        className="message-system-link"
+                        onClick={() => onOpenThread(live)}
+                        onContextMenu={
+                          onThreadContextMenu
+                            ? (e) => {
+                                e.preventDefault()
+                                onThreadContextMenu(live, e)
+                              }
+                            : undefined
+                        }
+                      >
+                        {live.name}
+                      </button>
+                    )
+                  })()}
+                  {'. '}
+                  {onShowAllThreads && (
+                    <button
+                      type="button"
+                      className="message-system-link"
+                      onClick={onShowAllThreads}
+                    >
+                      Показать все ветки
+                    </button>
+                  )}
+                </span>
+                <span className="message-system-time">{formatTime(m.created_at)}</span>
+              </div>
+            </Fragment>
+          )
+        }
         return (
           <Fragment key={rowKey}>
             {showDateDivider && (
@@ -768,24 +887,69 @@ export default function MessageList({
               {(() => {
                 const thread = threadOf?.(m.id)
                 if (!thread || !onOpenThread) return null
+                const preview = thread.last_message
                 return (
-                  <button
-                    type="button"
+                  <div
                     className={`message-thread-chip ${thread.archived ? 'archived' : ''}`}
-                    onClick={() => onOpenThread(thread)}
-                    title={
-                      thread.archived
-                        ? 'Ветка закрыта — открыть и почитать'
-                        : 'Перейти в ветку'
+                    onContextMenu={
+                      onThreadContextMenu
+                        ? (e) => {
+                            e.preventDefault()
+                            e.stopPropagation()
+                            onThreadContextMenu(thread, e)
+                          }
+                        : undefined
                     }
                   >
-                    <MessagesSquare size={13} />
-                    <span className="message-thread-chip-name">{thread.name}</span>
-                    {thread.archived && (
-                      <span className="message-thread-chip-tag">закрыта</span>
+                    <button
+                      type="button"
+                      className="message-thread-chip-head"
+                      onClick={() => onOpenThread(thread)}
+                      title={
+                        thread.archived
+                          ? 'Ветка закрыта — открыть и почитать'
+                          : 'Перейти в ветку'
+                      }
+                    >
+                      <span className="message-thread-chip-name">{thread.name}</span>
+                      <span className="message-thread-chip-count">
+                        {thread.message_count}{' '}
+                        {plural(thread.message_count, 'сообщение', 'сообщения', 'сообщений')}
+                      </span>
+                      <ChevronRight size={13} />
+                      {thread.archived && (
+                        <span className="message-thread-chip-tag">закрыта</span>
+                      )}
+                    </button>
+                    {/* Последнее сообщение ветки — чтобы понимать, стоит ли
+                        туда заходить, не заходя туда. Пустая ветка строки не
+                        получает вовсе: показывать было бы нечего. */}
+                    {preview && (
+                      <button
+                        type="button"
+                        className="message-thread-chip-preview"
+                        onClick={() => onOpenThread(thread)}
+                      >
+                        <Avatar
+                          name={preview.author.username}
+                          color={preview.author.avatar_color}
+                          image={preview.author.avatar_image}
+                          size={16}
+                          userId={preview.author.id}
+                        />
+                        <span className="message-thread-chip-author">
+                          {displayNameOf(preview.author)}
+                        </span>
+                        <span className="message-thread-chip-text">
+                          {preview.content.replace(STICKER_TOKEN_RE, '[стикер]')
+                            || 'вложение'}
+                        </span>
+                        <span className="message-thread-chip-time">
+                          {formatRelative(preview.created_at)}
+                        </span>
+                      </button>
                     )}
-                    <ChevronRight size={13} />
-                  </button>
+                  </div>
                 )
               })()}
               {m.server_invite && (

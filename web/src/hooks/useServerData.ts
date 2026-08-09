@@ -569,6 +569,60 @@ export function useServerData(userRef: RefObject<Me | null>) {
     )
   }
 
+  /** Правый клик по ветке — где угодно: по плашке под сообщением, по строке в
+   * сайдбаре, по ссылке в системной записи. Держим id и координаты, сам канал
+   * резолвим при рендере — тот же приём, что и у channelContextMenuId. */
+  const [threadContextMenu, setThreadContextMenu] = useContextMenuState<{
+    id: number
+    x: number
+    y: number
+    /** Меню-многоточие в шапке самой панели: у него есть пункты «на весь
+     * экран», «поиск» и «закреплённые», которых нет у меню из списка. */
+    fromPanel?: boolean
+  }>()
+  /** Ветка, которую сейчас переименовываем («Редактировать ветку»). */
+  const [renameThreadId, setRenameThreadId] = useState<number | null>(null)
+  /** Открыт ли список всех веток канала («Показать все ветки»). */
+  const [threadListChannelId, setThreadListChannelId] = useState<number | null>(null)
+  /** Открыт ли поиск внутри панели ветки. */
+  const [threadSearchOpen, setThreadSearchOpen] = useState(false)
+
+  /** Присоединиться к ветке или выйти из неё. Ответ ручки — сама ветка со
+   * свежим joined, его и применяем: от него зависит и сайдбар, и подпись
+   * пункта меню. */
+  const handleToggleThreadJoin = async (thread: Channel) => {
+    try {
+      applyChannelUpdate(
+        thread.joined
+          ? await api.leaveThread(thread.id)
+          : await api.joinThread(thread.id),
+      )
+    } catch (e) {
+      alert('Не удалось изменить участие в ветке: ' + (e as Error).message)
+    }
+  }
+
+  const handleSetThreadLocked = async (thread: Channel, locked: boolean) => {
+    try {
+      applyChannelUpdate(await api.setThreadLocked(thread.id, locked))
+    } catch (e) {
+      alert('Не удалось изменить блокировку ветки: ' + (e as Error).message)
+    }
+  }
+
+  /** «Копировать ссылку» — прямая ссылка на ветку, по которой она открывается
+   * панелью (см. useInviteLinks: параметр разбирается при загрузке). Не
+   * приглашение: приглашают на сервер, а сюда зовут человека, который на
+   * сервере уже есть. */
+  const handleCopyThreadLink = async (thread: Channel) => {
+    const link = `${location.origin}${location.pathname}?thread=${thread.id}`
+    try {
+      await navigator.clipboard.writeText(link)
+    } catch (e) {
+      alert('Не удалось скопировать ссылку: ' + (e as Error).message)
+    }
+  }
+
   /** Закрыть ветку или вернуть её из архива. Панель при этом не закрывается:
    * закрытая ветка пропадает из сайдбара, но читать её можно как и раньше —
    * шапка просто получает пометку «закрыта» (см. ThreadPanel). */
@@ -823,5 +877,10 @@ export function useServerData(userRef: RefObject<Me | null>) {
     createThreadTarget, setCreateThreadTarget, handleCreateThreadSubmit,
     handleSetThreadArchived,
     openThreadId, openThread, setOpenThreadId, handleOpenThread,
+    threadContextMenu, setThreadContextMenu,
+    renameThreadId, setRenameThreadId,
+    threadListChannelId, setThreadListChannelId,
+    threadSearchOpen, setThreadSearchOpen,
+    handleToggleThreadJoin, handleSetThreadLocked, handleCopyThreadLink,
   }
 }

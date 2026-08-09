@@ -240,7 +240,7 @@ logger = logging.getLogger(__name__)
 from .models import (
     Attachment, Channel, ConversationMessage, ConversationParticipant,
     MAX_ATTACHMENTS_PER_MESSAGE, MAX_REACTIONS_PER_MESSAGE, Membership,
-    Message, Reaction, dm_conversation_id, dm_room, is_dm_room,
+    Message, Reaction, ThreadMember, dm_conversation_id, dm_room, is_dm_room,
 )
 from .serializers import (
     ChannelSerializer, ConversationMessageSerializer, MessageSerializer,
@@ -1318,6 +1318,12 @@ class GatewayConsumer(AsyncWebsocketConsumer):
             return {"error": "Нет доступа к каналу."}
         if not can_see_channel(self.user, channel, perms):
             return {"error": "Нет доступа к каналу."}
+        # Заблокированная ветка — читать можно, писать нельзя никому, кроме
+        # распоряжающихся сообщениями. В отличие от архивной, сама собой она
+        # не откроется: на то и блокировка, чтобы разговор не продолжили (см.
+        # Channel.locked и разархивацию ниже).
+        if channel.locked and not perms.get("delete_messages"):
+            return {"error": "Ветка заблокирована."}
         denied = self._attachments_denied(attachment_ids, perms)
         if denied:
             return {"error": denied}
@@ -1342,12 +1348,22 @@ class GatewayConsumer(AsyncWebsocketConsumer):
                 reply_to=reply_to)
             self._bind_attachments(attachment_ids, message=msg)
         result = {"server_id": channel.server_id, "data": MessageSerializer(msg).data}
+        if channel.kind == Channel.THREAD:
+            # Написал в ветку — значит участвуешь: ветка появляется в сайдбаре
+            # и начинает приходить в уведомлениях, отдельно жать
+            # «Присоединиться» не нужно (ровно как в Discord). get_or_create,
+            # а не create: писать в свою же ветку можно сколько угодно раз.
+            ThreadMember.objects.get_or_create(thread=channel, user=self.user)
         # Написали в закрытую ветку — она открывается обратно сама, как в
         # Discord: закрытие ветки говорит «разговор окончен», а новое сообщение
         # ровно это и опровергает. Заставлять человека сначала лезть в архив и
         # жать «Восстановить» значило бы требовать лишний шаг ради состояния,
         # которое он уже отменил самим фактом отправки.
-        if channel.kind == Channel.THREAD and channel.archived:
+        #
+        # Заблокированную это не касается: туда пишет только модератор, и его
+        # сообщение — не «разговор продолжился», а служебная реплика поверх
+        # закрытой темы.
+        if channel.kind == Channel.THREAD and channel.archived and not channel.locked:
             channel.archived = False
             channel.save(update_fields=["archived"])
             result["unarchived"] = self._channel_event_payload(channel)
