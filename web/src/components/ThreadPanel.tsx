@@ -8,6 +8,9 @@ import { ComposerDraft } from '../drafts'
 import { outbox, pendingAsMessage, PendingMessage } from '../outbox'
 import MessageList from './MessageList'
 import MessageInput from './MessageInput'
+import TypingIndicator from './TypingIndicator'
+import { useGateway } from '../gateway'
+import { channelPlace, shouldSendTyping } from '../typing'
 import { ProfilePopupUser } from './MiniProfilePopup'
 
 /**
@@ -82,6 +85,7 @@ export default function ThreadPanel({
   onOpenProfile: (user: ProfilePopupUser, e: ReactMouseEvent) => void
   onUserContextMenu: (user: ProfilePopupUser, e: ReactMouseEvent) => void
 }) {
+  const gateway = useGateway()
   const visible = threadMessages.messages.filter(
     (m) => !blockedUserIds.has(m.author.id),
   )
@@ -189,6 +193,11 @@ export default function ThreadPanel({
         // плашки, ни пункта «Создать ветку» здесь нет — threadOf/onCreateThread
         // не передаются вовсе.
       />
+      <TypingIndicator
+        place={channelPlace(thread.id)}
+        selfId={user.id}
+        resolveName={(id) => members.find((m) => m.id === id)?.username}
+      />
       <MessageInput
         key={`channel-${thread.id}`}
         draftKey={`channel-${thread.id}`}
@@ -204,6 +213,9 @@ export default function ThreadPanel({
         onSaveEdit={threadMessages.handleSaveEdit}
         onCancelEdit={() => threadMessages.setEditTargetTracked(null)}
         canSendVoice={canSendVoiceMessages}
+        onTyping={() => {
+          if (shouldSendTyping(channelPlace(thread.id))) gateway.typingStart(thread.id)
+        }}
       />
         </>
       )}

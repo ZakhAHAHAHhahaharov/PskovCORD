@@ -50,13 +50,24 @@ export async function handleRequest(
     case 'produce': {
       const transport = peer.transport(data.transportId)
       if (!transport) throw new Error('transport not found')
-      // source отличает микрофон от демонстрации экрана ('mic' | 'screen').
-      const source: string = data.source === 'screen' ? 'screen' : 'mic'
+      // source различает три потока одного участника: микрофон,
+      // демонстрация экрана и камера. Неизвестное значение схлопывается в
+      // 'mic' — так было и раньше, и это безопасный дефолт: микрофон
+      // ограничен строже всех (canSpeak) и не считается видео.
+      const source: string =
+        data.source === 'screen' ? 'screen'
+        : data.source === 'camera' ? 'camera'
+        : 'mic'
       // Права роли из токена — единственная их проверка на медиа-леге, см.
       // Peer.canSpeak/canVideo. До этого «Говорить: выкл» и «Показывать
       // видео: выкл» в редакторе ролей не значили ничего.
-      if (source === 'screen' && !peer.canVideo) {
-        throw new Error('screen share not allowed by server role')
+      //
+      // Камера идёт под тем же canVideo, что и демонстрация: право называется
+      // «Показывать видео», и заводить ему второй, почти всегда совпадающий,
+      // тумблер значило бы просить владельца сервера настраивать одно и то же
+      // дважды.
+      if ((source === 'screen' || source === 'camera') && !peer.canVideo) {
+        throw new Error('video not allowed by server role')
       }
       if (source === 'mic' && !peer.canSpeak) {
         throw new Error('speaking not allowed by server role')
@@ -72,6 +83,10 @@ export async function handleRequest(
       // заблокированный зритель не должен даже увидеть, что демонстрация появилась.
       const notifyData = { producerId: producer.id, userId: peer.userId, source }
       if (source === 'screen') room.broadcastScreenAware(peer, 'newProducer', notifyData)
+      // Камера — обычный broadcast: блок-листы, которые есть у демонстрации и
+      // микрофона, заводились под конкретные жалобы («не показывай экран
+      // ЭТОМУ»), и распространять их на камеру молча, не спросив, нельзя.
+      else if (source === 'camera') room.broadcast(peer, 'newProducer', notifyData)
       else room.broadcastMicAware(peer, 'newProducer', notifyData)
       producer.on('transportclose', () => {
         peer.producers.delete(producer.id)

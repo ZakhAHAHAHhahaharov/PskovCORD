@@ -73,6 +73,20 @@ export interface PendingMessage {
   createdAt: number
   /** Причина отказа — только у failed; показывается подсказкой. */
   error?: string
+  /** Опрос, отправляемый вместе с сообщением (см. backend Poll). Едет как
+   * есть до самой отправки: сам опрос создаётся на сервере в одной
+   * транзакции с сообщением, отдельного «сначала опрос, потом сообщение»
+   * нет — иначе ретрай плодил бы опросы-сироты. */
+  poll?: OutgoingPoll
+}
+
+/** Опрос в том виде, в каком его отправляет композер. */
+export interface OutgoingPoll {
+  question: string
+  options: string[]
+  multiple: boolean
+  /** Через сколько часов закрыть сам. undefined — бессрочный. */
+  durationHours?: number
 }
 
 /** Как outbox отправляет сообщение наружу. Подставляется из AppShell, чтобы
@@ -160,6 +174,7 @@ class Outbox {
     content: string
     replyTo?: number | null
     attachments?: Attachment[]
+    poll?: OutgoingPoll
   }): string {
     const message: PendingMessage = {
       nonce: newNonce(),
@@ -170,6 +185,7 @@ class Outbox {
       status: 'sending',
       attempt: 0,
       createdAt: Date.now(),
+      poll: input.poll,
     }
     this.pending.push(message)
     this.attempt(message)

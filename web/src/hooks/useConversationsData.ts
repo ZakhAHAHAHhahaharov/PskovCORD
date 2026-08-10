@@ -165,6 +165,7 @@ export function useConversationsData(
       content: message.content,
       replyTo: dmReplyTarget?.id ?? null,
       attachments: message.attachments,
+      poll: message.poll,
     })
     setDmReplyTarget(null)
   }

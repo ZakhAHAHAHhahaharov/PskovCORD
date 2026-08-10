@@ -5,11 +5,20 @@ import {
   useEffect,
   useMemo,
   useRef,
+  useState,
   ReactNode,
 } from 'react'
 import { ensureAccessToken, getToken, UserStatus } from './api'
+import type { OutgoingPoll } from './outbox'
 
 type Handler = (payload: any) => void
+
+/** Состояние связи с gateway — для индикатора в интерфейсе.
+ *
+ * 'online'     — сокет открыт и отвечает на хартбит;
+ * 'connecting' — первое подключение или попытка переподключиться прямо сейчас;
+ * 'offline'    — попытки проваливаются, ждём следующей по backoff'у. */
+export type ConnectionState = 'online' | 'connecting' | 'offline'
 
 /** Что нужно серверу для создания сообщения сверх самого текста.
  *
@@ -21,6 +30,10 @@ export interface SendMessageOptions {
   replyTo?: number | null
   attachmentIds?: string[]
   nonce?: string
+  /** Опрос, создаваемый вместе с сообщением. На сервере он появляется в ОДНОЙ
+   * транзакции с ним (см. chat.consumers._attach_poll): сообщение «Кто идёт?»
+   * без вариантов ответа — не то, что человек отправлял. */
+  poll?: OutgoingPoll
 }
 
 interface GatewayCtx {
@@ -60,6 +73,19 @@ interface GatewayCtx {
    * chat.consumers._handle_voice_wake_user). В отличие от
    * voiceRequestScreenShare — не тихий пинг, а нарочно противный звук. */
   voiceWakeUser: (targetUserId: number) => void
+  /** Проиграть звук соундборда всем в моём голосовом канале. Канал сервер
+   * берёт из presence сам — прислать чужой нельзя. */
+  soundboardPlay: (soundId: number) => void
+  /** Отдать/переставить свой голос. Пустой список снимает голос вовсе;
+   * повторный клик по уже выбранному варианту делает то же самое. */
+  pollVote: (pollId: number, optionIds: number[]) => void
+  /** Закрыть опрос досрочно — автор сообщения или модерация сообщений.
+   * Обратной операции нет намеренно (см. chat.consumers). */
+  pollClose: (pollId: number) => void
+  /** «Я печатаю здесь». Зовётся часто (на набор текста), поэтому вызывающий
+   * обязан троттлить сам — см. shouldSendTyping в web/src/typing.ts. */
+  typingStart: (channelId: number) => void
+  dmTypingStart: (conversationId: number) => void
   setStatus: (status: UserStatus) => void
   dmSendMessage: (
     conversationId: number,
@@ -81,13 +107,34 @@ interface GatewayCtx {
 const Ctx = createContext<GatewayCtx>(null as unknown as GatewayCtx)
 export const useGateway = () => useContext(Ctx)
 
+// Состояние связи живёт в ОТДЕЛЬНОМ контексте, а не полем в GatewayCtx.
+// Значение GatewayCtx намеренно неизменно всю жизнь провайдера (см. useMemo
+// ниже) — положи статус туда, и каждый обрыв/реконнект перерисовывал бы всех
+// потребителей useGateway(), то есть половину приложения. Здесь же подписчик
+// ровно один — индикатор связи.
+const StatusCtx = createContext<ConnectionState>('connecting')
+export const useConnectionState = () => useContext(StatusCtx)
+
 // Хартбит: пока сокет открыт, шлём {"op":"ping"} раз в PING_INTERVAL — сервер
 // обновляет TTL "жив" (presence.heartbeat, 5 минут) и раз в минуту подчищает
 // тех, чей TTL истёк (chat.heartbeat_sweep) — страховка на случай, если WS
 // оборвался без close-фрейма (сон ноутбука, краш вкладки) и обычный
 // disconnect() так и не пришёл. Интервал заметно короче TTL — несколько
 // попыток про запас на случай троттлинга фоновой вкладки браузером.
-const PING_INTERVAL_MS = 60 * 1000
+const PING_INTERVAL_MS = 30 * 1000
+
+// Сколько ждём {"op":"pong"} (или вообще любого байта от сервера) в ответ на
+// свой ping, прежде чем счесть сокет мёртвым и закрыть его руками.
+//
+// Зачем вообще: соединение умирает НЕ только close-фреймом. При смене сети
+// (Wi-Fi <-> LTE), NAT-таймауте роутера или выходе ноутбука из сна TCP
+// остаётся «полуоткрытым»: close не приходит никогда, readyState у браузера
+// так и висит OPEN, onclose не срабатывает — и весь механизм реконнекта ниже
+// просто не запускается. Снаружи это выглядит как «приложение зависло»:
+// сообщения не приходят, отправленные молча уходят в никуда, лечится только
+// перезагрузкой страницы. Своих ping/pong-фреймов протокола браузер в JS не
+// показывает, поэтому живость приходится проверять на уровне приложения.
+const PONG_TIMEOUT_MS = 10 * 1000
 
 // Реконнект с экспоненциальной задержкой и джиттером. Раньше здесь стоял
 // фиксированный setTimeout(connect, 2000): без потолка, без джиттера и без
@@ -142,8 +189,17 @@ export function GatewayProvider({ children }: { children: ReactNode }) {
   const closed = useRef(false)
   const attempt = useRef(0)
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // Когда сервер в последний раз прислал хоть что-нибудь, и когда мы в
+  // последний раз просили его отозваться. Пара нужна watchdog'у ниже: «ответ
+  // пришёл ПОСЛЕ вопроса» — единственный доступный признак живого сокета.
+  const lastSeenAt = useRef(0)
+  const pingSentAt = useRef(0)
+  const pongTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const [state, setState] = useState<ConnectionState>('connecting')
 
   const connect = useCallback(async () => {
+    if (closed.current) return
+    setState((prev) => (prev === 'online' ? 'connecting' : prev))
     // Не getToken(): у сокета нет пути «получил 401 — обнови и повтори», он
     // просто закрывается, и вкладка, проспавшая дольше жизни access-токена,
     // переподключалась бы протухшим токеном бесконечно. ensureAccessToken
@@ -156,12 +212,19 @@ export function GatewayProvider({ children }: { children: ReactNode }) {
 
     ws.onopen = () => {
       attempt.current = 0
+      lastSeenAt.current = Date.now()
+      setState('online')
       queue.current.forEach((m) => ws.send(m))
       queue.current = []
     }
     ws.onmessage = (e) => {
+      // Любое сообщение — доказательство живости, не только pong.
+      lastSeenAt.current = Date.now()
       try {
         const data = JSON.parse(e.data)
+        // pong существует ровно ради строки выше: подписчиков у него нет и
+        // не предполагается, дальше его нести незачем.
+        if (data.op === 'pong') return
         handlers.current.get(data.op)?.forEach((h) => h(data))
       } catch {
         /* ignore */
@@ -169,11 +232,17 @@ export function GatewayProvider({ children }: { children: ReactNode }) {
     }
     ws.onclose = () => {
       wsRef.current = null
+      if (pongTimer.current) clearTimeout(pongTimer.current)
+      pongTimer.current = null
       if (closed.current) return
       // Токена больше нет (разлогинились или сессия окончательно истекла) —
       // переподключаться некуда и незачем.
       if (!getToken()) return
       attempt.current += 1
+      // Первый обрыв — это чаще всего рестарт бэкенда или моргнувший вайфай,
+      // и он чинится за секунду; показывать из-за него тревожную полосу
+      // незачем. 'offline' — только когда попытки уже проваливаются подряд.
+      setState(attempt.current >= 2 ? 'offline' : 'connecting')
       const backoff = Math.min(
         RECONNECT_BASE_MS * 2 ** (attempt.current - 1),
         RECONNECT_MAX_MS,
@@ -185,6 +254,54 @@ export function GatewayProvider({ children }: { children: ReactNode }) {
     }
   }, [])
 
+  /** Спросить сервер, жив ли он, и назначить срок ответа.
+   *
+   * Сам ping заодно продлевает presence-TTL (см. chat.presence.heartbeat) —
+   * поэтому отдельного «тихого» пинга для watchdog'а не нужно. */
+  const probe = useCallback(() => {
+    const ws = wsRef.current
+    if (!ws || ws.readyState !== WebSocket.OPEN) return
+    ws.send(JSON.stringify({ op: 'ping' }))
+    pingSentAt.current = Date.now()
+    if (pongTimer.current) clearTimeout(pongTimer.current)
+    pongTimer.current = setTimeout(() => {
+      pongTimer.current = null
+      const sock = wsRef.current
+      if (!sock || sock.readyState !== WebSocket.OPEN) return
+      // Ответили (неважно чем — pong или чужим сообщением) — сокет жив.
+      if (lastSeenAt.current >= pingSentAt.current) return
+      // Молчит. close() руками: onclose выше запустит обычный реконнект —
+      // сам по себе такой сокет не закроется никогда.
+      sock.close()
+    }, PONG_TIMEOUT_MS)
+  }, [])
+
+  /** Переподключиться немедленно, не досиживая backoff.
+   *
+   * Вызывается, когда браузер сообщил о возврате к жизни: вернулась сеть,
+   * вкладку снова открыли, страницу восстановили из bfcache. Без этого
+   * проснувшийся ноутбук ждал бы до 30 секунд на ровном месте — а с мёртвым
+   * «полуоткрытым» сокетом (см. PONG_TIMEOUT_MS) не переподключился бы вовсе,
+   * потому что onclose там не срабатывает никогда. */
+  const wake = useCallback(() => {
+    if (closed.current || !getToken()) return
+    const ws = wsRef.current
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      // Сокет с виду жив — но именно после сна/офлайна он и бывает зомби.
+      // Не рвём вслепую (обычно он исправен, а лишний реконнект — это ещё и
+      // перечитывание истории в каждой открытой ленте, см. useGatewayEvents),
+      // а спрашиваем: не ответит за PONG_TIMEOUT_MS — закроется сам.
+      probe()
+      return
+    }
+    if (ws && ws.readyState === WebSocket.CONNECTING) return
+    // Ждём по backoff'у — отменяем ожидание и идём сразу.
+    if (reconnectTimer.current) clearTimeout(reconnectTimer.current)
+    reconnectTimer.current = null
+    attempt.current = 0
+    void connect()
+  }, [connect, probe])
+
   useEffect(() => {
     closed.current = false
     void connect()
@@ -192,17 +309,34 @@ export function GatewayProvider({ children }: { children: ReactNode }) {
       closed.current = true
       if (reconnectTimer.current) clearTimeout(reconnectTimer.current)
       reconnectTimer.current = null
+      if (pongTimer.current) clearTimeout(pongTimer.current)
+      pongTimer.current = null
       wsRef.current?.close()
     }
   }, [connect])
 
   useEffect(() => {
-    const interval = setInterval(() => {
-      const ws = wsRef.current
-      if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ op: 'ping' }))
-    }, PING_INTERVAL_MS)
+    const interval = setInterval(probe, PING_INTERVAL_MS)
     return () => clearInterval(interval)
-  }, [])
+  }, [probe])
+
+  // События «мы снова живы». visibilitychange — возврат на вкладку (сюда же
+  // попадает пробуждение из сна: браузер морозит таймеры фоновых вкладок, и
+  // хартбит выше мог не тикать вовсе). pageshow — восстановление страницы из
+  // bfcache, при котором сокет уже мёртв, а onclose так и не пришёл.
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') wake()
+    }
+    window.addEventListener('online', wake)
+    window.addEventListener('pageshow', wake)
+    document.addEventListener('visibilitychange', onVisible)
+    return () => {
+      window.removeEventListener('online', wake)
+      window.removeEventListener('pageshow', wake)
+      document.removeEventListener('visibilitychange', onVisible)
+    }
+  }, [wake])
 
   const raw = useCallback((obj: unknown) => {
     const msg = JSON.stringify(obj)
@@ -226,6 +360,17 @@ export function GatewayProvider({ children }: { children: ReactNode }) {
   // useMemo, а не новый объект на каждый рендер: без него КАЖДЫЙ рендер
   // провайдера менял значение контекста и заставлял перерисовываться всех
   // потребителей useGateway().
+  /** Опрос в том виде, в каком его ждёт сервер (snake_case, см.
+   * chat.consumers._read_poll). undefined — опроса нет, и поля в payload'е
+   * тоже быть не должно. */
+  const pollPayload = (poll: OutgoingPoll | undefined) =>
+    poll && {
+      question: poll.question,
+      options: poll.options,
+      multiple: poll.multiple,
+      duration_hours: poll.durationHours ?? null,
+    }
+
   const value: GatewayCtx = useMemo(() => ({
     on,
     sendMessage: (channelId, content, opts) =>
@@ -236,6 +381,7 @@ export function GatewayProvider({ children }: { children: ReactNode }) {
         reply_to: opts?.replyTo ?? null,
         attachment_ids: opts?.attachmentIds ?? [],
         nonce: opts?.nonce ?? null,
+        poll: pollPayload(opts?.poll),
       }),
     deleteMessage: (messageId) => raw({ op: 'delete_message', message_id: messageId }),
     editMessage: (messageId, content) =>
@@ -263,6 +409,13 @@ export function GatewayProvider({ children }: { children: ReactNode }) {
       raw({ op: 'voice_request_screen_share', target_user_id: targetUserId }),
     voiceWakeUser: (targetUserId) =>
       raw({ op: 'voice_wake_user', target_user_id: targetUserId }),
+    soundboardPlay: (soundId) => raw({ op: 'soundboard_play', sound_id: soundId }),
+    pollVote: (pollId, optionIds) =>
+      raw({ op: 'poll_vote', poll_id: pollId, option_ids: optionIds }),
+    pollClose: (pollId) => raw({ op: 'poll_close', poll_id: pollId }),
+    typingStart: (channelId) => raw({ op: 'typing_start', channel_id: channelId }),
+    dmTypingStart: (conversationId) =>
+      raw({ op: 'typing_start', conversation_id: conversationId }),
     setStatus: (status) => raw({ op: 'set_status', status }),
     dmSendMessage: (conversationId, content, opts) =>
       raw({
@@ -272,6 +425,7 @@ export function GatewayProvider({ children }: { children: ReactNode }) {
         reply_to: opts?.replyTo ?? null,
         attachment_ids: opts?.attachmentIds ?? [],
         nonce: opts?.nonce ?? null,
+        poll: pollPayload(opts?.poll),
       }),
     dmDeleteMessage: (messageId) => raw({ op: 'dm_delete_message', message_id: messageId }),
     dmEditMessage: (messageId, content) =>
@@ -284,5 +438,9 @@ export function GatewayProvider({ children }: { children: ReactNode }) {
       raw({ op: 'dm_voice_join', conversation_id: conversationId }),
   }), [on, raw])
 
-  return <Ctx.Provider value={value}>{children}</Ctx.Provider>
+  return (
+    <Ctx.Provider value={value}>
+      <StatusCtx.Provider value={state}>{children}</StatusCtx.Provider>
+    </Ctx.Provider>
+  )
 }

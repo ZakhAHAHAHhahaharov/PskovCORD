@@ -31,6 +31,13 @@ export interface Settings {
    * не трогает иконки/отступы, в отличие от uiScale. FONT_SIZE_BASELINE —
    * то значение, при котором множитель равен 1 (текст выглядит как сейчас). */
   baseFontSize: number
+  /** Показывать системные уведомления, когда вкладка не на виду (см.
+   * web/src/notifications.ts). Отдельно от разрешения браузера: разрешение
+   * даётся один раз и навсегда, а выключить уведомления, не отзывая его
+   * через настройки сайта, человек должен уметь здесь. */
+  desktopNotifications: boolean
+  /** Проигрывать короткий звук вместе с уведомлением. */
+  notificationSound: boolean
 }
 
 /** См. baseFontSize выше: во сколько раз масштабируются font-size в
@@ -50,6 +57,13 @@ export const DEFAULT_SETTINGS: Settings = {
   preferDeafened: false,
   uiScale: 100,
   baseFontSize: FONT_SIZE_BASELINE,
+  // Включено по умолчанию, но само по себе ничего не показывает: браузер всё
+  // равно спросит разрешение, и до ответа уведомлений не будет (см.
+  // notifications.ts). Просить разрешение при первой же загрузке — верный
+  // способ получить «Блокировать» не глядя, поэтому спрашиваем по кнопке
+  // в настройках.
+  desktopNotifications: true,
+  notificationSound: true,
 }
 
 const STORAGE_KEY = 'pskovcord:settings'
@@ -102,6 +116,8 @@ interface SettingsCtx extends Settings {
   setPreferDeafened: (v: boolean) => void
   setUiScale: (v: number) => void
   setBaseFontSize: (v: number) => void
+  setDesktopNotifications: (v: boolean) => void
+  setNotificationSound: (v: boolean) => void
 }
 
 const Ctx = createContext<SettingsCtx>({
@@ -114,6 +130,8 @@ const Ctx = createContext<SettingsCtx>({
   setPreferDeafened: () => {},
   setUiScale: () => {},
   setBaseFontSize: () => {},
+  setDesktopNotifications: () => {},
+  setNotificationSound: () => {},
 })
 
 export const useSettings = () => useContext(Ctx)
@@ -150,6 +168,8 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     setPreferDeafened: (v) => setSettings((s) => ({ ...s, preferDeafened: v })),
     setUiScale: (v) => setSettings((s) => ({ ...s, uiScale: v })),
     setBaseFontSize: (v) => setSettings((s) => ({ ...s, baseFontSize: v })),
+    setDesktopNotifications: (v) => setSettings((s) => ({ ...s, desktopNotifications: v })),
+    setNotificationSound: (v) => setSettings((s) => ({ ...s, notificationSound: v })),
   }
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>
