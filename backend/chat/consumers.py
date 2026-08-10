@@ -44,8 +44,28 @@ GatewayConsumer — единственный WebSocket на клиента (по
      микрофон или звук (иначе сервер молча игнорирует — см.
      _handle_voice_wake_user); в отличие от voice_request_screen_share это не
      тихий пинг, а нарочно противный звук на стороне адресата.
+    {"op": "soundboard_play", "sound_id": <id>} — проиграть звук соундборда
+     всем, кто сейчас в ТОМ ЖЕ голосовом канале, что и отправитель. Канал
+     сервер берёт из presence сам — прислать чужой нельзя.
+    {"op": "poll_vote", "poll_id": <id>, "option_ids": [<id>, ...]} —
+     отдать/переставить свой голос. Пустой список снимает голос вовсе.
+     В обычном (не multiple) опросе учитывается только первый вариант из
+     списка: «проголосовать за два» там не ошибка клиента, а бессмыслица,
+     и отказывать с текстом не за что.
+    {"op": "poll_close", "poll_id": <id>} — закрыть опрос досрочно. Может
+     автор сообщения либо распоряжающийся сообщениями (delete_messages).
+     Обратной операции нет намеренно: «переоткрыть» опрос — это способ
+     дособрать голоса после того, как результат уже увидели.
+    {"op": "typing_start", "channel_id": <id>}
+    {"op": "typing_start", "conversation_id": <id>} — «я печатаю здесь».
+     Клиент шлёт его не на каждую букву, а раз в TYPING_THROTTLE_SEC, пока
+     человек продолжает набирать (см. web/src/typing.ts). Событие
+     эфемерное: ни в БД, ни в Redis ничего не пишется, срок жизни держит
+     сам получатель.
     {"op": "set_status", "status": "online" | "dnd" | "invisible"}
-    {"op": "ping"}  — хартбит, см. presence.heartbeat/chat.heartbeat_sweep
+    {"op": "ping"}  — хартбит, см. presence.heartbeat/chat.heartbeat_sweep;
+     сервер обязан ответить {"op": "pong"} (см. ниже — на нём держится
+     распознавание «мёртвого» сокета на клиенте).
 
     {"op": "dm_send_message", "conversation_id": <id>, "content": "...", "reply_to": <id|null>,
      "attachment_ids": ["<uuid>", ...], "nonce": "<строка клиента>"}
@@ -61,6 +81,12 @@ GatewayConsumer — единственный WebSocket на клиента (по
 
 События сервер -> клиент:
     {"op": "ready", "user": {...}}
+    {"op": "pong"} — ответ на ping. Нужен НЕ для presence (его продлевает сам
+     ping), а для того, чтобы клиент вообще мог узнать, что соединение умерло:
+     при смене сети, NAT-таймауте роутера или выходе ноутбука из сна TCP
+     остаётся «полуоткрытым» — close-фрейм не приходит никогда, readyState у
+     браузера так и висит OPEN, и без ответа сервера вкладка молча живёт с
+     мёртвым сокетом (см. web/src/gateway.tsx, watchdog).
     {"op": "message_create", "message": {...}, "nonce": "<строка клиента>"|null}
     {"op": "message_update", "message": {...}}
     {"op": "message_delete", "message_id": <id>, "channel_id": <id>}
@@ -112,6 +138,31 @@ GatewayConsumer — единственный WebSocket на клиента (по
      "call_started_at": <float|null>, "topic": "..."|null}
     {"op": "profile_update", "user_id": <id>, "username": "...",
      "avatar_color": "#RRGGBB", "avatar_image": "data:image/...;base64,..."|""}
+    {"op": "soundboard_play", "sound_id": <id>, "url": "/media/...",
+     "user_id": <id>, "channel_id": "<room>"} — проиграть звук. Летит ВСЕМ на
+     сервере (как и остальная голосовая мета), а решение «я сейчас в этом
+     канале, значит играю» принимает клиент — ровно так же, как он делает это
+     для звуков входа/выхода.
+    {"op": "server_sounds", "server_id": <id>, "sounds": [...]} — набор
+     звуков сервера изменился (залили/удалили/переименовали). Целиком, а не
+     дельтой — набор маленький (см. _broadcast_sounds_update).
+    {"op": "poll_update", "poll": {...}, "channel_id": <id>|null,
+     "conversation_id": <id>|null} — актуальное состояние опроса после
+     чьего-то голоса или закрытия. Целиком, а не дельтой: набор маленький, а
+     дельты пришлось бы применять по порядку, который в распределённой
+     рассылке не гарантирован (та же логика, что у message_reactions).
+     Свой ли голос — клиент выводит сам из voter_ids: payload одинаков для
+     всех получателей, иначе его пришлось бы собирать на каждого отдельно.
+    {"op": "typing", "user_id": <id>, "channel_id": <id>} и
+    {"op": "typing", "user_id": <id>, "conversation_id": <id>} — кто-то
+     печатает. Уходит и самому печатающему тоже (рассылка на всю группу
+     канала/диалога) — клиент отфильтровывает себя сам, отдельная личная
+     рассылка «всем кроме одного» тут не окупается.
+     Событие БЕЗ парного "перестал печатать": надёжной пары не выходит —
+     вкладку закрывают, сеть отваливается, и «печатает…» висело бы вечно.
+     Вместо этого у события есть срок годности на стороне получателя
+     (TYPING_TTL_MS в web/src/typing.ts), а отправитель, пока печатает,
+     присылает его заново.
 
     {"op": "dm_message_create", "message": {...}, "nonce": "<строка клиента>"|null}
     {"op": "dm_message_update", "message": {...}}
@@ -221,7 +272,9 @@ import asyncio
 import json
 import logging
 import math
+import time
 import uuid
+from datetime import timedelta
 from urllib.parse import parse_qs
 
 from channels.db import database_sync_to_async
@@ -239,12 +292,14 @@ from .permissions import can_see_channel
 logger = logging.getLogger(__name__)
 from .models import (
     Attachment, Channel, ConversationMessage, ConversationParticipant,
-    MAX_ATTACHMENTS_PER_MESSAGE, MAX_REACTIONS_PER_MESSAGE, Membership,
-    Message, Reaction, ThreadMember, dm_conversation_id, dm_room, is_dm_room,
+    MAX_ATTACHMENTS_PER_MESSAGE, MAX_POLL_OPTION_LEN, MAX_POLL_OPTIONS,
+    MAX_POLL_QUESTION_LEN, MAX_REACTIONS_PER_MESSAGE, MIN_POLL_OPTIONS,
+    Membership, Message, Poll, PollOption, PollVote, Reaction, SoundboardSound,
+    ThreadMember, dm_conversation_id, dm_room, is_dm_room,
 )
 from .serializers import (
     ChannelSerializer, ConversationMessageSerializer, MessageSerializer,
-    reactions_payload,
+    poll_payload, reactions_payload,
 )
 
 # Сколько недавних nonce'ов помнит соединение, чтобы узнать повторную попытку
@@ -253,6 +308,18 @@ from .serializers import (
 # единица: между исходной попыткой и её ретраем клиент мог успеть отправить
 # что-то ещё.
 NONCE_MEMORY = 50
+
+# Нижняя граница между двумя typing_start от ОДНОГО соединения в одном и том
+# же месте. Клиент и так шлёт их редко (см. web/src/typing.ts), но верить в
+# это нельзя: op дешёвый на вид, а каждый вызов — проверка прав в БД и
+# рассылка на всю группу сервера. Порог заметно меньше клиентского интервала,
+# чтобы честный клиент в него никогда не упирался.
+TYPING_THROTTLE_SEC = 2.0
+
+# Сколько мест (каналов/диалогов) помнит троттл выше. Ограничение нужно
+# только чтобы словарь не рос бесконечно у соединения, которое ходит по
+# сотням каналов за сессию; сам порядок вытеснения роли не играет.
+TYPING_THROTTLE_MEMORY = 50
 
 
 class GatewayConsumer(AsyncWebsocketConsumer):
@@ -291,6 +358,12 @@ class GatewayConsumer(AsyncWebsocketConsumer):
         # ретрай приходит по тому же сокету секунды спустя, а после разрыва
         # клиент и так перечитывает историю по REST (см. AppShell, "ready").
         self._recent_nonces: dict[str, int] = {}
+
+        # "channel:12"/"conversation:3" -> monotonic-время последнего typing_start
+        # отсюда. Живёт в памяти соединения, как и _recent_nonces: троттлить
+        # нужно конкретный сокет, а не аккаунт целиком — две вкладки в разных
+        # каналах друг другу не мешают.
+        self._last_typing: dict[str, float] = {}
 
         await self.accept()
 
@@ -414,6 +487,14 @@ class GatewayConsumer(AsyncWebsocketConsumer):
                 await self._handle_voice_request_screen_share(data)
             elif op == "voice_wake_user":
                 await self._handle_voice_wake_user(data)
+            elif op == "soundboard_play":
+                await self._handle_soundboard_play(data)
+            elif op == "poll_vote":
+                await self._handle_poll_vote(data)
+            elif op == "poll_close":
+                await self._handle_poll_close(data)
+            elif op == "typing_start":
+                await self._handle_typing_start(data)
             elif op == "set_status":
                 await self._handle_set_status(data)
             elif op == "dm_send_message":
@@ -425,6 +506,12 @@ class GatewayConsumer(AsyncWebsocketConsumer):
             elif op == "dm_voice_join":
                 await self._handle_dm_voice_join(data)
             elif op == "ping":
+                # Ответ — ПЕРВЫМ делом и всегда, ещё до похода в Redis за
+                # presence: для клиента это единственный признак живого
+                # соединения, и задерживать его (а тем более потерять из-за
+                # исключения ниже) значит заставить исправный сокет считаться
+                # мёртвым и переподключиться на ровном месте.
+                await self._send({"op": "pong"})
                 # Хартбит живости соединения — см. presence.heartbeat и
                 # chat.heartbeat_sweep (страховка на случай, если WS оборвётся
                 # без close-фрейма и обычный disconnect() не придёт).
@@ -439,6 +526,67 @@ class GatewayConsumer(AsyncWebsocketConsumer):
             logger.exception("gateway op %r failed (user %s)", op, getattr(self, "uid", None))
 
     # --- операции -----------------------------------------------------------
+    @staticmethod
+    def _read_poll(data):
+        """Опрос из payload'а отправки — или None, если его там нет.
+
+        Возвращает уже причёсанное: вопрос и варианты обрезаны по длине,
+        пустые варианты выброшены, дубликаты схлопнуты (два одинаковых
+        варианта — это не выбор, а способ размазать голоса). Если после
+        чистки вариантов меньше двух, опроса нет: молча отправится обычное
+        сообщение, потому что отказывать тут не за что — форму на клиенте
+        всё равно не отправить незаполненной.
+        """
+        raw = data.get("poll")
+        if not isinstance(raw, dict):
+            return None
+        question = (raw.get("question") or "").strip()[:MAX_POLL_QUESTION_LEN]
+        if not question:
+            return None
+        options, seen = [], set()
+        for item in (raw.get("options") or [])[:MAX_POLL_OPTIONS]:
+            if not isinstance(item, str):
+                continue
+            text = item.strip()[:MAX_POLL_OPTION_LEN]
+            key = text.casefold()
+            if not text or key in seen:
+                continue
+            seen.add(key)
+            options.append(text)
+        if len(options) < MIN_POLL_OPTIONS:
+            return None
+        hours = raw.get("duration_hours")
+        closes_at = None
+        if isinstance(hours, (int, float)) and 0 < hours <= 24 * 14:
+            closes_at = timezone.now() + timedelta(hours=float(hours))
+        return {
+            "question": question,
+            "options": options,
+            "multiple": bool(raw.get("multiple")),
+            "closes_at": closes_at,
+        }
+
+    @staticmethod
+    def _attach_poll(spec, *, message=None, conversation_message=None):
+        """Создать опрос у только что созданного сообщения.
+
+        Зовётся ВНУТРИ той же транзакции, что и само сообщение: сообщение
+        «Кто идёт?» без вариантов ответа — не то, что человек отправлял.
+        """
+        if not spec:
+            return
+        poll = Poll.objects.create(
+            message=message,
+            conversation_message=conversation_message,
+            question=spec["question"],
+            multiple=spec["multiple"],
+            closes_at=spec["closes_at"],
+        )
+        PollOption.objects.bulk_create([
+            PollOption(poll=poll, text=text, position=i)
+            for i, text in enumerate(spec["options"])
+        ])
+
     def _read_nonce(self, data):
         """nonce как его прислал клиент — строка ограниченной длины или None.
 
@@ -479,13 +627,16 @@ class GatewayConsumer(AsyncWebsocketConsumer):
         channel_id = data.get("channel_id")
         content = (data.get("content") or "").strip()
         attachment_ids = self._read_attachment_ids(data)
+        poll_spec = self._read_poll(data)
         nonce = self._read_nonce(data)
         if not channel_id:
             await self._nack(nonce, "Канал не указан.")
             return
         # Пустое сообщение без вложений отправлять нечего, но сообщение из
-        # одних вложений — нормально (см. Message.content).
-        if not content and not attachment_ids:
+        # одних вложений — нормально (см. Message.content). Опрос здесь в том
+        # же ряду: у него свой текст (вопрос), и подписывать его сверху ещё и
+        # сообщением человек не обязан.
+        if not content and not attachment_ids and not poll_spec:
             await self._nack(nonce, "Пустое сообщение.")
             return
         if nonce and nonce in self._recent_nonces:
@@ -498,7 +649,8 @@ class GatewayConsumer(AsyncWebsocketConsumer):
             })
             return
         result = await self._create_message(
-            channel_id, content[:4000], data.get("reply_to"), attachment_ids)
+            channel_id, content[:4000], data.get("reply_to"), attachment_ids,
+            poll_spec)
         if not result or result.get("error"):
             await self._nack(
                 nonce, (result or {}).get("error") or "Нет доступа к каналу.")
@@ -592,11 +744,12 @@ class GatewayConsumer(AsyncWebsocketConsumer):
         conversation_id = data.get("conversation_id")
         content = (data.get("content") or "").strip()
         attachment_ids = self._read_attachment_ids(data)
+        poll_spec = self._read_poll(data)
         nonce = self._read_nonce(data)
         if not conversation_id:
             await self._nack(nonce, "Диалог не указан.")
             return
-        if not content and not attachment_ids:
+        if not content and not attachment_ids and not poll_spec:
             await self._nack(nonce, "Пустое сообщение.")
             return
         if nonce and nonce in self._recent_nonces:
@@ -607,7 +760,8 @@ class GatewayConsumer(AsyncWebsocketConsumer):
             })
             return
         result = await self._create_dm_message(
-            conversation_id, content[:4000], data.get("reply_to"), attachment_ids)
+            conversation_id, content[:4000], data.get("reply_to"), attachment_ids,
+            poll_spec)
         if not result:
             await self._nack(nonce, "Нет доступа к диалогу.")
             return
@@ -793,6 +947,152 @@ class GatewayConsumer(AsyncWebsocketConsumer):
                     "conversation_id": conversation_id,
                     "caller": caller,
                 }})
+
+    async def _handle_soundboard_play(self, data):
+        """Проиграть звук соундборда всем в моём голосовом канале.
+
+        Канал берётся из presence отправителя, а не из запроса: иначе любой
+        мог бы устроить звук в чужом канале, где его самого нет.
+        """
+        sound_id = data.get("sound_id")
+        if not sound_id:
+            return
+        room = await asyncio.to_thread(presence.voice_channel, self.uid)
+        if not room:
+            # Не в голосе — играть некому и негде.
+            return
+
+        sound = await self._readable_sound(sound_id, room)
+        if not sound:
+            return
+
+        payload = {
+            "op": "soundboard_play",
+            "sound_id": sound["id"],
+            "url": sound["url"],
+            "user_id": self.user.id,
+            "channel_id": room,
+        }
+        if is_dm_room(room):
+            await self.channel_layer.group_send(
+                f"conversation_{dm_conversation_id(room)}",
+                {"type": "broadcast", "payload": payload})
+            return
+        server_id = await self._channel_server(room)
+        if not server_id:
+            return
+        await self.channel_layer.group_send(
+            f"server_{server_id}", {"type": "broadcast", "payload": payload})
+
+    @database_sync_to_async
+    def _readable_sound(self, sound_id, room):
+        """{"id", "url"} звука, который мне можно здесь проиграть, иначе None.
+
+        Звук принадлежит серверу, и играть его можно там же: в голосовом
+        канале ТОГО ЖЕ сервера. В звонке лички/группы сервера нет вовсе —
+        поэтому туда годится любой звук с любого МОЕГО сервера (ровно та же
+        логика, что у кастомных эмодзи в личке, см. chat.emoji.usable_ids).
+        """
+        try:
+            sound = SoundboardSound.objects.select_related("server").get(id=sound_id)
+        except SoundboardSound.DoesNotExist:
+            return None
+        if not Membership.objects.filter(
+            user=self.user, server=sound.server
+        ).exists():
+            return None
+        if not is_dm_room(room):
+            channel = Channel.objects.filter(id=room).first()
+            if not channel or channel.server_id != sound.server_id:
+                return None
+        return {"id": sound.id, "url": sound.file.url if sound.file else ""}
+
+    async def _handle_poll_vote(self, data):
+        poll_id = data.get("poll_id")
+        option_ids = data.get("option_ids")
+        if not poll_id or not isinstance(option_ids, list):
+            return
+        # Ограничиваем длину до похода в БД: список приходит от клиента, и
+        # тысяча id в нём — это тысяча проверок на ровном месте.
+        option_ids = [
+            o for o in option_ids[:MAX_POLL_OPTIONS] if isinstance(o, int)
+        ]
+        result = await self._cast_poll_vote(poll_id, option_ids)
+        if result:
+            await self._broadcast_poll(result)
+
+    async def _handle_poll_close(self, data):
+        poll_id = data.get("poll_id")
+        if not poll_id:
+            return
+        result = await self._close_poll(poll_id)
+        if result:
+            await self._broadcast_poll(result)
+
+    async def _broadcast_poll(self, result):
+        """poll_update — туда же, куда ушло бы само сообщение с опросом."""
+        payload = {
+            "op": "poll_update",
+            "poll": result["poll"],
+            "channel_id": result.get("channel_id"),
+            "conversation_id": result.get("conversation_id"),
+        }
+        if result.get("conversation_id"):
+            await self.channel_layer.group_send(
+                f"conversation_{result['conversation_id']}",
+                {"type": "broadcast", "payload": payload})
+        else:
+            await self.channel_layer.group_send(
+                f"server_{result['server_id']}",
+                {"type": "broadcast", "payload": payload})
+
+    async def _handle_typing_start(self, data):
+        """«Я печатаю» — в канал/ветку или в личку/группу.
+
+        Молча ничего не делает при отказе: печатание — не действие
+        пользователя, а побочный эффект набора текста, и сообщать в интерфейс
+        «вам нельзя печатать» не о чем.
+        """
+        channel_id = data.get("channel_id")
+        conversation_id = data.get("conversation_id")
+        # Ровно одно из двух. Оба разом — испорченный клиент, и гадать, что он
+        # имел в виду, не нужно.
+        if bool(channel_id) == bool(conversation_id):
+            return
+
+        key = f"channel:{channel_id}" if channel_id else f"conversation:{conversation_id}"
+        now = time.monotonic()
+        last = self._last_typing.get(key)
+        if last is not None and now - last < TYPING_THROTTLE_SEC:
+            return
+        if len(self._last_typing) >= TYPING_THROTTLE_MEMORY:
+            self._last_typing.pop(next(iter(self._last_typing)), None)
+        self._last_typing[key] = now
+
+        if channel_id:
+            server_id = await self._typing_allowed_in_channel(channel_id)
+            if not server_id:
+                return
+            await self.channel_layer.group_send(
+                f"server_{server_id}",
+                {"type": "broadcast", "payload": {
+                    "op": "typing",
+                    "user_id": self.user.id,
+                    "channel_id": channel_id,
+                }},
+            )
+            return
+
+        if not await self._is_conversation_participant(conversation_id):
+            return
+        await self.channel_layer.group_send(
+            f"conversation_{conversation_id}",
+            {"type": "broadcast", "payload": {
+                "op": "typing",
+                "user_id": self.user.id,
+                "conversation_id": conversation_id,
+            }},
+        )
 
     async def _handle_set_status(self, data):
         value = data.get("status")
@@ -1295,7 +1595,7 @@ class GatewayConsumer(AsyncWebsocketConsumer):
 
     @database_sync_to_async
     def _create_message(self, channel_id, content, reply_to_id=None,
-                        attachment_ids=None):
+                        attachment_ids=None, poll_spec=None):
         """Создаёт сообщение или возвращает {"error": "текст"} — текст уезжает
         клиенту в nack (см. _handle_send). Отдельный текст нужен из-за
         медленного режима: «подождите 7 с» и «нет доступа к каналу» для
@@ -1347,6 +1647,7 @@ class GatewayConsumer(AsyncWebsocketConsumer):
                 channel=channel, author=self.user, content=content,
                 reply_to=reply_to)
             self._bind_attachments(attachment_ids, message=msg)
+            self._attach_poll(poll_spec, message=msg)
         result = {"server_id": channel.server_id, "data": MessageSerializer(msg).data}
         if channel.kind == Channel.THREAD:
             # Написал в ветку — значит участвуешь: ветка появляется в сайдбаре
@@ -1600,9 +1901,163 @@ class GatewayConsumer(AsyncWebsocketConsumer):
             .exclude(user=self.user).values_list("user_id", flat=True)
         )
 
+    def _poll_location(self, poll):
+        """Где живёт опрос: (server_id, channel_id, conversation_id).
+
+        Одно из двух последних всегда None — опрос висит либо на сообщении
+        канала, либо на сообщении лички (см. models.Poll, constraint).
+        """
+        if poll.conversation_message_id:
+            return None, None, poll.conversation_message.conversation_id
+        message = poll.message
+        return message.channel.server_id, message.channel_id, None
+
+    def _can_touch_poll(self, poll):
+        """Виден ли мне этот опрос настолько, чтобы в нём голосовать.
+
+        Те же проверки, что у чтения ленты, где он висит: голосовать в
+        канале, которого не видно, нельзя — иначе через подбор poll_id можно
+        было бы и подсмотреть результаты, и накрутить их.
+        """
+        if poll.conversation_message_id:
+            return ConversationParticipant.objects.filter(
+                user=self.user,
+                conversation_id=poll.conversation_message.conversation_id,
+            ).exists()
+        channel = poll.message.channel
+        if not Membership.objects.filter(
+            user=self.user, server=channel.server
+        ).exists():
+            return False
+        perms = roles.permissions_for(self.user, channel.server)
+        if not perms.get("view_channels"):
+            return False
+        return can_see_channel(self.user, channel, perms)
+
+    @database_sync_to_async
+    def _cast_poll_vote(self, poll_id, option_ids):
+        """Переставить свой голос. None — голосовать нельзя или нечего.
+
+        Голос именно ПЕРЕставляется, а не добавляется: прежние голоса этого
+        человека в этом опросе снимаются целиком, затем ставятся новые. Так
+        обычный опрос («один вариант») получается без отдельной ветки кода, а
+        повторный клик по тому же варианту — это просто снятие голоса.
+        """
+        try:
+            poll = Poll.objects.select_related(
+                "message__channel__server", "conversation_message",
+            ).get(id=poll_id)
+        except Poll.DoesNotExist:
+            return None
+        if not poll.is_open() or not self._can_touch_poll(poll):
+            return None
+
+        valid_ids = set(
+            poll.options.filter(id__in=option_ids).values_list("id", flat=True))
+        if not poll.multiple:
+            # Не отказ: «выбрал два в опросе на один» — бессмыслица, а не
+            # ошибка, о которой есть что сообщить. Берём первый по порядку,
+            # заданному самим опросом, а не по порядку в запросе.
+            ordered = [o for o in option_ids if o in valid_ids]
+            valid_ids = set(ordered[:1])
+
+        with transaction.atomic():
+            PollVote.objects.filter(
+                option__poll=poll, user=self.user).delete()
+            PollVote.objects.bulk_create(
+                [PollVote(option_id=oid, user=self.user) for oid in valid_ids])
+
+        server_id, channel_id, conversation_id = self._poll_location(poll)
+        return {
+            "poll": poll_payload(self._reloaded_poll(poll.id)),
+            "server_id": server_id,
+            "channel_id": channel_id,
+            "conversation_id": conversation_id,
+        }
+
+    @database_sync_to_async
+    def _close_poll(self, poll_id):
+        """Закрыть опрос досрочно — автор сообщения или delete_messages."""
+        try:
+            poll = Poll.objects.select_related(
+                "message__author", "message__channel__server",
+                "conversation_message__author",
+            ).get(id=poll_id)
+        except Poll.DoesNotExist:
+            return None
+        if poll.closed:
+            return None
+
+        owner_message = poll.message or poll.conversation_message
+        allowed = owner_message.author_id == self.user.id
+        if not allowed and poll.message_id:
+            # В личке ролей нет — там закрыть может только автор.
+            perms = roles.permissions_for(self.user, poll.message.channel.server)
+            allowed = bool(perms.get("delete_messages"))
+        if not allowed or not self._can_touch_poll(poll):
+            return None
+
+        poll.closed = True
+        poll.save(update_fields=["closed"])
+        server_id, channel_id, conversation_id = self._poll_location(poll)
+        return {
+            "poll": poll_payload(self._reloaded_poll(poll.id)),
+            "server_id": server_id,
+            "channel_id": channel_id,
+            "conversation_id": conversation_id,
+        }
+
+    @staticmethod
+    def _reloaded_poll(poll_id):
+        """Опрос с подтянутыми вариантами и голосами — под poll_payload.
+
+        Перечитываем, а не переиспользуем объект из вызывающего: там голоса
+        только что менялись, и prefetch на нём отдал бы состояние ДО правки.
+        """
+        return Poll.objects.prefetch_related("options__votes").get(id=poll_id)
+
+    @database_sync_to_async
+    def _typing_allowed_in_channel(self, channel_id):
+        """id сервера, если этому пользователю можно печатать в этом канале,
+        иначе None.
+
+        Проверки те же, что у отправки (см. _create_message), и это
+        принципиально: «печатает…» — утечка присутствия. Без проверки видимости
+        канала участник сервера, которому приватный канал не показан, всё
+        равно светился бы в нём — а заодно и сам факт, что канал существует.
+
+        Чего здесь нет по сравнению с отправкой — медленного режима и проверки
+        вложений: они про конкретное сообщение, а не про право писать сюда
+        вообще. Блокировка ветки, наоборот, есть: в заблокированной писать
+        нельзя, значит и «печатает…» показывать не о чем.
+        """
+        try:
+            channel = Channel.objects.select_related("server", "parent").get(
+                id=channel_id)
+        except Channel.DoesNotExist:
+            return None
+        if not Membership.objects.filter(
+            user=self.user, server=channel.server
+        ).exists():
+            return None
+        perms = roles.permissions_for(self.user, channel.server)
+        if not perms.get("view_channels") or not perms.get("send_messages"):
+            return None
+        if not can_see_channel(self.user, channel, perms):
+            return None
+        if channel.locked and not perms.get("delete_messages"):
+            return None
+        return channel.server_id
+
+    @database_sync_to_async
+    def _is_conversation_participant(self, conversation_id):
+        return ConversationParticipant.objects.filter(
+            user=self.user, conversation_id=conversation_id
+        ).exists()
+
     @database_sync_to_async
     def _create_dm_message(self, conversation_id, content, reply_to_id=None,
-                           attachment_ids=None):
+                           attachment_ids=None, poll_spec=None):
         if not ConversationParticipant.objects.filter(
             user=self.user, conversation_id=conversation_id
         ).exists():
@@ -1620,6 +2075,7 @@ class GatewayConsumer(AsyncWebsocketConsumer):
                 conversation_id=conversation_id, author=self.user,
                 content=content, reply_to=reply_to)
             self._bind_attachments(attachment_ids, conversation_message=msg)
+            self._attach_poll(poll_spec, conversation_message=msg)
         # Тот, кто «закрыл» эту переписку (см. ConversationParticipant.closed),
         # должен увидеть её снова — иначе сообщение пришло бы в диалог,
         # которого у него нет в списке, и он бы просто его не заметил.

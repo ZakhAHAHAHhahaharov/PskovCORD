@@ -21,7 +21,7 @@ export interface ChannelContextMenuChannel {
  * срока, см. mute_forever). Меньше и грубее, чем у сервера в StatusMenu:
  * канал заглушают на время конкретной темы, а не «пока меня нет», поэтому
  * набор смещён к более коротким интервалам. */
-const MUTE_PRESETS: { minutes: number; label: string }[] = [
+export const MUTE_PRESETS: { minutes: number; label: string }[] = [
   { minutes: 15, label: '15 минут' },
   { minutes: 60, label: '1 час' },
   { minutes: 180, label: '3 часа' },
@@ -29,7 +29,7 @@ const MUTE_PRESETS: { minutes: number; label: string }[] = [
   { minutes: 1440, label: '24 часа' },
 ]
 
-const NOTIFY_OPTIONS: { value: ChannelNotifyLevel; label: string }[] = [
+export const NOTIFY_OPTIONS: { value: ChannelNotifyLevel; label: string }[] = [
   { value: 'default', label: 'Использовать стандартные настройки' },
   { value: 'all', label: 'Все сообщения' },
   { value: 'mentions', label: 'Только @упоминания' },
@@ -268,8 +268,12 @@ export default function ChannelContextMenu({
  * устроены одинаково (список, клик по варианту сразу применяет и закрывает
  * всё меню), различаются только содержимым. Позиционирование — тот же
  * приём, что у ReactionFlyout в MessageContextMenu: справа от кнопки-
- * триггера, с прижатием к краю экрана. */
-function OptionFlyout({
+ * триггера, с прижатием к краю экрана.
+ *
+ * Экспортируется ради ThreadContextMenu: у ветки те же два подменю с тем же
+ * поведением, и своя копия этой позиционной возни разъехалась бы с этой при
+ * первой же правке. */
+export function OptionFlyout({
   triggerRef,
   options,
   extra,

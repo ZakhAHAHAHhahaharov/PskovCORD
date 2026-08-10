@@ -47,6 +47,14 @@ export interface VoiceMesh {
   /** Демонстрирую ли я сейчас свой экран. */
   isSharingScreen: boolean
   toggleScreenShare: () => void
+  /** Камеры ДРУГИХ участников. В отличие от screenShares подписываться на них
+   * не нужно — они приходят сами (см. sfu.ts, Source). */
+  cameraStreams: Map<number, MediaStream>
+  /** Локальный предпросмотр своей камеры (без похода через SFU). */
+  ownCameraStream: MediaStream | null
+  /** Включена ли моя камера. */
+  isCameraOn: boolean
+  toggleCamera: () => void
   muted: boolean
   toggleMute: () => void
   deafened: boolean
@@ -85,6 +93,10 @@ const EMPTY_MESH: VoiceMesh = {
   ownScreenStream: null,
   isSharingScreen: false,
   toggleScreenShare: () => {},
+  cameraStreams: new Map(),
+  ownCameraStream: null,
+  isCameraOn: false,
+  toggleCamera: () => {},
   muted: true,
   toggleMute: () => {},
   deafened: false,
@@ -132,6 +144,11 @@ export function useVoiceMesh(
   )
   const [ownScreenStream, setOwnScreenStream] = useState<MediaStream | null>(null)
   const [isSharingScreen, setIsSharingScreen] = useState(false)
+  const [cameraStreams, setCameraStreams] = useState<Map<number, MediaStream>>(
+    () => new Map(),
+  )
+  const [ownCameraStream, setOwnCameraStream] = useState<MediaStream | null>(null)
+  const [isCameraOn, setIsCameraOn] = useState(false)
   // preferMicMuted/preferDeafened — сохранённое желаемое состояние (см.
   // settings.tsx), выставляется и вне звонка кнопками в user-panel
   // (SidebarBottomBar). deafened сразу стартует по нему; muted — нет (см.
@@ -155,6 +172,9 @@ export function useVoiceMesh(
   const localStream = useRef<MediaStream | null>(null)
   // Локальный поток захвата экрана — чтобы остановить его дорожки при завершении.
   const displayStream = useRef<MediaStream | null>(null)
+  // То же для камеры: без явного stop() индикатор «камера включена» у ОС
+  // продолжает гореть после выхода из звонка.
+  const cameraStream = useRef<MediaStream | null>(null)
   const remoteStreamsRef = useRef(remoteStreams)
   remoteStreamsRef.current = remoteStreams
   // Состояние мьюта на момент включения дефена — чтобы при выключении дефена
@@ -171,6 +191,9 @@ export function useVoiceMesh(
   // заново, чтобы показ не пришлось запускать вручную повторно.
   const isSharingScreenRef = useRef(isSharingScreen)
   isSharingScreenRef.current = isSharingScreen
+  // То же для камеры — см. комментарий выше про реконнект.
+  const isCameraOnRef = useRef(isCameraOn)
+  isCameraOnRef.current = isCameraOn
   // userId'ы, чью демонстрацию мы явно попросили посмотреть (watchScreen) —
   // это состояние живёт ТОЛЬКО внутри SfuClient-инстанса, а реконнект создаёт
   // новый инстанс с нуля. Без этого списка после реконнекта чужая демка,
@@ -292,6 +315,21 @@ export function useVoiceMesh(
             return next
           })
         },
+        onCameraStream: (userId, stream) => {
+          setCameraStreams((prev) => {
+            const next = new Map(prev)
+            next.set(userId, stream)
+            return next
+          })
+        },
+        onCameraRemoved: (userId) => {
+          setCameraStreams((prev) => {
+            if (!prev.has(userId)) return prev
+            const next = new Map(prev)
+            next.delete(userId)
+            return next
+          })
+        },
         onStatus: (s) => {
           if (cancelled) return
           if (s === 'connected') {
@@ -359,6 +397,17 @@ export function useVoiceMesh(
             await sfu.startScreen(displayStream.current.getTracks())
           } catch {
             setIsSharingScreen(false)
+          }
+        }
+        // Камера — по той же логике, что и демонстрация выше: захват жив,
+        // продюсируем его на новом транспорте. Неудача не роняет реконнект,
+        // просто камера гаснет и её включают заново.
+        if (isReconnect && isCameraOnRef.current && cameraStream.current) {
+          const track = cameraStream.current.getVideoTracks()[0]
+          try {
+            if (track) await sfu.startCamera(track)
+          } catch {
+            setIsCameraOn(false)
           }
         }
         // Аналогично — чужие демки, которые мы смотрели, на новом клиенте
@@ -467,6 +516,10 @@ export function useVoiceMesh(
       localStream.current = null
       displayStream.current?.getTracks().forEach((t) => t.stop())
       displayStream.current = null
+      // Без явного stop() индикатор камеры у ОС/браузера продолжает гореть
+      // после выхода из звонка — то же, что и с захватом экрана выше.
+      cameraStream.current?.getTracks().forEach((t) => t.stop())
+      cameraStream.current = null
       micProcessedStreamRef.current?.getTracks().forEach((t) => t.stop())
       micProcessedStreamRef.current = null
       micGainNodeRef.current = null
@@ -763,6 +816,79 @@ export function useVoiceMesh(
       })
   }
 
+  const stopCamera = () => {
+    client.current?.stopCamera()
+    cameraStream.current?.getTracks().forEach((t) => t.stop())
+    cameraStream.current = null
+    setIsCameraOn(false)
+    setOwnCameraStream(null)
+  }
+
+  const toggleCamera = () => {
+    if (isCameraOn) {
+      stopCamera()
+      return
+    }
+    if (!client.current) return
+    void navigator.mediaDevices
+      .getUserMedia({
+        // Без звука: микрофон уже свой продюсер, и второй его экземпляр
+        // приехал бы всем эхом.
+        video: { width: { ideal: 1280 }, height: { ideal: 720 } },
+        audio: false,
+      })
+      .then(async (stream) => {
+        // Пока браузер спрашивал разрешение, можно успеть выйти из канала —
+        // тогда client.current уже null, и захват надо погасить, иначе
+        // индикатор камеры останется гореть (та же беда, что была у
+        // демонстрации экрана, см. toggleScreenShare).
+        const sfu = client.current
+        const track = stream.getVideoTracks()[0]
+        if (!sfu || !track) {
+          stream.getTracks().forEach((t) => t.stop())
+          return
+        }
+        cameraStream.current = stream
+        // Камеру можно выключить и системными средствами — ловим конец
+        // дорожки и приводим своё состояние в соответствие.
+        track.addEventListener('ended', stopCamera)
+        try {
+          await startCameraWithFreshRights(sfu, track)
+        } catch (e) {
+          stream.getTracks().forEach((t) => t.stop())
+          cameraStream.current = null
+          throw e
+        }
+        setIsCameraOn(true)
+        setOwnCameraStream(stream)
+      })
+      .catch(() => {
+        // Отказали в доступе к камере или её нет вовсе — самый частый путь
+        // сюда. Остальные пути уже прибрали за собой выше.
+        if (!cameraStream.current) return
+        cameraStream.current.getTracks().forEach((t) => t.stop())
+        cameraStream.current = null
+      })
+  }
+
+  /** startCamera с одной повторной попыткой на «нет права показывать видео» —
+   * полный аналог startScreenWithFreshRights, см. комментарий там. */
+  const startCameraWithFreshRights = async (
+    sfu: SfuClient,
+    track: MediaStreamTrack,
+  ) => {
+    try {
+      await sfu.startCamera(track)
+    } catch (err) {
+      const denied = /not allowed by server role/.test((err as Error).message)
+      const refresh = refreshCredentialsRef.current
+      if (!denied || !refresh) throw err
+      sfu.stopCamera()
+      await sfu.updateToken(await refresh())
+      await sfu.startCamera(track)
+    }
+  }
+
   const watchScreen = (userId: number) => {
     watchedScreenUserIdsRef.current.add(userId)
     client.current?.watchScreen(userId)
@@ -782,6 +908,10 @@ export function useVoiceMesh(
     ownScreenStream,
     isSharingScreen,
     toggleScreenShare,
+    cameraStreams,
+    ownCameraStream,
+    isCameraOn,
+    toggleCamera,
     muted,
     toggleMute,
     deafened,

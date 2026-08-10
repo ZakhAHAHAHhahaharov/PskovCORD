@@ -14,6 +14,7 @@ import json
 import re
 import time
 from pathlib import Path
+from unittest import mock
 
 import jwt
 from asgiref.sync import sync_to_async
@@ -21,6 +22,7 @@ from channels.db import database_sync_to_async
 from channels.testing import WebsocketCommunicator
 from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.core.cache import cache
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import IntegrityError
 from django.test import TestCase, TransactionTestCase
@@ -30,7 +32,8 @@ from rest_framework.test import APIClient, APITestCase
 from rest_framework_simplejwt.tokens import AccessToken
 
 from . import (
-    emoji as emoji_keys, mute_vote, presence, roles, sfu, stickers, turn,
+    emoji as emoji_keys, linkpreview, mute_vote, presence, roles, sfu, stickers,
+    turn, uploads,
 )
 from .consumers import GatewayConsumer
 from accounts.models import Friendship
@@ -40,11 +43,12 @@ from .models import (
     Attachment, Channel, ChannelMemberSettings, Conversation, ConversationMessage,
     ConversationParticipant, MAX_ATTACHMENT_BYTES, MAX_EMOJI_BYTES,
     MAX_REACTIONS_PER_MESSAGE,
-    FriendNickname, Membership, Message, ProfileNote, Reaction, Role, Server,
-    ServerAuditLog, ServerBan,
+    FriendNickname, Membership, Message, Poll, PollVote, ProfileNote, Reaction,
+    Role, Server, ServerAuditLog, ServerBan,
     ServerEmoji, ServerInvite, ServerJoinRequest, Sticker, StickerPack,
     ChannelReadState, ThreadMember,
-    MAX_STICKER_BYTES, MAX_VOICE_MS, MAX_WAVEFORM_POINTS, STICKER_SIDE, dm_room,
+    MAX_SOUND_BYTES, MAX_STICKER_BYTES, MAX_VOICE_MS, MAX_WAVEFORM_POINTS,
+    STICKER_SIDE, dm_room,
 )
 from .permissions import can_dm, can_see_channel
 from .serializers import RoleSerializer
@@ -2653,6 +2657,176 @@ class HeartbeatSweepTests(TestCase):
         self.assertFalse(presence.heartbeat(self.uid))
 
 
+class GatewayPongTests(TransactionTestCase):
+    """ping обязан получать ответ.
+
+    Не ради presence (его продлевает сам ping), а ради клиента: соединение
+    умирает не только close-фреймом — при смене сети или NAT-таймауте TCP
+    остаётся «полуоткрытым», onclose не приходит никогда, и без ответа
+    сервера вкладка живёт с мёртвым сокетом до перезагрузки страницы.
+    Ответ на ping — единственное, на чём держится watchdog в web/src/gateway.tsx.
+    """
+
+    def setUp(self):
+        presence._r.flushdb()
+        self.user = User.objects.create_user(username="pinger", password="pw12345")
+
+    def tearDown(self):
+        presence._r.flushdb()
+
+    async def _connect(self, user):
+        token = str(AccessToken.for_user(user))
+        comm = WebsocketCommunicator(
+            JWTAuthMiddleware(GatewayConsumer.as_asgi()),
+            f"/ws/gateway?token={token}")
+        connected, _ = await comm.connect()
+        self.assertTrue(connected)
+        return comm
+
+    async def test_ping_answered_with_pong(self):
+        comm = await self._connect(self.user)
+        await comm.receive_json_from(timeout=2)  # "ready"
+
+        await comm.send_json_to({"op": "ping"})
+        msg = await comm.receive_json_from(timeout=2)
+        self.assertEqual(msg["op"], "pong")
+
+        # Второй пинг по тому же сокету отвечается так же: watchdog шлёт их
+        # раз в 30 секунд всю жизнь соединения, а не однажды при открытии.
+        await comm.send_json_to({"op": "ping"})
+        msg = await comm.receive_json_from(timeout=2)
+        self.assertEqual(msg["op"], "pong")
+
+        await comm.disconnect()
+
+    async def test_pong_precedes_presence_restore(self):
+        """Ответ уходит ДО похода в Redis: если pong ждёт восстановления
+        presence (а оно ещё и рассылает broadcast), медленный Redis
+        превращает исправный сокет в «мёртвый» для клиента."""
+        comm = await self._connect(self.user)
+        await comm.receive_json_from(timeout=2)  # "ready"
+
+        # Сокет жив, но sweep успел счесть его призраком — на этот случай
+        # heartbeat возвращает restored=True и рассылает presence_update.
+        await asyncio.to_thread(presence.force_offline, str(self.user.id))
+
+        await comm.send_json_to({"op": "ping"})
+        first = await comm.receive_json_from(timeout=2)
+        self.assertEqual(first["op"], "pong")
+
+        await comm.disconnect()
+
+
+class TypingIndicatorTests(TransactionTestCase):
+    """typing_start: рассылка, троттлинг и — главное — проверка доступа.
+
+    «Печатает…» это утечка присутствия: без проверки видимости канала
+    участник сервера светился бы в приватном канале, куда его не пускали, а
+    заодно выдавал бы сам факт существования этого канала.
+    """
+
+    def setUp(self):
+        presence._r.flushdb()
+        self.alice = User.objects.create_user(username="typer_a", password="pw12345")
+        self.bob = User.objects.create_user(username="typer_b", password="pw12345")
+        self.server = Server.objects.create(name="s", owner=self.alice)
+        for u in (self.alice, self.bob):
+            Membership.objects.create(user=u, server=self.server)
+        self.channel = Channel.objects.create(
+            server=self.server, name="general", kind=Channel.TEXT, position=0)
+
+    def tearDown(self):
+        presence._r.flushdb()
+
+    async def _connect(self, user):
+        token = str(AccessToken.for_user(user))
+        comm = WebsocketCommunicator(
+            JWTAuthMiddleware(GatewayConsumer.as_asgi()),
+            f"/ws/gateway?token={token}")
+        connected, _ = await comm.connect()
+        self.assertTrue(connected)
+        return comm
+
+    @staticmethod
+    async def _receive_until(comm, op, timeout=2, max_messages=10):
+        for _ in range(max_messages):
+            msg = await comm.receive_json_from(timeout=timeout)
+            if msg.get("op") == op:
+                return msg
+        raise AssertionError(f"op={op!r} не пришёл за {max_messages} сообщений")
+
+    @staticmethod
+    async def _assert_op_not_received(comm, op, timeout=0.3, interval=0.01):
+        start = time.monotonic()
+        while time.monotonic() - start < timeout:
+            while not comm.output_queue.empty():
+                raw = comm.output_queue.get_nowait()
+                if "text" in raw:
+                    msg = json.loads(raw["text"])
+                    if msg.get("op") == op:
+                        raise AssertionError(f"op={op!r} не должен был прийти: {msg}")
+            await asyncio.sleep(interval)
+
+    async def test_typing_reaches_other_member(self):
+        alice_ws = await self._connect(self.alice)
+        bob_ws = await self._connect(self.bob)
+
+        await alice_ws.send_json_to(
+            {"op": "typing_start", "channel_id": self.channel.id})
+        msg = await self._receive_until(bob_ws, "typing")
+        self.assertEqual(msg["user_id"], self.alice.id)
+        self.assertEqual(msg["channel_id"], self.channel.id)
+
+        await alice_ws.disconnect()
+        await bob_ws.disconnect()
+
+    async def test_typing_throttled_per_connection(self):
+        """Второй typing_start подряд не рассылается: op выглядит дешёвым, но
+        каждый — это проверка прав в БД и рассылка на всю группу сервера."""
+        alice_ws = await self._connect(self.alice)
+        bob_ws = await self._connect(self.bob)
+
+        await alice_ws.send_json_to(
+            {"op": "typing_start", "channel_id": self.channel.id})
+        await self._receive_until(bob_ws, "typing")
+
+        await alice_ws.send_json_to(
+            {"op": "typing_start", "channel_id": self.channel.id})
+        await self._assert_op_not_received(bob_ws, "typing")
+
+        await alice_ws.disconnect()
+        await bob_ws.disconnect()
+
+    async def test_typing_from_non_member_not_broadcast(self):
+        outsider = await database_sync_to_async(User.objects.create_user)(
+            username="typer_out", password="pw12345")
+        outsider_ws = await self._connect(outsider)
+        bob_ws = await self._connect(self.bob)
+
+        await outsider_ws.send_json_to(
+            {"op": "typing_start", "channel_id": self.channel.id})
+        await self._assert_op_not_received(bob_ws, "typing")
+
+        await outsider_ws.disconnect()
+        await bob_ws.disconnect()
+
+    async def test_typing_requires_both_ids_absent(self):
+        """channel_id и conversation_id разом — испорченный клиент; гадать,
+        что он имел в виду, нельзя, и рассылать тем более."""
+        alice_ws = await self._connect(self.alice)
+        bob_ws = await self._connect(self.bob)
+
+        await alice_ws.send_json_to({
+            "op": "typing_start",
+            "channel_id": self.channel.id,
+            "conversation_id": 1,
+        })
+        await self._assert_op_not_received(bob_ws, "typing")
+
+        await alice_ws.disconnect()
+        await bob_ws.disconnect()
+
+
 class MuteVoteClaimTests(TestCase):
     """Резолв голосования дёргают два независимых места (consumers и
     vote_sweep). Раньше read → tally → clear шли тремя операциями, и при
@@ -5197,6 +5371,520 @@ class InviteAndBanPermissionTests(APITestCase):
             "/api/servers/{}/bans".format(self.server.id),
             {"user_id": self.target.id}, format="json")
         self.assertEqual(resp.status_code, 403)
+
+
+class SoundboardTests(APITestCase):
+    """Загрузка звуков: права, лимиты и — главное — опознание формата.
+
+    Формат определяется по СОДЕРЖИМОМУ, а не по расширению: файлы соундборда
+    отдаёт nginx напрямую с нашего origin, и валидный OGG под именем
+    "evil.html" уехал бы документом на домене, где в localStorage лежит JWT.
+    """
+
+    def setUp(self):
+        self.owner = User.objects.create_user(username="sb_owner", password="pw12345")
+        self.member = User.objects.create_user(username="sb_member", password="pw12345")
+        self.server = Server.objects.create(name="s", owner=self.owner)
+        Membership.objects.create(user=self.owner, server=self.server)
+        Membership.objects.create(user=self.member, server=self.server)
+        roles.create_default_role(self.server)
+
+    @staticmethod
+    def _ogg(size=2048):
+        return SimpleUploadedFile(
+            "sound.ogg", b"OggS" + b"\x00" * (size - 4), content_type="audio/ogg")
+
+    def test_owner_can_upload(self):
+        self.client.force_authenticate(self.owner)
+        resp = self.client.post(
+            f"/api/servers/{self.server.id}/sounds",
+            {"name": "Бонк", "file": self._ogg()}, format="multipart")
+        self.assertEqual(resp.status_code, 201, resp.data)
+        self.assertEqual(resp.data["name"], "Бонк")
+        # Путь собран сервером из опознанного типа, а не из имени файла.
+        self.assertTrue(resp.data["url"].endswith(".ogg"))
+
+    def test_regular_member_cannot_upload(self):
+        self.client.force_authenticate(self.member)
+        resp = self.client.post(
+            f"/api/servers/{self.server.id}/sounds",
+            {"name": "Бонк", "file": self._ogg()}, format="multipart")
+        self.assertEqual(resp.status_code, 403)
+
+    def test_rejects_non_audio_content(self):
+        """Расширение не спасает: содержимое не аудио — отказ."""
+        self.client.force_authenticate(self.owner)
+        bogus = SimpleUploadedFile(
+            "sound.ogg", b"<html><script>alert(1)</script></html>",
+            content_type="audio/ogg")
+        resp = self.client.post(
+            f"/api/servers/{self.server.id}/sounds",
+            {"name": "Злой", "file": bogus}, format="multipart")
+        self.assertEqual(resp.status_code, 400)
+
+    def test_rejects_oversized_file(self):
+        self.client.force_authenticate(self.owner)
+        big = SimpleUploadedFile(
+            "big.ogg", b"OggS" + b"\x00" * MAX_SOUND_BYTES, content_type="audio/ogg")
+        resp = self.client.post(
+            f"/api/servers/{self.server.id}/sounds",
+            {"name": "Длинный", "file": big}, format="multipart")
+        self.assertEqual(resp.status_code, 400)
+
+    def test_duplicate_name_rejected(self):
+        """На кнопке видно только имя — две одинаковые неразличимы."""
+        self.client.force_authenticate(self.owner)
+        url = f"/api/servers/{self.server.id}/sounds"
+        first = self.client.post(
+            url, {"name": "Бонк", "file": self._ogg()}, format="multipart")
+        self.assertEqual(first.status_code, 201)
+        second = self.client.post(
+            url, {"name": "бонк", "file": self._ogg()}, format="multipart")
+        self.assertEqual(second.status_code, 400)
+
+    def test_members_see_sounds(self):
+        self.client.force_authenticate(self.owner)
+        self.client.post(
+            f"/api/servers/{self.server.id}/sounds",
+            {"name": "Бонк", "file": self._ogg()}, format="multipart")
+        self.client.force_authenticate(self.member)
+        resp = self.client.get(f"/api/servers/{self.server.id}/sounds")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual([s["name"] for s in resp.data], ["Бонк"])
+
+    def test_sound_format_sniffing(self):
+        """Сигнатуры, которые обязаны опознаваться, и мусор, который нет."""
+        for head, expected in (
+            (b"OggS", "audio/ogg"),
+            (b"RIFF....WAVE", "audio/wav"),
+            (b"ID3\x03", "audio/mpeg"),
+            (b"\xff\xfb\x90", "audio/mpeg"),
+            (b"\x1a\x45\xdf\xa3", "audio/webm"),
+        ):
+            with self.subTest(head=head):
+                f = SimpleUploadedFile("x", head + b"\x00" * 32)
+                self.assertEqual(uploads.sniff_sound(f), expected)
+        self.assertIsNone(
+            uploads.sniff_sound(SimpleUploadedFile("x", b"<html>not audio</html>")))
+
+
+class PollTests(TransactionTestCase):
+    """Опросы: создание вместе с сообщением, голосование, закрытие, доступ."""
+
+    def setUp(self):
+        presence._r.flushdb()
+        self.author = User.objects.create_user(username="poll_a", password="pw12345")
+        self.voter = User.objects.create_user(username="poll_b", password="pw12345")
+        self.outsider = User.objects.create_user(username="poll_c", password="pw12345")
+        self.server = Server.objects.create(name="s", owner=self.author)
+        for u in (self.author, self.voter):
+            Membership.objects.create(user=u, server=self.server)
+        self.channel = Channel.objects.create(
+            server=self.server, name="general", kind=Channel.TEXT, position=0)
+
+    def tearDown(self):
+        presence._r.flushdb()
+
+    async def _connect(self, user):
+        token = str(AccessToken.for_user(user))
+        comm = WebsocketCommunicator(
+            JWTAuthMiddleware(GatewayConsumer.as_asgi()),
+            f"/ws/gateway?token={token}")
+        connected, _ = await comm.connect()
+        self.assertTrue(connected)
+        return comm
+
+    @staticmethod
+    async def _receive_until(comm, op, timeout=2, max_messages=10):
+        for _ in range(max_messages):
+            msg = await comm.receive_json_from(timeout=timeout)
+            if msg.get("op") == op:
+                return msg
+        raise AssertionError(f"op={op!r} не пришёл за {max_messages} сообщений")
+
+    async def _send_poll(self, comm, **overrides):
+        payload = {
+            "op": "send_message",
+            "channel_id": self.channel.id,
+            "content": "",
+            "poll": {
+                "question": "Кто идёт?",
+                "options": ["Я", "Не я"],
+                **overrides,
+            },
+        }
+        await comm.send_json_to(payload)
+        return await self._receive_until(comm, "message_create")
+
+    async def test_poll_created_with_message(self):
+        ws = await self._connect(self.author)
+        created = await self._send_poll(ws)
+        poll = created["message"]["poll"]
+        self.assertEqual(poll["question"], "Кто идёт?")
+        self.assertEqual([o["text"] for o in poll["options"]], ["Я", "Не я"])
+        self.assertTrue(poll["open"])
+        self.assertEqual(poll["total_votes"], 0)
+        await ws.disconnect()
+
+    async def test_poll_without_text_is_allowed(self):
+        """У опроса свой текст — подписывать его сверху ещё и сообщением
+        человек не обязан."""
+        ws = await self._connect(self.author)
+        created = await self._send_poll(ws)
+        self.assertEqual(created["message"]["content"], "")
+        await ws.disconnect()
+
+    async def test_duplicate_options_collapsed(self):
+        """Два одинаковых варианта — не выбор, а способ размазать голоса."""
+        ws = await self._connect(self.author)
+        created = await self._send_poll(ws, options=["Да", "да", "Нет"])
+        texts = [o["text"] for o in created["message"]["poll"]["options"]]
+        self.assertEqual(texts, ["Да", "Нет"])
+        await ws.disconnect()
+
+    async def test_single_choice_vote_replaces_previous(self):
+        ws = await self._connect(self.author)
+        created = await self._send_poll(ws)
+        poll = created["message"]["poll"]
+        first, second = poll["options"][0]["id"], poll["options"][1]["id"]
+
+        await ws.send_json_to(
+            {"op": "poll_vote", "poll_id": poll["id"], "option_ids": [first]})
+        update = await self._receive_until(ws, "poll_update")
+        self.assertEqual(update["poll"]["total_votes"], 1)
+
+        # Переставили голос — прежний снимается, а не добавляется второй.
+        await ws.send_json_to(
+            {"op": "poll_vote", "poll_id": poll["id"], "option_ids": [second]})
+        update = await self._receive_until(ws, "poll_update")
+        self.assertEqual(update["poll"]["total_votes"], 1)
+        by_id = {o["id"]: o for o in update["poll"]["options"]}
+        self.assertEqual(by_id[first]["votes"], 0)
+        self.assertEqual(by_id[second]["votes"], 1)
+        await ws.disconnect()
+
+    async def test_single_choice_ignores_extra_options(self):
+        """«Выбрал два в опросе на один» — бессмыслица, а не повод для отказа:
+        берём первый и молчим."""
+        ws = await self._connect(self.author)
+        created = await self._send_poll(ws)
+        poll = created["message"]["poll"]
+        ids = [o["id"] for o in poll["options"]]
+
+        await ws.send_json_to(
+            {"op": "poll_vote", "poll_id": poll["id"], "option_ids": ids})
+        update = await self._receive_until(ws, "poll_update")
+        self.assertEqual(update["poll"]["total_votes"], 1)
+        await ws.disconnect()
+
+    async def test_multiple_choice_allows_several(self):
+        ws = await self._connect(self.author)
+        created = await self._send_poll(ws, multiple=True)
+        poll = created["message"]["poll"]
+        ids = [o["id"] for o in poll["options"]]
+
+        await ws.send_json_to(
+            {"op": "poll_vote", "poll_id": poll["id"], "option_ids": ids})
+        update = await self._receive_until(ws, "poll_update")
+        self.assertEqual(update["poll"]["total_votes"], 2)
+        # Знаменатель процентов при multiple — люди, а не голоса.
+        self.assertEqual(update["poll"]["total_voters"], 1)
+        await ws.disconnect()
+
+    async def test_empty_option_list_clears_vote(self):
+        ws = await self._connect(self.author)
+        created = await self._send_poll(ws)
+        poll = created["message"]["poll"]
+
+        await ws.send_json_to({
+            "op": "poll_vote", "poll_id": poll["id"],
+            "option_ids": [poll["options"][0]["id"]]})
+        await self._receive_until(ws, "poll_update")
+
+        await ws.send_json_to(
+            {"op": "poll_vote", "poll_id": poll["id"], "option_ids": []})
+        update = await self._receive_until(ws, "poll_update")
+        self.assertEqual(update["poll"]["total_votes"], 0)
+        await ws.disconnect()
+
+    async def test_outsider_cannot_vote(self):
+        """Голосовать в канале, которого не видно, нельзя — иначе подбором
+        poll_id можно было бы и подсмотреть результаты, и накрутить их."""
+        author_ws = await self._connect(self.author)
+        created = await self._send_poll(author_ws)
+        poll = created["message"]["poll"]
+
+        outsider_ws = await self._connect(self.outsider)
+        await outsider_ws.send_json_to({
+            "op": "poll_vote", "poll_id": poll["id"],
+            "option_ids": [poll["options"][0]["id"]]})
+
+        stored = await database_sync_to_async(PollVote.objects.count)()
+        # Голос не записан. Проверяем состояние, а не отсутствие рассылки:
+        # рассылки и так не будет, но записанный голос был бы хуже.
+        self.assertEqual(stored, 0)
+
+        await author_ws.disconnect()
+        await outsider_ws.disconnect()
+
+    async def test_closed_poll_rejects_votes(self):
+        author_ws = await self._connect(self.author)
+        created = await self._send_poll(author_ws)
+        poll = created["message"]["poll"]
+
+        await author_ws.send_json_to({"op": "poll_close", "poll_id": poll["id"]})
+        update = await self._receive_until(author_ws, "poll_update")
+        self.assertFalse(update["poll"]["open"])
+
+        await author_ws.send_json_to({
+            "op": "poll_vote", "poll_id": poll["id"],
+            "option_ids": [poll["options"][0]["id"]]})
+        stored = await database_sync_to_async(PollVote.objects.count)()
+        self.assertEqual(stored, 0)
+        await author_ws.disconnect()
+
+    async def test_stranger_cannot_close_poll(self):
+        author_ws = await self._connect(self.author)
+        created = await self._send_poll(author_ws)
+        poll = created["message"]["poll"]
+
+        voter_ws = await self._connect(self.voter)
+        await voter_ws.send_json_to({"op": "poll_close", "poll_id": poll["id"]})
+
+        still_open = await database_sync_to_async(
+            lambda: Poll.objects.get(id=poll["id"]).closed)()
+        self.assertFalse(still_open)
+
+        await author_ws.disconnect()
+        await voter_ws.disconnect()
+
+    async def test_expired_poll_is_closed_without_sweep(self):
+        """Срок проверяется в момент вопроса, а не фоновым процессом."""
+        ws = await self._connect(self.author)
+        created = await self._send_poll(ws)
+        poll_id = created["message"]["poll"]["id"]
+
+        await database_sync_to_async(
+            lambda: Poll.objects.filter(id=poll_id).update(
+                closes_at=timezone.now() - timedelta(minutes=1)))()
+        is_open = await database_sync_to_async(
+            lambda: Poll.objects.get(id=poll_id).is_open())()
+        self.assertFalse(is_open)
+        await ws.disconnect()
+
+
+class LinkPreviewSafetyTests(TestCase):
+    """Превью ссылок ходит по URL, который прислал пользователь, — то есть это
+    ровно тот механизм, которым читают внутреннюю сеть чужими руками (SSRF).
+
+    Проверяем именно отказы: что превью «работает», видно глазами, а что оно
+    не сходит на 127.0.0.1 — только тестом.
+    """
+
+    def test_rejects_private_and_local_addresses(self):
+        for url in (
+            "http://127.0.0.1:8000/admin",
+            "http://localhost/",
+            "http://10.0.0.5/",
+            "http://192.168.1.1/",
+            "http://172.16.0.1/",
+            # Метаданные облака — классическая цель SSRF.
+            "http://169.254.169.254/latest/meta-data/",
+            "http://[::1]/",
+        ):
+            with self.subTest(url=url):
+                with self.assertRaises(linkpreview.PreviewError):
+                    linkpreview._validate_url(url)
+
+    def test_rejects_non_http_schemes(self):
+        for url in ("file:///etc/passwd", "ftp://example.com/x", "gopher://x/"):
+            with self.subTest(url=url):
+                with self.assertRaises(linkpreview.PreviewError):
+                    linkpreview._validate_url(url)
+
+    def test_public_ip_classification(self):
+        self.assertTrue(linkpreview._is_public_ip("8.8.8.8"))
+        self.assertTrue(linkpreview._is_public_ip("2606:4700:4700::1111"))
+        self.assertFalse(linkpreview._is_public_ip("127.0.0.1"))
+        self.assertFalse(linkpreview._is_public_ip("0.0.0.0"))
+        self.assertFalse(linkpreview._is_public_ip("не адрес"))
+
+    def test_host_rejected_when_any_address_is_private(self):
+        """Имя может отдавать несколько записей — хватит одной приватной."""
+        with mock.patch.object(
+            linkpreview.socket, "getaddrinfo",
+            return_value=[
+                (2, 1, 6, "", ("93.184.216.34", 0)),
+                (2, 1, 6, "", ("127.0.0.1", 0)),
+            ],
+        ):
+            with self.assertRaises(linkpreview.PreviewError):
+                linkpreview._check_host_public("example.com")
+
+    def test_first_url_extraction(self):
+        self.assertEqual(
+            linkpreview.first_url("смотри тут https://example.com/a вот"),
+            "https://example.com/a")
+        # Хвостовая пунктуация принадлежит предложению, а не ссылке.
+        self.assertEqual(
+            linkpreview.first_url("ссылка https://example.com/b."),
+            "https://example.com/b")
+        # Только первая — иначе сообщение из десятка ссылок превратится в
+        # простыню карточек.
+        self.assertEqual(
+            linkpreview.first_url("https://one.example https://two.example"),
+            "https://one.example")
+        self.assertIsNone(linkpreview.first_url("без ссылок вовсе"))
+
+
+class LinkPreviewViewTests(APITestCase):
+    """Ручка /api/link-preview: кэш (в т.ч. отрицательный) и отказы."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(username="lp_user", password="pw12345")
+        self.client.force_authenticate(self.user)
+        cache.clear()
+
+    def tearDown(self):
+        cache.clear()
+
+    def test_requires_url(self):
+        self.assertEqual(self.client.get("/api/link-preview").status_code, 400)
+
+    def test_private_address_gives_404_not_a_fetch(self):
+        resp = self.client.get("/api/link-preview", {"url": "http://127.0.0.1/"})
+        self.assertEqual(resp.status_code, 404)
+
+    def test_successful_preview_is_cached(self):
+        payload = {
+            "url": "https://example.com/a",
+            "title": "Заголовок",
+            "description": "Описание",
+            "image": "",
+            "site_name": "Example",
+        }
+        with mock.patch.object(
+            linkpreview, "build_preview", return_value=payload
+        ) as build:
+            first = self.client.get("/api/link-preview", {"url": "https://example.com/a"})
+            second = self.client.get("/api/link-preview", {"url": "https://example.com/a"})
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(first.data["title"], "Заголовок")
+        self.assertEqual(second.data["title"], "Заголовок")
+        # Второй запрос обслужен кэшем — на чужой сайт ходили один раз.
+        self.assertEqual(build.call_count, 1)
+
+    def test_failure_is_cached_too(self):
+        """Иначе каждая открывшая канал вкладка ходила бы на мёртвую ссылку
+        заново."""
+        with mock.patch.object(
+            linkpreview, "build_preview",
+            side_effect=linkpreview.PreviewError("нет"),
+        ) as build:
+            first = self.client.get("/api/link-preview", {"url": "https://dead.example/x"})
+            second = self.client.get("/api/link-preview", {"url": "https://dead.example/x"})
+        self.assertEqual(first.status_code, 404)
+        self.assertEqual(second.status_code, 404)
+        self.assertEqual(build.call_count, 1)
+
+    def test_unexpected_error_does_not_leak(self):
+        """Чужой сайт может ответить чем угодно — падать всем приложением
+        из-за карточки нельзя."""
+        with mock.patch.object(
+            linkpreview, "build_preview", side_effect=ValueError("битая кодировка"),
+        ):
+            resp = self.client.get("/api/link-preview", {"url": "https://weird.example/"})
+        self.assertEqual(resp.status_code, 404)
+        self.assertNotIn("битая кодировка", str(resp.data))
+
+
+class GlobalSearchTests(APITestCase):
+    """GET /api/search — поиск сразу по всем каналам и личке.
+
+    Главное здесь не «находит», а «не находит лишнего»: поиск, обходящий
+    видимость каналов, — дыра, через которую видно то, чего не видно глазами.
+    """
+
+    def setUp(self):
+        self.owner = User.objects.create_user(username="gs_owner", password="pw12345")
+        self.member = User.objects.create_user(username="gs_member", password="pw12345")
+        self.stranger = User.objects.create_user(username="gs_stranger", password="pw12345")
+        self.server = Server.objects.create(name="Сервер", owner=self.owner)
+        Membership.objects.create(user=self.owner, server=self.server)
+        self.member_ship = Membership.objects.create(user=self.member, server=self.server)
+        roles.create_default_role(self.server)
+        self.public = Channel.objects.create(
+            server=self.server, name="general", kind=Channel.TEXT, position=0)
+        self.private = Channel.objects.create(
+            server=self.server, name="secret", kind=Channel.TEXT,
+            position=1, is_private=True)
+        Message.objects.create(
+            channel=self.public, author=self.owner, content="ключевое слово тут")
+        Message.objects.create(
+            channel=self.private, author=self.owner, content="ключевое слово в тайне")
+
+    def _search(self, user, query, **params):
+        self.client.force_authenticate(user)
+        return self.client.get("/api/search", {"q": query, **params})
+
+    def test_finds_message_in_visible_channel(self):
+        resp = self._search(self.member, "ключевое")
+        self.assertEqual(resp.status_code, 200)
+        contents = [m["content"] for m in resp.data["channel_messages"]]
+        self.assertIn("ключевое слово тут", contents)
+
+    def test_private_channel_hidden_from_regular_member(self):
+        resp = self._search(self.member, "ключевое")
+        contents = [m["content"] for m in resp.data["channel_messages"]]
+        self.assertNotIn("ключевое слово в тайне", contents)
+
+    def test_private_channel_visible_to_manage_channels(self):
+        resp = self._search(self.owner, "ключевое")
+        contents = [m["content"] for m in resp.data["channel_messages"]]
+        self.assertIn("ключевое слово в тайне", contents)
+
+    def test_non_member_finds_nothing(self):
+        resp = self._search(self.stranger, "ключевое")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data["channel_messages"], [])
+
+    def test_short_query_rejected(self):
+        resp = self._search(self.member, "к")
+        self.assertEqual(resp.status_code, 400)
+
+    def test_dm_searched_only_without_server_scope(self):
+        """server_id сужает до сервера — про личку в этом случае не спрашивали,
+        и подмешивать её в выдачу «по этому серверу» нельзя."""
+        conversation = Conversation.objects.create()
+        ConversationParticipant.objects.create(
+            conversation=conversation, user=self.member)
+        ConversationParticipant.objects.create(
+            conversation=conversation, user=self.owner)
+        ConversationMessage.objects.create(
+            conversation=conversation, author=self.owner,
+            content="ключевое слово в личке")
+
+        everywhere = self._search(self.member, "ключевое")
+        self.assertEqual(
+            [m["content"] for m in everywhere.data["conversation_messages"]],
+            ["ключевое слово в личке"])
+
+        scoped = self._search(self.member, "ключевое", server_id=self.server.id)
+        self.assertEqual(scoped.data["conversation_messages"], [])
+
+    def test_foreign_conversation_not_searched(self):
+        """Чужая переписка, в которой я не участник, не ищется вовсе."""
+        conversation = Conversation.objects.create()
+        ConversationParticipant.objects.create(
+            conversation=conversation, user=self.owner)
+        ConversationParticipant.objects.create(
+            conversation=conversation, user=self.stranger)
+        ConversationMessage.objects.create(
+            conversation=conversation, author=self.owner,
+            content="ключевое слово не для всех")
+
+        resp = self._search(self.member, "ключевое")
+        self.assertEqual(resp.data["conversation_messages"], [])
 
 
 class PrivateChannelTests(APITestCase):

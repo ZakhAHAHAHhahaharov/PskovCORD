@@ -47,6 +47,11 @@ urlpatterns = [
          name="server-emoji"),
     path("servers/<int:server_id>/emoji/<int:emoji_id>",
          views.ServerEmojiDetail.as_view(), name="server-emoji-detail"),
+    # Соундборд — короткие звуки, играющие у всех в голосовом канале.
+    path("servers/<int:server_id>/sounds", views.ServerSoundList.as_view(),
+         name="server-sounds"),
+    path("servers/<int:server_id>/sounds/<int:sound_id>",
+         views.ServerSoundDetail.as_view(), name="server-sound-detail"),
 
     path("servers/<int:server_id>/stickers", views.ServerStickerList.as_view(),
          name="server-stickers"),
@@ -93,6 +98,11 @@ urlpatterns = [
          views.ChannelMessages.as_view(), name="channel-messages"),
     path("channels/<int:channel_id>/search",
          views.ChannelMessageSearch.as_view(), name="channel-search"),
+    # Поиск сразу по всему видимому — каналы всех серверов плюс личка
+    # (в отличие от channel-search выше, ищущего в одном канале).
+    path("search", views.GlobalMessageSearch.as_view(), name="global-search"),
+    # og:title/description/image по ссылке из сообщения (кэш в Redis).
+    path("link-preview", views.LinkPreviewView.as_view(), name="link-preview"),
     path("channels/<int:channel_id>/read",
          views.ChannelReadStateView.as_view(), name="channel-read-state"),
     path("channels/<int:channel_id>/pins",

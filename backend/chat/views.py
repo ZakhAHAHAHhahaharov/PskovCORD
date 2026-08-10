@@ -1,10 +1,13 @@
+import hashlib
 import json
+import logging
 from datetime import timedelta
 
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
 from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.core.cache import cache
 from django.core.files.base import ContentFile
 from django.db import IntegrityError, transaction
 from django.db.models import Count, F, Max, Q
@@ -21,13 +24,15 @@ from accounts.models import Friendship
 from accounts.serializers import UserSerializer
 
 from . import (
-    audit, emoji as emoji_keys, presence, roles, sfu, stickers as sticker_files, uploads,
+    audit, emoji as emoji_keys, linkpreview, presence, roles, sfu,
+    stickers as sticker_files, uploads,
 )
 from .models import (
     Attachment, Channel, ChannelMemberSettings, Conversation, ConversationMessage,
     ConversationParticipant, FriendNickname, Membership, Message, ProfileNote, Role, Server,
     ServerAuditLog, ServerBan, ServerEmoji, ServerInvite, ServerJoinRequest, Sticker, StickerPack,
-    ChannelReadState, ThreadMember, UserRelationState,
+    ChannelReadState, SoundboardSound, ThreadMember, UserRelationState,
+    MAX_SOUND_BYTES, MAX_SOUNDS_PER_SERVER, MAX_SOUND_NAME_LEN, MIN_SOUND_NAME_LEN,
     MAX_ATTACHMENT_BYTES, MAX_EMOJI_BYTES, MAX_EMOJI_PER_SERVER,
     MAX_VOICE_MS, MAX_WAVEFORM_POINTS,
     MAX_STICKER_NAME_LEN, MAX_STICKER_PACK_NAME_LEN, MAX_STICKER_PACKS_PER_SERVER,
@@ -44,11 +49,14 @@ from .serializers import (
     RoleSerializer, ServerAuditLogSerializer, ServerBanSerializer, ServerEmojiSerializer,
     ServerInviteLinkSerializer, ServerInviteSerializer,
     ServerJoinRequestSerializer, ServerSerializer, ServerUpdateSerializer,
+    SoundboardSoundSerializer,
     StickerPackSerializer, StickerSerializer, channel_member_settings_payload,
     membership_settings_payload,
 )
 
 User = get_user_model()
+
+logger = logging.getLogger(__name__)
 
 
 def is_member(user, server) -> bool:
@@ -2735,6 +2743,144 @@ class ChannelMessageSearch(APIView):
         return Response(MessageSerializer(found, many=True).data)
 
 
+class LinkPreviewView(APIView):
+    """GET /api/link-preview?url=… — og:title/description/image по ссылке.
+
+    Кэш — в Redis (общий django cache), а не в БД: это именно кэш, у него
+    есть срок годности, и переживать перезапуск ему не обязательно. Заодно
+    не нужна миграция ради данных, которые ничего не значат.
+
+    Неудача кэшируется тоже, только короче: без этого каждая открывшая канал
+    вкладка ходила бы на мёртвую ссылку заново.
+    """
+
+    # Успех живёт сутки: og-теги меняются редко, а карточка — не новостная
+    # лента.
+    CACHE_TTL_OK = 60 * 60 * 24
+    # Неудача — час: сайт мог лежать временно.
+    CACHE_TTL_FAIL = 60 * 60
+
+    # Ходить по чужим адресам от имени сервера дороже обычной ручки —
+    # отдельная, более жёсткая шкала (см. settings.DEFAULT_THROTTLE_RATES).
+    throttle_scope = "link_preview"
+
+    def get(self, request):
+        url = (request.query_params.get("url") or "").strip()
+        if not url or len(url) > linkpreview.MAX_URL_LEN:
+            return Response({"detail": "Ссылка не указана."}, status=400)
+
+        key = "linkpreview:" + hashlib.sha256(url.encode("utf-8")).hexdigest()
+        cached = cache.get(key)
+        if cached is not None:
+            # {"failed": True} — отрицательный кэш, см. докстринг.
+            if cached.get("failed"):
+                return Response({"detail": "Превью недоступно."}, status=404)
+            return Response(cached)
+
+        try:
+            preview = linkpreview.build_preview(url)
+        except linkpreview.PreviewError as exc:
+            logger.info("link preview failed for %r: %s", url, exc)
+            cache.set(key, {"failed": True}, self.CACHE_TTL_FAIL)
+            return Response({"detail": "Превью недоступно."}, status=404)
+        except Exception:
+            # Чужой сайт может ответить чем угодно вплоть до битой кодировки в
+            # заголовках — падать всем приложением из-за карточки нельзя.
+            logger.exception("link preview crashed for %r", url)
+            cache.set(key, {"failed": True}, self.CACHE_TTL_FAIL)
+            return Response({"detail": "Превью недоступно."}, status=404)
+
+        cache.set(key, preview, self.CACHE_TTL_OK)
+        return Response(preview)
+
+
+class GlobalMessageSearch(APIView):
+    """GET /api/search?q=…[&server_id=<id>] — поиск сразу по всему, что человеку
+    видно: каналы и ветки всех его серверов плюс личка и группы.
+
+    Отличие от ChannelMessageSearch — не в алгоритме (то же вхождение
+    подстроки, см. его докстринг), а в области поиска. Без этой ручки
+    «где-то я это писал, не помню где» решалось перебором каналов руками.
+
+    server_id сужает выдачу до одного сервера («поиск по этому серверу»);
+    без него ищем везде, включая личку.
+
+    Права проверяются ПОКАНАЛЬНО, а не «раз он участник сервера — значит
+    можно»: приватные каналы, приватные ветки и снятое read_message_history
+    ограничивают выдачу ровно так же, как ленту. Иначе поиск стал бы дырой,
+    через которую видно то, чего не видно глазами.
+    """
+
+    def get(self, request):
+        query = (request.query_params.get("q") or "").strip()
+        if len(query) < MIN_SEARCH_QUERY:
+            return Response(
+                {"detail": f"Запрос — минимум {MIN_SEARCH_QUERY} символа."},
+                status=400)
+        only_server_id = _int_param(request, "server_id")
+
+        channel_hits = self._search_channels(request, query, only_server_id)
+        # По серверу ищем — значит про личку не спрашивали.
+        dm_hits = (
+            [] if only_server_id is not None
+            else self._search_conversations(request, query)
+        )
+
+        return Response({
+            "channel_messages": MessageSerializer(channel_hits, many=True).data,
+            "conversation_messages": ConversationMessageSerializer(
+                dm_hits, many=True).data,
+        })
+
+    def _search_channels(self, request, query, only_server_id):
+        server_qs = Server.objects.filter(memberships__user=request.user)
+        if only_server_id is not None:
+            server_qs = server_qs.filter(id=only_server_id)
+
+        found = []
+        # Права считаются ПО СЕРВЕРУ (roles.permissions_for — запрос в БД), а
+        # видимость — по каналу. Поэтому цикл по серверам, а внутри уже одна
+        # выборка сообщений на сервер, а не на канал: серверов у человека
+        # единицы, каналов в них — десятки.
+        for server in server_qs.prefetch_related("channels"):
+            perms = roles.permissions_for(request.user, server)
+            if not perms.get("view_channels"):
+                continue
+            visible_ids = [
+                c.id for c in server.channels.all()
+                if c.kind in Channel.WRITABLE_KINDS
+                and can_see_channel(request.user, c, perms)
+            ]
+            if not visible_ids:
+                continue
+            qs = Message.objects.filter(
+                channel_id__in=visible_ids, content__icontains=query,
+            ).select_related(
+                "author", "reply_to__author", "channel",
+            ).prefetch_related("attachments", "reactions").exclude(
+                system_kind=Message.SYSTEM_THREAD_CREATED)
+            qs = _hide_blocked(request.user, qs)
+            qs = _hide_old_history(request, server, qs)
+            found.extend(qs.order_by("-created_at", "-id")[:SEARCH_LIMIT])
+
+        # Пересортировка после склейки: до неё выдача шла «сервер за сервером»,
+        # то есть свежее сообщение из второго сервера оказывалось ниже
+        # прошлогоднего из первого.
+        found.sort(key=lambda m: (m.created_at, m.id), reverse=True)
+        return found[:SEARCH_LIMIT]
+
+    def _search_conversations(self, request, query):
+        conversation_ids = ConversationParticipant.objects.filter(
+            user=request.user).values_list("conversation_id", flat=True)
+        qs = ConversationMessage.objects.filter(
+            conversation_id__in=conversation_ids, content__icontains=query,
+        ).select_related(
+            "author", "reply_to__author",
+        ).prefetch_related("attachments", "reactions")
+        qs = _hide_blocked(request.user, qs)
+        return list(qs.order_by("-created_at", "-id")[:SEARCH_LIMIT])
+
+
 class ChannelMemberSettingsView(APIView):
     """GET/PATCH /api/channels/<id>/settings — ЛИЧНЫЕ настройки уведомлений и
     заглушения запрашивающего для ОДНОГО канала (правый клик → «Параметры
@@ -3139,6 +3285,137 @@ class ServerEmojiDetail(APIView):
         emoji.delete()
         _broadcast_emoji_update(server)
         return Response(status=204)
+
+
+def _validate_sound_name(raw, server, exclude_id=None):
+    """(имя, отказ). Имя уникально в пределах сервера — на кнопке соундборда
+    видно только его, и две одинаковые кнопки неразличимы."""
+    name = (raw or "").strip()
+    if not MIN_SOUND_NAME_LEN <= len(name) <= MAX_SOUND_NAME_LEN:
+        return None, Response(
+            {"detail": f"Название — от {MIN_SOUND_NAME_LEN} до "
+                       f"{MAX_SOUND_NAME_LEN} символов."},
+            status=400)
+    taken = SoundboardSound.objects.filter(server=server, name__iexact=name)
+    if exclude_id is not None:
+        taken = taken.exclude(id=exclude_id)
+    if taken.exists():
+        return None, Response(
+            {"detail": "Звук с таким названием уже есть."}, status=400)
+    return name, None
+
+
+class ServerSoundList(APIView):
+    """GET — звуки соундборда сервера (видны всем участникам),
+    POST — загрузить новый.
+
+    Права те же, что у эмодзи и стикеров: соундборд — такое же «средство
+    выражения», и заводить ему отдельную пару прав значило бы просить
+    владельца сервера настраивать одно и то же трижды.
+    """
+
+    parser_classes = [MultiPartParser, FormParser]
+
+    def get(self, request, server_id):
+        server = get_object_or_404(Server, id=server_id)
+        if not is_member(request.user, server):
+            return Response({"detail": "Вы не участник сервера."}, status=403)
+        return Response(
+            SoundboardSoundSerializer(server.sounds.all(), many=True).data)
+
+    def post(self, request, server_id):
+        server = get_object_or_404(Server, id=server_id)
+        denied = _require_permission(request, server, "create_expressions")
+        if denied:
+            return denied
+
+        if server.sounds.count() >= MAX_SOUNDS_PER_SERVER:
+            return Response(
+                {"detail": f"На сервере уже {MAX_SOUNDS_PER_SERVER} звуков — "
+                           "удалите ненужные."},
+                status=400)
+
+        uploaded = request.FILES.get("file")
+        if uploaded is None or uploaded.size == 0:
+            return Response({"detail": "Нужен файл в поле file."}, status=400)
+        if uploaded.size > MAX_SOUND_BYTES:
+            return Response(
+                {"detail": f"Звук слишком большой (макс. "
+                           f"{MAX_SOUND_BYTES // 1024} КБ). Соундборд — это "
+                           "короткие звуки на пару секунд."},
+                status=400)
+
+        content_type = uploads.sniff_sound(uploaded)
+        if content_type is None:
+            return Response(
+                {"detail": "Подойдёт только MP3, OGG, WAV, WEBM или M4A."},
+                status=400)
+
+        name, denied = _validate_sound_name(request.data.get("name"), server)
+        if denied:
+            return denied
+
+        sound = SoundboardSound(
+            server=server, name=name,
+            emoji=(request.data.get("emoji") or "").strip()[:8],
+            content_type=content_type, size=uploaded.size,
+            created_by=request.user,
+        )
+        # Имя файла собирает sound_upload_to из ОПОЗНАННОГО типа — клиентское
+        # не используется вовсе (см. там же, чем это грозит).
+        sound.file.save(uploaded.name, uploaded, save=False)
+        sound.save()
+        _broadcast_sounds_update(server)
+        return Response(SoundboardSoundSerializer(sound).data, status=201)
+
+
+class ServerSoundDetail(APIView):
+    """PATCH — переименовать, DELETE — удалить. По manage_expressions, а не
+    create_expressions: разделение то же, что у эмодзи — «пусть добавляет
+    свои» не означает «пусть удаляет чужие»."""
+
+    def patch(self, request, server_id, sound_id):
+        server = get_object_or_404(Server, id=server_id)
+        denied = _require_permission(request, server, "manage_expressions")
+        if denied:
+            return denied
+        sound = get_object_or_404(SoundboardSound, id=sound_id, server=server)
+        name, denied = _validate_sound_name(
+            request.data.get("name"), server, exclude_id=sound.id)
+        if denied:
+            return denied
+        sound.name = name
+        if "emoji" in request.data:
+            sound.emoji = (request.data.get("emoji") or "").strip()[:8]
+        sound.save(update_fields=["name", "emoji"])
+        _broadcast_sounds_update(server)
+        return Response(SoundboardSoundSerializer(sound).data)
+
+    def delete(self, request, server_id, sound_id):
+        server = get_object_or_404(Server, id=server_id)
+        denied = _require_permission(request, server, "manage_expressions")
+        if denied:
+            return denied
+        sound = get_object_or_404(SoundboardSound, id=sound_id, server=server)
+        sound.delete()
+        _broadcast_sounds_update(server)
+        return Response(status=204)
+
+
+def _broadcast_sounds_update(server):
+    """Набор звуков сервера изменился — всем участникам, как у эмодзи.
+
+    Отдаём ПОЛНЫЙ набор, а не дельту: он маленький (не больше
+    MAX_SOUNDS_PER_SERVER), а дельты пришлось бы применять по порядку,
+    который в распределённой рассылке не гарантирован.
+    """
+    payload = {
+        "op": "server_sounds",
+        "server_id": server.id,
+        "sounds": SoundboardSoundSerializer(server.sounds.all(), many=True).data,
+    }
+    async_to_sync(get_channel_layer().group_send)(
+        f"server_{server.id}", {"type": "broadcast", "payload": payload})
 
 
 class MyEmoji(APIView):

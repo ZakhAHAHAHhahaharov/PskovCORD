@@ -92,6 +92,14 @@ services:
       # другим: relay тихо переставал работать без внятной причины. Теперь
       # оба сервиса берут его из одного места — корневого .env.
       TURN_SECRET: ${TURN_SECRET:?TURN_SECRET обязателен — openssl rand -hex 32}
+      # Потоки ASGI и постоянные соединения с Postgres — связанная пара:
+      # каждый поток держит своё соединение (см. CONN_MAX_AGE в
+      # config/settings.py), а у Postgres max_connections по умолчанию 100.
+      # Значения по умолчанию проставляет backend/entrypoint.sh — здесь они
+      # только для того, чтобы их можно было переопределить из .env, не
+      # пересобирая образ.
+      ASGI_THREADS: ${ASGI_THREADS:-16}
+      DB_CONN_MAX_AGE: ${DB_CONN_MAX_AGE:-60}
     depends_on:
       postgres:
         condition: service_healthy
@@ -111,6 +119,23 @@ services:
       # же напрямую (см. deploy/nginx.conf.example), без похода в Django.
       - ./media:/app/backend/media
     restart: unless-stopped
+    # Процесс живой, а event loop мёртвый — штатная беда одного ASGI-процесса:
+    # контейнер при этом продолжает «работать», restart: unless-stopped не
+    # срабатывает, и наружу это выглядит как молчащий сайт. healthcheck ходит
+    # на /healthz (core.views.healthz) и даёт Docker'у повод перезапустить.
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=5).status==200 else 1)\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      # Миграции и collectstatic на старте занимают время — до их конца
+      # проверка не должна считаться провалом.
+      start_period: 60s
+    # Daphne по SIGTERM закрывает WebSocket'ы штатным close-фреймом, и клиент
+    # переподключается сразу, не досиживая backoff. 10 секунд по умолчанию на
+    # это хватает не всегда — а не успевший закрыться сокет клиент считает
+    # мёртвым только по своему watchdog'у, то есть на десяток секунд позже.
+    stop_grace_period: 30s
 
 volumes:
   postgres_data:

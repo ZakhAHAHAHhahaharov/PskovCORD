@@ -10,7 +10,7 @@ from .models import (
     Attachment, Channel, Conversation, ConversationMessage,
     ConversationParticipant, Membership,
     Message, Role, Server, ServerAuditLog, ServerBan, ServerEmoji, ServerInvite,
-    ServerJoinRequest, Sticker, StickerPack, dm_room,
+    ServerJoinRequest, SoundboardSound, Sticker, StickerPack, dm_room,
 )
 
 # Значок сервера жмётся клиентом до 512x512 (ServerSettingsModal.ICON_SIZE) —
@@ -579,6 +579,24 @@ class AttachmentSerializer(serializers.ModelSerializer):
         return obj.file.url if obj.file else ""
 
 
+class SoundboardSoundSerializer(serializers.ModelSerializer):
+    """Звук соундборда. Сам файл клиент грузит по url и играет у себя — в
+    аудиопоток SFU он не подмешивается (см. chat.models.SoundboardSound)."""
+
+    url = serializers.SerializerMethodField()
+
+    class Meta:
+        model = SoundboardSound
+        fields = ["id", "name", "emoji", "server", "url", "size",
+                  "created_by", "created_at"]
+        read_only_fields = fields
+
+    # Путь от корня, а не абсолютный URL — по той же причине, что у эмодзи и
+    # вложений: тот же объект уезжает по WebSocket, где request'а нет.
+    def get_url(self, obj):
+        return obj.file.url if obj.file else ""
+
+
 class ServerEmojiSerializer(serializers.ModelSerializer):
     """Кастомный эмодзи в том виде, в каком его получает клиент.
 
@@ -708,11 +726,71 @@ class ThreadNoticeSerializer(serializers.ModelSerializer):
         fields = ["id", "name", "archived"]
 
 
+def poll_payload(poll):
+    """Опрос для клиента: варианты и кто за что проголосовал.
+
+    Одинаковый для ВСЕХ получателей — намеренно. «Мой голос» здесь не
+    вычисляется: обновления опроса уходят одной рассылкой на всю группу
+    канала (см. chat.consumers._broadcast_poll), и поле, у каждого своё,
+    заставило бы собирать payload на каждого участника отдельно. Клиент
+    выводит его сам из voter_ids, где и так уже есть всё нужное.
+
+    Счётчики считаются здесь, а не хранятся денормализованно в PollOption:
+    голосов на опрос — десятки, пересчёт стоит одного запроса, а
+    рассинхронизировавшийся счётчик пришлось бы чинить руками.
+
+    total_voters отдельно от total_votes нужен из-за multiple: там один
+    человек отмечает несколько вариантов, и знаменателем у процентов должно
+    быть число ПРОГОЛОСОВАВШИХ, иначе сумма долей уходит в потолок при том,
+    что проголосовало трое.
+    """
+    options = []
+    voter_ids = set()
+    for option in poll.options.all():
+        votes = list(option.votes.all())
+        voter_ids.update(v.user_id for v in votes)
+        options.append({
+            "id": option.id,
+            "text": option.text,
+            "votes": len(votes),
+            "voter_ids": [v.user_id for v in votes],
+        })
+    return {
+        "id": poll.id,
+        "question": poll.question,
+        "multiple": poll.multiple,
+        "open": poll.is_open(),
+        "closes_at": poll.closes_at,
+        "options": options,
+        "total_votes": sum(o["votes"] for o in options),
+        "total_voters": len(voter_ids),
+    }
+
+
+class PollField(serializers.Field):
+    """Опрос внутри сообщения — только на чтение.
+
+    Своё поле, а не вложенный ModelSerializer: payload собирается функцией
+    выше, которую зовут ещё и из консьюмера при рассылке обновлений, — и
+    расходиться этим двум представлениям нельзя.
+    """
+
+    def __init__(self, **kwargs):
+        kwargs.setdefault("read_only", True)
+        kwargs.setdefault("source", "*")
+        super().__init__(**kwargs)
+
+    def to_representation(self, message):
+        poll = getattr(message, "poll", None)
+        return None if poll is None else poll_payload(poll)
+
+
 class MessageSerializer(serializers.ModelSerializer):
     author = UserSerializer(read_only=True)
     reply_to = MessageReplySerializer(read_only=True)
     attachments = AttachmentSerializer(many=True, read_only=True)
     reactions = serializers.SerializerMethodField()
+    poll = PollField()
 
     # Наружу отдаём именно булев «закреплено» (Message.pinned) — фронту
     # незачем знать, что внутри лежит момент закрепления.
@@ -728,7 +806,7 @@ class MessageSerializer(serializers.ModelSerializer):
         model = Message
         fields = ["id", "channel", "author", "content", "reply_to",
                   "attachments", "reactions", "created_at", "edited_at",
-                  "pinned", "system_kind", "system_thread"]
+                  "pinned", "system_kind", "system_thread", "poll"]
         read_only_fields = ["author", "created_at", "edited_at", "pinned",
                             "system_kind", "system_thread"]
 
@@ -750,12 +828,13 @@ class ConversationMessageSerializer(serializers.ModelSerializer):
     attachments = AttachmentSerializer(many=True, read_only=True)
     reactions = serializers.SerializerMethodField()
     server_invite = ConversationServerInviteSerializer(read_only=True)
+    poll = PollField()
 
     class Meta:
         model = ConversationMessage
         fields = ["id", "conversation", "author", "content", "reply_to",
                   "attachments", "reactions", "server_invite", "created_at",
-                  "edited_at"]
+                  "edited_at", "poll"]
         read_only_fields = ["author", "created_at", "edited_at"]
 
     def get_reactions(self, obj):

@@ -20,6 +20,8 @@ import { outbox, usePendingMessages, OutboxTarget } from '../outbox'
 import AppShellChat from './AppShellChat'
 import AppShellNav from './AppShellNav'
 import AppShellOverlays from './AppShellOverlays'
+import ConnectionBanner from './ConnectionBanner'
+import GlobalSearchModal from './GlobalSearchModal'
 import VoiceProvider from './VoiceProvider'
 import { ProfilePopupTarget, ProfilePopupUser } from './MiniProfilePopup'
 
@@ -97,6 +99,7 @@ export default function AppShell() {
   // useChannelMessages). Живёт здесь, а не в панели: переключить канал и
   // прокрутить ленту может только владелец обоих состояний.
   const [messageJump, setMessageJump] = useState<MessageJumpRequest | null>(null)
+  const [searchOpen, setSearchOpen] = useState(false)
   const jumpToMessage = useCallback((jumpChannelId: number, messageId: number) => {
     // Канал переключаем всегда — если уже в нём, setChannelId ничего не
     // изменит, и окно вокруг сообщения загрузит эффект перехода.
@@ -112,6 +115,32 @@ export default function AppShell() {
     // невидимом канале за спиной у панели.
     navigateToContent()
   }, [setChannelId, navigateToContent])
+  /** Переход к найденному сообщению — как jumpToMessage, но ещё и с
+   * переключением сервера: глобальный поиск приносит попадания откуда угодно,
+   * а jumpToMessage умеет только канал (он писался под панель модератора, где
+   * сервер по определению текущий). */
+  const jumpToSearchHit = useCallback(
+    (hitServerId: number, hitChannelId: number, messageId: number) => {
+      setServerId(hitServerId)
+      jumpToMessage(hitChannelId, messageId)
+    },
+    [setServerId, jumpToMessage],
+  )
+
+  // Ctrl+K / Cmd+K — открыть поиск. Ctrl+K, а не Ctrl+F: последний браузер
+  // забирает себе (поиск по странице), и перехватывать его у человека, который
+  // как раз хотел искать по видимому тексту, — плохой обмен.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'k' && e.key !== 'K' && e.key !== 'л' && e.key !== 'Л') return
+      if (!e.ctrlKey && !e.metaKey) return
+      e.preventDefault()
+      setSearchOpen(true)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+
   // Ушли с сервера или переключились на другой — досье прежнего участника
   // там ни при чём, и права на него уже другие. Закрываем, а не тащим за
   // собой в чужой контекст.
@@ -257,6 +286,7 @@ export default function AppShell() {
         replyTo: message.replyTo,
         attachmentIds: message.attachments.map((a) => a.id),
         nonce: message.nonce,
+        poll: message.poll,
       }
       if (message.target.kind === 'channel') {
         gateway.sendMessage(message.target.id, message.content, opts)
@@ -363,6 +393,8 @@ export default function AppShell() {
         serverData.openThread ? 'app-thread-open' : ''
       }`}
     >
+      <ConnectionBanner />
+
       <AppShellNav
         server={serverData}
         conv={conversationsData}
@@ -401,7 +433,26 @@ export default function AppShell() {
         handleToggleDmReaction={handleToggleDmReaction}
         mentionPrefill={mentionPrefill}
         blockedUserIds={blockedUserIds}
+        onOpenSearch={() => setSearchOpen(true)}
       />
+
+      {searchOpen && (
+        <GlobalSearchModal
+          servers={serverData.servers}
+          conversations={conversationsData.conversations}
+          currentServerId={serverId}
+          isMobile={isMobile}
+          onClose={() => setSearchOpen(false)}
+          onPickChannelMessage={jumpToSearchHit}
+          onPickConversationMessage={(conversationId) => {
+            // Личка живёт на домашнем экране — с сервера надо уйти, иначе
+            // выбранный диалог просто не будет виден.
+            setServerId(null)
+            conversationsData.setActiveConversationId(conversationId)
+            navigateToContent()
+          }}
+        />
+      )}
 
       <AppShellOverlays
         server={serverData}

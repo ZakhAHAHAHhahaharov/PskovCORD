@@ -11,7 +11,7 @@ import {
   Volume2,
   X,
   Eye,
-  Video,
+  Music,
   PhoneOff,
   Users,
   PictureInPicture2,
@@ -21,6 +21,8 @@ import { styledNameProps } from '../nameStyle'
 import Avatar from './Avatar'
 import MicButton from './MicButton'
 import ScreenShareButton from './ScreenShareButton'
+import CameraButton from './CameraButton'
+import SoundboardPanel from './SoundboardPanel'
 import { ProfilePopupUser } from './MiniProfilePopup'
 import { useSettings } from '../settings'
 import { useVoice } from '../voice'
@@ -112,9 +114,11 @@ function StreamVideo({
   stream,
   muted,
   onAspect,
+  className,
 }: {
   stream: MediaStream
   muted: boolean
+  className?: string
   /** Реальное соотношение сторон потока числом (1920/1080 = 1.7778) —
    * развёрнутая демонстрация задаёт им размер своего бокса, чтобы подпись
    * легла на саму картинку, а не в чёрное поле рядом (см.
@@ -132,6 +136,7 @@ function StreamVideo({
   return (
     <video
       ref={ref}
+      className={className}
       autoPlay
       playsInline
       muted={muted}
@@ -153,11 +158,20 @@ function ParticipantTile({
   onExpand,
   onContextMenu,
   allowNickname = true,
+  cameraStream,
+  isSelf = false,
 }: {
   member: VoiceRosterMember
   speaking: boolean
   muted: boolean
   deafened: boolean
+  /** Видео с камеры участника. Есть — показываем вместо аватарки: включённая
+   * камера это и есть «вот он я», и держать рядом ещё и статичную аватарку
+   * значило бы дважды отвечать на один вопрос. */
+  cameraStream?: MediaStream | null
+  /** Своя ли это плитка — от этого зависит только зеркалирование камеры
+   * (см. .participant-tile-camera.self). */
+  isSelf?: boolean
   /** Клик по карточке целиком — включая аватар и ник, у тех больше нет
    * своего отдельного действия (было — открыть мини-профиль) — разворачивает
    * участника на весь блок, как демонстрацию экрана — см. VoiceStage.expanded. */
@@ -204,19 +218,29 @@ function ParticipantTile({
           профиль): бывший <button> заменён на div, чтобы клик по нему
           всплывал до .participant-tile так же, как и по нику ниже — то же
           действие, что и у остальной карточки (onExpand), а не отдельное. */}
-      <div className="avatar-trigger">
-        <Avatar
-          name={displayName}
-          color={member.avatar_color}
-          image={member.avatar_image}
-          size={72}
-          userId={member.id}
-          animated={!!member.avatar_animated}
-          // Гифка играет, пока человек говорит — тот же сигнал, что и
-          // подсветка тайла.
-          playAnimation={speaking}
+      {cameraStream ? (
+        // muted: своё видео не озвучиваем (эхо), а чужая камера идёт без
+        // звука вовсе — микрофон это отдельный продюсер (см. sfu.ts).
+        <StreamVideo
+          stream={cameraStream}
+          className={`participant-tile-camera ${isSelf ? 'self' : ''}`}
+          muted
         />
-      </div>
+      ) : (
+        <div className="avatar-trigger">
+          <Avatar
+            name={displayName}
+            color={member.avatar_color}
+            image={member.avatar_image}
+            size={72}
+            userId={member.id}
+            animated={!!member.avatar_animated}
+            // Гифка играет, пока человек говорит — тот же сигнал, что и
+            // подсветка тайла.
+            playAnimation={speaking}
+          />
+        </div>
+      )}
       {/* Клик по нику — БЕЗ своего onClick/stopPropagation: пусть всплывает
           до .participant-tile самой карточки (onExpand выше), то же
           действие, что и клик по любому другому месту карточки. Раньше тут
@@ -326,6 +350,8 @@ export default function VoiceStage({
   onOpenProfile,
   onParticipantContextMenu,
   roomKind,
+  serverId,
+  canManageSounds,
   isConnected,
   onJoin,
   onLeave,
@@ -360,6 +386,11 @@ export default function VoiceStage({
    * onParticipantContextMenu вместе с roomId, чтобы AppShell знал, какую
    * комнату показывает это конкретное меню. */
   roomKind: 'channel' | 'conversation'
+  /** Сервер, которому принадлежит канал, — для соундборда: звуки живут на
+   * сервере. null у звонка в личке/группе, там соундборда нет. */
+  serverId?: number | null
+  /** Право create_expressions — можно ли заливать и удалять звуки. */
+  canManageSounds?: boolean
   /** Подключены ли мы САМИ к этой конкретной комнате прямо сейчас (сравнение
    * с VoiceMesh делает AppShell — VoiceStage сам не знает глобальный voice-
    * стейт). false — канал просто выбран/открыт, но мы не в звонке: вместо
@@ -383,6 +414,8 @@ export default function VoiceStage({
     isSharingScreen,
     watchScreen,
     unwatchScreen,
+    cameraStreams,
+    ownCameraStream,
   } = useVoice()
   const { isHidden } = useHiddenNames()
   // Подписка на ЛЮБОЕ изменение никнеймов (см. nicknames.ts) — ниже они
@@ -544,6 +577,7 @@ export default function VoiceStage({
   // таймер незачем.
   const CONTROLS_HIDE_DELAY_MS = 2500
   const [showControls, setShowControls] = useState(false)
+  const [soundboardOpen, setSoundboardOpen] = useState(false)
   const hideControlsTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const scheduleHideControls = useCallback(() => {
@@ -661,6 +695,11 @@ export default function VoiceStage({
         muted={m.id === selfUserId ? selfMuted : m.muted}
         deafened={m.id === selfUserId ? deafened : m.deafened}
         allowNickname={!namesHidden}
+        // Своя камера — из локального предпросмотра, а не из SFU: свой поток
+        // обратно не приходит, да и гонять его через сервер ради себя же
+        // незачем.
+        cameraStream={m.id === selfUserId ? ownCameraStream : cameraStreams.get(m.id)}
+        isSelf={m.id === selfUserId}
         onExpand={() => setExpanded({ userId: m.id, mode: 'participant' })}
         onContextMenu={
           m.id !== selfUserId && onParticipantContextMenu
@@ -918,17 +957,30 @@ export default function VoiceStage({
           спозиционированные группы поверх неё, как и раньше. */}
       <footer className={`voice-stage-footer ${showControls ? 'visible' : ''}`} />
 
+      {soundboardOpen && roomKind === 'channel' && serverId != null && (
+        <SoundboardPanel
+          serverId={serverId}
+          canManage={!!canManageSounds}
+          onClose={() => setSoundboardOpen(false)}
+        />
+      )}
+
       <div className={`voice-controls-bar ${showControls ? 'visible' : ''}`}>
         <div className="voice-controls-group">
           <MicButton />
-          <button
-            className="icon-btn"
-            title="Включить камеру"
-            onClick={() => window.alert('Видеокамера скоро появится здесь — пока не реализована.')}
-          >
-            <Video size={17} />
-          </button>
+          <CameraButton />
           <ScreenShareButton />
+          {/* Соундборд — только в канале сервера: звуки принадлежат серверу,
+              а у звонка в личке его нет (см. backend _readable_sound). */}
+          {roomKind === 'channel' && serverId != null && (
+            <button
+              className={`icon-btn ${soundboardOpen ? 'active' : ''}`}
+              title="Соундборд"
+              onClick={() => setSoundboardOpen((v) => !v)}
+            >
+              <Music size={17} />
+            </button>
+          )}
         </div>
         <button className="voice-controls-hangup" title="Завершить звонок" onClick={onLeave}>
           <PhoneOff size={18} />

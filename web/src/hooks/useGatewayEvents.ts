@@ -1,4 +1,4 @@
-import { Dispatch, MutableRefObject, SetStateAction, useEffect } from 'react'
+import { Dispatch, MutableRefObject, SetStateAction, useEffect, useRef } from 'react'
 import {
   api, Conversation, ConversationMessage, FriendsState, Member, Message, Me, NameEffect, Role, Server,
 } from '../api'
@@ -10,6 +10,11 @@ import { outbox } from '../outbox'
 import { presenceStore } from '../presence'
 import { stickerStore } from '../stickers'
 import { playLeaveSound, playScreenShareRequestSound, playWakeUpSound } from '../sounds'
+import { channelPlace, clearTyping, conversationPlace, markTyping } from '../typing'
+import { notify, notificationBody } from '../notifications'
+import { playSoundboardSound, setServerSounds } from '../soundboard'
+import { conversationDisplayName } from '../conversation'
+import { useSettings } from '../settings'
 
 interface CallParticipant {
   id: number
@@ -108,6 +113,14 @@ export function useGatewayEvents(params: UseGatewayEventsParams) {
     setFriends,
   } = params
 
+  // Через ref, как shouldNotifyRef и соседи: большой gateway-эффект ниже
+  // намеренно не держит меняющиеся значения в зависимостях — иначе каждый
+  // сдвиг ползунка громкости в настройках пересоздавал бы все ~30
+  // обработчиков подряд.
+  const settings = useSettings()
+  const settingsRef = useRef(settings)
+  settingsRef.current = settings
+
   // Realtime-события gateway.
   useEffect(() => {
     /** Применить изменение к открытой ленте того канала, о котором событие.
@@ -133,15 +146,56 @@ export function useGatewayEvents(params: UseGatewayEventsParams) {
       return false
     }
 
+    /** Системное уведомление о сообщении в канале/ветке.
+     *
+     * Показывается, только когда вкладка не на виду — решение принимает сам
+     * notify(), здесь мы лишь собираем текст и куда вести по клику. Поэтому
+     * зовётся и для уже открытого канала: открытая лента не значит, что
+     * человек в неё смотрит (окно свёрнуто, другой монитор).
+     */
+    const notifyAboutChannelMessage = (message: Message, feedOpen: boolean) => {
+      if (!settingsRef.current.desktopNotifications) return
+      const ownerServerId = channelServerIdRef.current[message.channel]
+      const server = serversRef.current.find((s) => s.id === ownerServerId)
+      const channel = server?.channels.find((c) => c.id === message.channel)
+      notify({
+        title: channel ? `#${channel.name}` : (server?.name ?? 'Новое сообщение'),
+        body: `${message.author.username}: ${notificationBody(
+          message.content,
+          message.attachments?.length ?? 0,
+        )}`,
+        tag: channelPlace(message.channel),
+        withSound: settingsRef.current.notificationSound,
+        onClick: () => {
+          // Уже открытую ленту не трогаем: переставлять serverId/channelId в
+          // те же значения — лишний повод для перерисовки всего экрана.
+          if (feedOpen) return
+          if (ownerServerId != null) setServerId(ownerServerId)
+          setChannelId(message.channel)
+        },
+      })
+    }
+
     const offMsg = gateway.on('message_create', (d) => {
       // Эхо собственной отправки: nonce закрывает статус «отправляется» и
       // убирает оптимистичную копию из очереди — настоящее сообщение
       // добавляется тут же строкой ниже (см. outbox.ack).
       if (d.nonce) outbox.ack(d.nonce)
+      // Прислал сообщение — значит допечатал. Иначе его «печатает…» висело бы
+      // под уже пришедшим от него сообщением до конца TTL.
+      clearTyping(channelPlace(d.message.channel), d.message.author.id)
       const shown = applyToOpenFeed(d.message.channel, (prev) =>
         prev.some((m) => m.id === d.message.id) ? prev : [...prev, d.message],
       )
-      if (shown) return
+      // Лента открыта — но окно могло быть свёрнуто: «открытый канал» и
+      // «человек это видел» не одно и то же. Уведомление решает само, стоит
+      // ли показываться (см. notify — при видимой вкладке молчит).
+      if (shown) {
+        if (d.message.author.id !== userRef.current?.id) {
+          notifyAboutChannelMessage(d.message, channelId === d.message.channel)
+        }
+        return
+      }
       // Не открытый прямо сейчас канал — решаем, поднимать ли непрочитанное
       // (мьют/уровень уведомлений/упоминание, см. shouldNotifyForChannel).
       const ownerServerId = channelServerIdRef.current[d.message.channel]
@@ -153,6 +207,7 @@ export function useGatewayEvents(params: UseGatewayEventsParams) {
         setUnreadChannelIds((prev) =>
           prev.has(d.message.channel) ? prev : new Set(prev).add(d.message.channel),
         )
+        notifyAboutChannelMessage(d.message, false)
       }
     })
     // Подтверждение ПОВТОРНОЙ попытки: сообщение создала прошлая, эхо до нас
@@ -175,6 +230,56 @@ export function useGatewayEvents(params: UseGatewayEventsParams) {
     const offMsgUpdate = gateway.on('message_update', (d) => {
       applyToOpenFeed(d.message.channel, (prev) =>
         prev.map((m) => (m.id === d.message.id ? d.message : m)),
+      )
+    })
+    // «Печатает…» — эфемерно и живёт вне React-состояния (см. web/src/typing.ts):
+    // событие приходит на каждое нажатие клавиши любого участника сервера, а
+    // касается оно ровно одной строчки под лентой одного канала. Гнать его
+    // через setState здесь значило бы перерисовывать весь AppShell на чужой
+    // набор текста в канале, который даже не открыт.
+    // Соундборд. Событие летит всем на сервере (как и прочая голосовая
+    // мета), а «я сейчас в этом канале, значит играю» решаем здесь — ровно
+    // так же, как для звуков входа/выхода.
+    const offSoundboard = gateway.on('soundboard_play', (d) => {
+      const myRoom = voiceRef.current?.room
+      if (!myRoom) return
+      const inThisRoom =
+        myRoom.kind === 'channel'
+          ? String(myRoom.id) === String(d.channel_id)
+          : `dm:${myRoom.id}` === String(d.channel_id)
+      if (!inThisRoom) return
+      // Отключил звук — соундборд тоже не слышит. Иначе deafen переставал бы
+      // означать «меня не трогать». Состояние берём из настроек: они
+      // синхронизируются в обе стороны с кнопкой внутри звонка (см.
+      // settings.tsx, preferDeafened).
+      if (settingsRef.current.preferDeafened) return
+      playSoundboardSound(d.url, settingsRef.current.outputVolume)
+    })
+    const offServerSounds = gateway.on('server_sounds', (d) => {
+      setServerSounds(d.server_id, d.sounds)
+    })
+    // Голос в опросе меняет не сообщение, а только его опрос — поэтому
+    // отдельный op, а не message_update с целым сообщением: тот перетёр бы
+    // заодно реакции и правки, приехавшие с другой стороны.
+    const offPollUpdate = gateway.on('poll_update', (d) => {
+      const patch = (prev: Message[]) =>
+        prev.map((m) => (m.poll?.id === d.poll.id ? { ...m, poll: d.poll } : m))
+      if (d.channel_id != null) {
+        applyToOpenFeed(d.channel_id, patch)
+        return
+      }
+      if (d.conversation_id === activeConversationId) {
+        setDmMessages((prev) =>
+          prev.map((m) => (m.poll?.id === d.poll.id ? { ...m, poll: d.poll } : m)),
+        )
+      }
+    })
+    const offTyping = gateway.on('typing', (d) => {
+      markTyping(
+        d.channel_id != null
+          ? channelPlace(d.channel_id)
+          : conversationPlace(d.conversation_id),
+        d.user_id,
       )
     })
     const offPresence = gateway.on('presence_update', (d) => {
@@ -489,6 +594,7 @@ export function useGatewayEvents(params: UseGatewayEventsParams) {
     })
     const offDmMsg = gateway.on('dm_message_create', (d) => {
       if (d.nonce) outbox.ack(d.nonce)
+      clearTyping(conversationPlace(d.message.conversation), d.message.author.id)
       if (d.message.conversation === activeConversationId) {
         setDmMessages((prev) =>
           prev.some((m) => m.id === d.message.id) ? prev : [...prev, d.message],
@@ -510,6 +616,35 @@ export function useGatewayEvents(params: UseGatewayEventsParams) {
         setUnreadConversationIds((prev) =>
           prev.has(d.message.conversation) ? prev : new Set(prev).add(d.message.conversation),
         )
+      }
+      // Уведомление — по тем же правилам, но БЕЗ isViewingThisConversation:
+      // открытый диалог не значит, что окно на виду (см.
+      // notifyAboutChannelMessage выше). Заглушения у лички нет, поэтому и
+      // shouldNotifyRef здесь не при чём — только «не я» и «не игнорируемый».
+      if (
+        d.message.author.id !== userRef.current?.id &&
+        !ignoredUserIdsRef.current.has(d.message.author.id) &&
+        settingsRef.current.desktopNotifications
+      ) {
+        const conversation = conversationsRef.current.find(
+          (c) => c.id === d.message.conversation,
+        )
+        notify({
+          title: conversation ? conversationDisplayName(conversation) : d.message.author.username,
+          body: `${d.message.author.username}: ${notificationBody(
+            d.message.content,
+            d.message.attachments?.length ?? 0,
+          )}`,
+          tag: conversationPlace(d.message.conversation),
+          withSound: settingsRef.current.notificationSound,
+          onClick: () => {
+            if (isViewingThisConversation) return
+            // Диалоги живут на домашнем экране — с сервера нужно уйти, иначе
+            // выбранный диалог просто не будет виден.
+            setServerId(null)
+            setActiveConversationId(d.message.conversation)
+          },
+        })
       }
       // Превью последнего сообщения в списке диалогов — обновляем всегда,
       // даже если сейчас открыт другой диалог.
@@ -759,6 +894,10 @@ export function useGatewayEvents(params: UseGatewayEventsParams) {
       offDmReactions()
       offMsgDelete()
       offMsgUpdate()
+      offSoundboard()
+      offServerSounds()
+      offPollUpdate()
+      offTyping()
       offPresence()
       offVoice()
       offMicStatus()
