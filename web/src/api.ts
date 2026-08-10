@@ -663,6 +663,8 @@ export interface ChatMessageBase {
   /** Закреплено в канале (см. api.channelPins). Только у сообщений сервера —
    * в личке/группе закреплений нет. */
   pinned?: boolean
+  /** Опрос, приложенный к сообщению. Есть у меньшинства — null у остальных. */
+  poll?: Poll | null
 }
 
 /** Системная запись в ленте — её никто не писал, текст собирает клиент из
@@ -782,6 +784,68 @@ export interface UserRelation {
 
 export interface ConversationMessage extends ChatMessageBase {
   conversation: number
+}
+
+/** Звук соундборда сервера. Файл клиент грузит по url и играет у себя — в
+ * аудиопоток SFU он не подмешивается (см. backend chat/models.py). */
+export interface SoundboardSound {
+  id: number
+  name: string
+  /** Необязательный эмодзи на кнопке. */
+  emoji: string
+  server: number
+  url: string
+  size: number
+  created_by: number | null
+  created_at: string
+}
+
+export interface PollOption {
+  id: number
+  text: string
+  votes: number
+  /** Кто отдал голос за этот вариант. Голосование не тайное — это видно и в
+   * интерфейсе (см. PollCard). Отсюда же клиент выводит «мой ли это голос»:
+   * отдельного поля нет намеренно, обновления опроса уходят одной рассылкой
+   * на всех (см. backend serializers.poll_payload). */
+  voter_ids: number[]
+}
+
+export interface Poll {
+  id: number
+  question: string
+  /** Можно отметить несколько вариантов. Меняет знаменатель у процентов —
+   * см. total_voters. */
+  multiple: boolean
+  /** Принимает ли голоса прямо сейчас (учитывает и closes_at). */
+  open: boolean
+  closes_at: string | null
+  options: PollOption[]
+  total_votes: number
+  /** Число ПРОГОЛОСОВАВШИХ. Отличается от total_votes только при multiple, и
+   * именно оно там знаменатель процентов. */
+  total_voters: number
+}
+
+/** Карточка ссылки (см. backend chat/linkpreview.py). Поля кроме url могут
+ * быть пустыми строками — сайт мог отдать не всё. */
+export interface LinkPreview {
+  url: string
+  title: string
+  description: string
+  image: string
+  site_name: string
+}
+
+/** Ответ глобального поиска (см. api.searchEverywhere).
+ *
+ * Две раздельные пачки, а не один список: id у Message и ConversationMessage
+ * нумеруются независимо, и «сообщение №7» без указания, из какого оно мира,
+ * не значит ничего. Куда именно вести по клику, клиент достраивает сам —
+ * список серверов с каналами у него уже есть. */
+export interface GlobalSearchResult {
+  channel_messages: Message[]
+  conversation_messages: ConversationMessage[]
 }
 
 // Пусто => same-origin (относительные запросы). Для dev задаётся в web/.env.
@@ -1207,6 +1271,25 @@ export function uploadEmoji(
   return postForm<CustomEmoji>(`/api/servers/${serverId}/emoji`, form, opts)
 }
 
+/** Загрузка звука соундборда (нужно право create_expressions на сервере).
+ *
+ * Расширение в имени файла ни на что не влияет: сервер опознаёт формат по
+ * содержимому и сам собирает путь на диске (см. backend sound_upload_to).
+ * Передаём исходное имя только чтобы оно было видно в логах/админке. */
+export function uploadSound(
+  serverId: number,
+  name: string,
+  file: File,
+  emoji: string,
+  opts: UploadOptions = {},
+): Promise<SoundboardSound> {
+  const form = new FormData()
+  form.append('name', name)
+  form.append('emoji', emoji)
+  form.append('file', file, file.name)
+  return postForm<SoundboardSound>(`/api/servers/${serverId}/sounds`, form, opts)
+}
+
 /** Загрузка стикера (нужно право create_expressions на сервере).
  *
  * Файл уезжает КАК ЕСТЬ, без обработки на клиенте, — в отличие от эмодзи, где
@@ -1409,6 +1492,19 @@ export const api = {
     }),
   deleteEmoji: (serverId: number, emojiId: number) =>
     req(`/api/servers/${serverId}/emoji/${emojiId}`, { method: 'DELETE' }),
+
+  // --- соундборд ------------------------------------------------------------
+  serverSounds: (serverId: number): Promise<SoundboardSound[]> =>
+    req(`/api/servers/${serverId}/sounds`),
+  renameSound: (
+    serverId: number, soundId: number, name: string, emoji?: string,
+  ): Promise<SoundboardSound> =>
+    req(`/api/servers/${serverId}/sounds/${soundId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(emoji === undefined ? { name } : { name, emoji }),
+    }),
+  deleteSound: (serverId: number, soundId: number) =>
+    req(`/api/servers/${serverId}/sounds/${soundId}`, { method: 'DELETE' }),
 
   // --- стикеры --------------------------------------------------------------
   /** Все доступные мне наборы: базовые (ничьи, видны всем) плюс наборы моих
@@ -1650,6 +1746,17 @@ export const api = {
    * правами, что и чтение истории. */
   searchMessages: (channelId: number, query: string): Promise<Message[]> =>
     req(`/api/channels/${channelId}/search?q=${encodeURIComponent(query)}`),
+  /** og:title/description/image по ссылке. 404 («превью недоступно») —
+   * штатный ответ, а не сбой: показывать просто нечего. */
+  linkPreview: (url: string): Promise<LinkPreview> =>
+    req(`/api/link-preview?url=${encodeURIComponent(url)}`),
+  /** Поиск сразу по всему видимому: каналы и ветки всех серверов плюс личка.
+   * serverId сужает до одного сервера — тогда личка не ищется вовсе. */
+  searchEverywhere: (query: string, serverId?: number | null): Promise<GlobalSearchResult> =>
+    req(
+      `/api/search?q=${encodeURIComponent(query)}` +
+        (serverId != null ? `&server_id=${serverId}` : ''),
+    ),
   /** Закрыть ветку или вернуть её из архива. Может автор ветки, а также
    * manage_channels/delete_messages. Не удаление: сообщения остаются. */
   setThreadArchived: (channelId: number, archived: boolean): Promise<Channel> =>

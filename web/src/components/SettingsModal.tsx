@@ -18,6 +18,7 @@ import {
   MessageCircle,
   ZoomIn,
   Type,
+  Bell,
 } from 'lucide-react'
 import {
   useSettings,
@@ -32,6 +33,12 @@ import { describeUserAgent, isMobileDevice } from '../deviceInfo'
 import { api, Session, DmPrivacy } from '../api'
 import QrScannerModal from './QrScannerModal'
 import PasswordInput from './PasswordInput'
+import ToggleSwitch from './ToggleSwitch'
+import {
+  NotificationPermissionState,
+  notificationSupport,
+  requestNotificationPermission,
+} from '../notifications'
 
 const APP_NAME: string = import.meta.env.VITE_APP_NAME || 'PskovCord'
 
@@ -81,6 +88,12 @@ const CATEGORIES: Category[] = [
     label: 'Голос и видео',
     icon: <AudioWaveform size={16} />,
     subcategories: [{ id: 'voice-devices', label: 'Устройства и звук' }],
+  },
+  {
+    id: 'notifications',
+    label: 'Уведомления',
+    icon: <Bell size={16} />,
+    subcategories: [{ id: 'notifications-desktop', label: 'На рабочем столе' }],
   },
   {
     id: 'content',
@@ -140,6 +153,79 @@ function DmPrivacyField() {
       </select>
       {error && <div className="login-error">{error}</div>}
     </div>
+  )
+}
+
+/** Системные уведомления — тумблеры плюс запрос разрешения у браузера.
+ *
+ * Разрешение и настройка — РАЗНЫЕ вещи, и обе видны здесь. Разрешение даёт
+ * браузер, оно одно на сайт и навсегда; настройка — наша, и ей выключают
+ * уведомления, не снимая разрешения. Без явного показа состояния разрешения
+ * выключённые на уровне браузера уведомления выглядели бы как наша поломка:
+ * тумблер включён, а ничего не приходит. */
+function NotificationsFields() {
+  const {
+    desktopNotifications,
+    notificationSound,
+    setDesktopNotifications,
+    setNotificationSound,
+  } = useSettings()
+  const [permission, setPermission] = useState<NotificationPermissionState>(() =>
+    notificationSupport(),
+  )
+
+  const ask = async () => setPermission(await requestNotificationPermission())
+
+  return (
+    <>
+      <div className="settings-field">
+        <div className="settings-field-header">
+          <span className="settings-field-label">
+            <Bell size={15} /> Уведомления на рабочем столе
+          </span>
+          <ToggleSwitch
+            checked={desktopNotifications}
+            onChange={setDesktopNotifications}
+            ariaLabel="Уведомления на рабочем столе"
+          />
+        </div>
+        <div className="settings-hint">
+          Показываются, только когда окно свёрнуто или вкладка не активна. Уровни
+          уведомлений и заглушение серверов и каналов при этом учитываются.
+        </div>
+
+        {permission === 'default' && (
+          <button className="settings-permission-btn" onClick={ask}>
+            Разрешить в браузере
+          </button>
+        )}
+        {permission === 'denied' && (
+          <div className="settings-hint settings-hint-warn">
+            Браузер блокирует уведомления для этого сайта. Включить их обратно можно
+            только в его настройках — сайт сам об этом попросить больше не может.
+          </div>
+        )}
+        {permission === 'unsupported' && (
+          <div className="settings-hint settings-hint-warn">
+            Этот браузер не умеет показывать уведомления.
+          </div>
+        )}
+      </div>
+
+      <div className="settings-field">
+        <div className="settings-field-header">
+          <span className="settings-field-label">
+            <Volume2 size={15} /> Звук уведомления
+          </span>
+          <ToggleSwitch
+            checked={notificationSound}
+            onChange={setNotificationSound}
+            disabled={!desktopNotifications}
+            ariaLabel="Звук уведомления"
+          />
+        </div>
+      </div>
+    </>
   )
 }
 
@@ -1185,6 +1271,16 @@ export default function SettingsModal({
                   onChange={setMicThreshold}
                   onReset={() => setMicThreshold(DEFAULT_SETTINGS.micThreshold)}
                 />
+              </SettingsSection>
+            )}
+
+            {!detailView && activeCategory === 'notifications' && (
+              <SettingsSection
+                id="notifications-desktop"
+                title="На рабочем столе"
+                sectionRefs={sectionRefs}
+              >
+                <NotificationsFields />
               </SettingsSection>
             )}
 

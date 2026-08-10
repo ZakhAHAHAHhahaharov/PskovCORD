@@ -1,5 +1,5 @@
 import { MouseEvent as ReactMouseEvent, useState } from 'react'
-import { ChevronLeft, MessageSquare, Phone, PhoneOff, Pin, Users } from 'lucide-react'
+import { ChevronLeft, MessageSquare, Phone, PhoneOff, Pin, Search, Users } from 'lucide-react'
 import { Channel, Conversation, Me } from '../api'
 import type { useChannelMessages } from '../hooks/useChannelMessages'
 import type { useConversationsData } from '../hooks/useConversationsData'
@@ -13,8 +13,11 @@ import { useNicknamesVersion } from '../nicknames'
 import { ComposerDraft } from '../drafts'
 import { EMOJI_TOKEN_RE, STICKER_TOKEN_RE } from '../emoji'
 import { outbox, pendingAsMessage, PendingMessage } from '../outbox'
+import { useGateway } from '../gateway'
+import { channelPlace, conversationPlace, shouldSendTyping } from '../typing'
 import MessageList from './MessageList'
 import MessageInput, { MessageInputPrefill } from './MessageInput'
+import TypingIndicator from './TypingIndicator'
 import PinnedMessages from './PinnedMessages'
 import MembersList from './MembersList'
 import VoiceStage from './VoiceStage'
@@ -69,6 +72,9 @@ interface AppShellChatProps {
    * фильтрует сервер (см. backend _hide_blocked), здесь отсеиваются те, что
    * пришли живьём по WebSocket. */
   blockedUserIds: Set<number>
+  /** Открыть поиск по сообщениям. Сама модалка живёт в AppShellOverlays —
+   * она перекрывает всё приложение, а не только область чата. */
+  onOpenSearch: () => void
 }
 
 /** Основная рабочая область — <main> (домашний DM-чат / VoiceStage
@@ -81,7 +87,7 @@ export default function AppShellChat({
   pendingChannelMessages, pendingDmMessages, loadDraft, saveDraft,
   showMembersList, setShowMembersList, openProfilePopup, onUserContextMenu,
   handleToggleDmReaction,
-  mentionPrefill, blockedUserIds,
+  mentionPrefill, blockedUserIds, onOpenSearch,
 }: AppShellChatProps) {
   const { currentServer, channels, currentChannel, serverId, members, rolesForServer } = server
   const visible = <T extends { author: { id: number } }>(list: T[]) =>
@@ -92,6 +98,7 @@ export default function AppShellChat({
   // звонка). Закрыт по умолчанию: заходят в голосовой канал ради разговора,
   // а чат — дополнение к нему, а не то, ради чего сюда пришли.
   const [voiceChatOpen, setVoiceChatOpen] = useState(false)
+  const gateway = useGateway()
 
   /** Ветка, выросшая из этого сообщения, — для плашки под ним (см.
    * MessageList.threadOf). Ищем среди каналов сервера: ветки приезжают
@@ -222,6 +229,13 @@ export default function AppShellChat({
                 // здесь только сбрасывает прокрутку на низ при смене диалога.
                 scrollAnchor={{ key: `dm-${activeConversation.id}`, target: 'bottom' }}
               />
+              <TypingIndicator
+                place={conversationPlace(activeConversation.id)}
+                selfId={user.id}
+                resolveName={(id) =>
+                  activeConversation.participants.find((p) => p.id === id)?.username
+                }
+              />
               <MessageInput
                 key={`dm-${activeConversation.id}`}
                 draftKey={`dm-${activeConversation.id}`}
@@ -237,6 +251,10 @@ export default function AppShellChat({
                 onSaveEdit={conv.handleSaveDmEdit}
                 onCancelEdit={() => conv.setDmEditTargetTracked(null)}
                 prefill={mentionPrefill}
+                onTyping={() => {
+                  const place = conversationPlace(activeConversation.id)
+                  if (shouldSendTyping(place)) gateway.dmTypingStart(activeConversation.id)
+                }}
               />
             </>
           ) : (
@@ -263,6 +281,8 @@ export default function AppShellChat({
               onOpenProfile={openProfilePopup}
               onParticipantContextMenu={participant.openParticipantContextMenu}
               roomKind="channel"
+              serverId={currentChannel.server}
+              canManageSounds={!!currentServer?.my_permissions?.create_expressions}
               isConnected={voice.voice?.room.kind === 'channel' && voice.voice.room.id === currentChannel.id}
               onJoin={() => voice.handleJoinVoice(currentChannel)}
               onLeave={voice.handleLeaveVoice}
@@ -350,6 +370,14 @@ export default function AppShellChat({
                   </span>
                 </>
               )}
+              <button
+                type="button"
+                className="chat-header-pin-btn"
+                title="Поиск по сообщениям (Ctrl+K)"
+                onClick={onOpenSearch}
+              >
+                <Search size={18} />
+              </button>
               <div className="chat-header-pins">
                 <button
                   type="button"
@@ -408,6 +436,11 @@ export default function AppShellChat({
               onThreadContextMenu={openThreadMenu}
               onShowAllThreads={showAllThreads}
             />
+            <TypingIndicator
+              place={channelPlace(currentChannel.id)}
+              selfId={user.id}
+              resolveName={(id) => members.find((m) => m.id === id)?.username}
+            />
             <MessageInput
               key={`channel-${currentChannel.id}`}
               draftKey={`channel-${currentChannel.id}`}
@@ -423,6 +456,10 @@ export default function AppShellChat({
               onCancelEdit={() => channelMessages.setEditTargetTracked(null)}
               prefill={mentionPrefill}
               canSendVoice={canSendVoiceMessages}
+              onTyping={() => {
+                const place = channelPlace(currentChannel.id)
+                if (shouldSendTyping(place)) gateway.typingStart(currentChannel.id)
+              }}
             />
           </>
         ) : (

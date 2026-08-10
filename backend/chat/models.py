@@ -1505,3 +1505,178 @@ class FriendNickname(models.Model):
 
     def __str__(self) -> str:
         return f"{self.owner_id} calls {self.about_id} {self.nickname!r}"
+
+
+# Опрос: границы. Не «на всякий случай», а чтобы одно сообщение не могло
+# развернуться в простыню на весь экран у всех участников разом.
+MAX_POLL_QUESTION_LEN = 300
+MAX_POLL_OPTION_LEN = 100
+MIN_POLL_OPTIONS = 2
+MAX_POLL_OPTIONS = 10
+
+
+class Poll(models.Model):
+    """Опрос, приложенный к сообщению.
+
+    Живёт НА сообщении, а не рядом с ним: опрос — это и есть содержимое
+    сообщения, у него те же права, та же лента, то же удаление. Отдельной
+    сущностью со своим списком и своими правами он был бы вторым чатом внутри
+    чата.
+
+    Два FK, как у Attachment выше и по той же причине: сообщения канала и
+    лички — разные модели с независимой нумерацией id. Ровно один из них
+    заполнен (см. constraint).
+
+    Голоса не анонимны: кто за что проголосовал, видно (PollVote.user), как в
+    Discord. Тайное голосование — другая фича с другими обещаниями, и
+    подмешивать его сюда, не сказав об этом людям явно, нельзя.
+    """
+
+    message = models.OneToOneField(
+        Message, null=True, blank=True, on_delete=models.CASCADE,
+        related_name="poll")
+    conversation_message = models.OneToOneField(
+        ConversationMessage, null=True, blank=True, on_delete=models.CASCADE,
+        related_name="poll")
+    question = models.CharField(max_length=MAX_POLL_QUESTION_LEN)
+    # Можно ли отметить несколько вариантов. Меняет смысл «процентов»: при
+    # multiple сумма долей больше 100, и знаменателем считается число
+    # ПРОГОЛОСОВАВШИХ, а не голосов (см. serializers).
+    multiple = models.BooleanField(default=False)
+    # Опрос закрыт: голоса видны, отдать новый нельзя. Ставится вручную
+    # автором/модератором либо наступившим closes_at.
+    closed = models.BooleanField(default=False)
+    closes_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                # Ровно один владелец: без сообщения опрос не существует, а с
+                # двумя — непонятно, в какой ленте он живёт.
+                check=(
+                    models.Q(message__isnull=False, conversation_message__isnull=True)
+                    | models.Q(message__isnull=True, conversation_message__isnull=False)
+                ),
+                name="poll_single_owner",
+            )
+        ]
+
+    def is_open(self) -> bool:
+        """Принимает ли голоса прямо сейчас.
+
+        Срок проверяется здесь, а не фоновым процессом: закрывать опросы по
+        таймеру значит держать ещё один sweep ради того, что дешевле посчитать
+        в момент вопроса.
+        """
+        if self.closed:
+            return False
+        if self.closes_at and timezone.now() >= self.closes_at:
+            return False
+        return True
+
+    def __str__(self) -> str:
+        return f"Опрос {self.question!r}"
+
+
+class PollOption(models.Model):
+    poll = models.ForeignKey(Poll, on_delete=models.CASCADE, related_name="options")
+    text = models.CharField(max_length=MAX_POLL_OPTION_LEN)
+    position = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        ordering = ["position", "id"]
+
+    def __str__(self) -> str:
+        return self.text
+
+
+class PollVote(models.Model):
+    """Один голос за один вариант.
+
+    unique_together (option, user), а не (poll, user): при multiple один
+    человек отмечает несколько вариантов, и ограничение «один голос на опрос»
+    запретило бы ровно то, ради чего multiple и нужен. «Один вариант на
+    человека» в обычном опросе обеспечивается не схемой, а обработчиком (см.
+    chat.consumers._cast_poll_vote): он снимает прежний голос перед новым.
+    """
+
+    option = models.ForeignKey(
+        PollOption, on_delete=models.CASCADE, related_name="votes")
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+        related_name="poll_votes")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ("option", "user")
+
+    def __str__(self) -> str:
+        return f"{self.user_id} -> {self.option_id}"
+
+
+# Соундборд: границы. Длительность проверить нечем (ffmpeg в проекте нет — см.
+# chat.uploads.sniff_sound), поэтому «короткий звук» задаётся размером файла.
+# 512 КБ это несколько секунд в любом из принимаемых форматов.
+MAX_SOUND_BYTES = 512 * 1024
+MAX_SOUNDS_PER_SERVER = 40
+MAX_SOUND_NAME_LEN = 32
+MIN_SOUND_NAME_LEN = 2
+
+
+def sound_upload_to(instance, filename: str) -> str:
+    """MEDIA_ROOT/soundboard/<токен>/sound.<ext>.
+
+    Имя и расширение собираются здесь целиком, клиентское не используется
+    вовсе — ровно по той же причине, что у emoji_upload_to выше: под /media/
+    файлы отдаёт nginx НАПРЯМУЮ и Content-Type выбирает по расширению.
+    Валидный OGG под именем "evil.html" иначе уехал бы документом на нашем
+    origin, где в localStorage лежит JWT.
+    """
+    from .uploads import SOUND_EXTENSIONS
+
+    ext = SOUND_EXTENSIONS.get(instance.content_type, "bin")
+    return f"soundboard/{instance.file_token}/sound.{ext}"
+
+
+class SoundboardSound(models.Model):
+    """Короткий звук соундборда — играет у всех, кто сейчас в том же голосовом
+    канале.
+
+    Звук НЕ подмешивается в аудиопоток SFU: он рассылается событием
+    (soundboard_play), и каждый клиент проигрывает файл у себя. Так дешевле и
+    честнее — микширование в mediasoup потребовало бы серверного аудиотракта
+    (то есть ffmpeg, которого в проекте сознательно нет), а разницы на слух
+    нет: в канале и так все слышат одно и то же с точностью до сетевой
+    задержки.
+
+    Побочный эффект приятный: у каждого работает своя громкость (см.
+    web/src/userVolume.ts), и заглушивший звук соундборд не услышит вовсе.
+    """
+
+    server = models.ForeignKey(
+        Server, on_delete=models.CASCADE, related_name="sounds")
+    name = models.CharField(max_length=MAX_SOUND_NAME_LEN)
+    # Эмодзи на кнопке — необязательный, чисто визуальный ярлык.
+    emoji = models.CharField(max_length=8, blank=True, default="")
+    # Неугадываемая часть пути в /media — см. sound_upload_to.
+    file_token = models.UUIDField(default=uuid.uuid4, editable=False)
+    content_type = models.CharField(max_length=100)
+    file = models.FileField(upload_to=sound_upload_to, max_length=300)
+    size = models.PositiveIntegerField()
+    # Автор остаётся в истории после ухода с сервера — SET_NULL, как у
+    # ServerEmoji: удалять чужие звуки вместе с аккаунтом незачем.
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True,
+        on_delete=models.SET_NULL, related_name="created_sounds")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["name", "id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["server", "name"], name="soundboard_name_unique_per_server"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.name} ({self.server_id})"

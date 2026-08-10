@@ -153,6 +153,54 @@ def sniff_voice(uploaded_file) -> str | None:
     return None
 
 
+# Форматы звука соундборда. Шире, чем у голосового выше: сюда файл ПРИНОСЯТ, а
+# не записывают в браузере, и это может быть что угодно с диска.
+#
+# Опознаём по сигнатуре, а не по расширению, по той же причине, что и эмодзи:
+# файлы соундборда отдаёт nginx напрямую с нашего origin, и Content-Type он
+# выбирает по расширению. Имя вроде "sound.html" при валидном OGG внутри
+# отдавалось бы документом на домене, где в localStorage лежит JWT.
+_SOUND_SIGNATURES = (
+    (b"OggS", "audio/ogg"),
+    (b"RIFF", "audio/wav"),
+    (b"ID3", "audio/mpeg"),
+    (b"\x1a\x45\xdf\xa3", "audio/webm"),
+    # MP3 без ID3-тега начинается сразу с кадра: 11 единичных бит синхрослова.
+    (b"\xff\xfb", "audio/mpeg"),
+    (b"\xff\xf3", "audio/mpeg"),
+    (b"\xff\xf2", "audio/mpeg"),
+)
+
+# Расширение, под которым файл ляжет на диск. Берётся ИЗ ОПОЗНАННОГО типа, а
+# не из имени, которое прислал клиент (см. sound_upload_to в models.py).
+SOUND_EXTENSIONS = {
+    "audio/ogg": "ogg",
+    "audio/wav": "wav",
+    "audio/mpeg": "mp3",
+    "audio/webm": "webm",
+    "audio/mp4": "m4a",
+}
+
+
+def sniff_sound(uploaded_file) -> str | None:
+    """content_type звука для соундборда; None — не годится.
+
+    Длительность НЕ проверяем: для этого нужен декодер (ffmpeg), а его в
+    проекте сознательно нет. Ограничением служит размер файла — см.
+    MAX_SOUND_BYTES: пара сотен килобайт это и есть «короткий звук» в любом
+    из этих форматов.
+    """
+    uploaded_file.seek(0)
+    head = uploaded_file.read(16)
+    uploaded_file.seek(0)
+    for signature, mime in _SOUND_SIGNATURES:
+        if head.startswith(signature):
+            return mime
+    if head[_MP4_BRAND_OFFSET:_MP4_BRAND_OFFSET + 4] == b"ftyp":
+        return "audio/mp4"
+    return None
+
+
 def _guess_media_type(filename: str) -> str:
     guessed, _encoding = mimetypes.guess_type(filename or "")
     if guessed and guessed.startswith(EMBEDDABLE_MEDIA_PREFIXES):

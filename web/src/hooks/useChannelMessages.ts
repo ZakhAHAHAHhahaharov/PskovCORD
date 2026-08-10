@@ -269,6 +269,7 @@ export function useChannelMessages(
       content: message.content,
       replyTo: replyTarget?.id ?? null,
       attachments: message.attachments,
+      poll: message.poll,
     })
     setReplyTarget(null)
   }

@@ -3,8 +3,14 @@ import type { types } from 'mediasoup-client'
 
 export type SfuStatus = 'connecting' | 'connected' | 'failed'
 
-/** Тип потока: голос (микрофон) или демонстрация экрана. */
-type Source = 'mic' | 'screen'
+/** Тип потока участника: голос, демонстрация экрана или камера.
+ *
+ * Камера ближе к микрофону, чем к демонстрации: она подхватывается
+ * АВТОМАТИЧЕСКИ, без явного «смотреть». Причина та же, по которой у
+ * демонстрации всё наоборот: включённая камера — это приглашение смотреть
+ * («вот он я»), а включённая демонстрация — рабочий инструмент, который
+ * далеко не всем в канале нужен и который дорого тянуть без спроса. */
+type Source = 'mic' | 'screen' | 'camera'
 
 export interface SfuCallbacks {
   /** Появился/обновился голосовой поток участника userId. Голос всегда
@@ -23,6 +29,11 @@ export interface SfuCallbacks {
   /** Просматриваемый поток демонстрации userId пропал (после unwatchScreen
    * или из-за того, что демонстрация вообще завершилась). */
   onScreenRemoved: (userId: number) => void
+  /** Появился/обновился поток камеры участника. В отличие от демонстрации,
+   * приходит сам — камеру никто не «включает на просмотр». */
+  onCameraStream: (userId: number, stream: MediaStream) => void
+  /** Участник выключил камеру. */
+  onCameraRemoved: (userId: number) => void
   onStatus: (status: SfuStatus) => void
 }
 
@@ -54,6 +65,7 @@ export class SfuClient {
   private recvTransport?: types.Transport
   private micProducer?: types.Producer
   private screenProducers: types.Producer[] = []
+  private cameraProducer?: types.Producer
   private readonly consumers = new Map<string, types.Consumer>()
   private readonly consumerMeta = new Map<string, ConsumerMeta>()
   // Доступные (но не обязательно просматриваемые) screen-продюсеры по userId —
@@ -107,6 +119,7 @@ export class SfuClient {
       }[]
       for (const p of producers) {
         if (p.source === 'screen') this.markScreenAvailable(p.userId, p.producerId)
+        else if (p.source === 'camera') await this.consumeCamera(p.producerId, p.userId)
         else await this.consumeMic(p.producerId, p.userId)
       }
     } catch (err) {
@@ -185,6 +198,8 @@ export class SfuClient {
           if (this.watchedScreenUsers.has(data.userId)) {
             void this.consumeScreen(data.producerId, data.userId)
           }
+        } else if (data.source === 'camera') {
+          void this.consumeCamera(data.producerId, data.userId)
         } else {
           void this.consumeMic(data.producerId, data.userId)
         }
@@ -201,6 +216,7 @@ export class SfuClient {
         this.consumers.delete(data.consumerId)
         this.consumerMeta.delete(data.consumerId)
         if (meta?.source === 'mic') this.recomputeMicStream(meta.userId)
+        else if (meta?.source === 'camera') this.recomputeCameraStream(meta.userId)
         else if (meta) this.recomputeScreenStream(meta.userId)
         break
       }
@@ -284,6 +300,10 @@ export class SfuClient {
         this.consumers.delete(cid)
         this.consumerMeta.delete(cid)
       }
+    }
+    if (source === 'camera') {
+      this.recomputeCameraStream(userId)
+      return
     }
     if (source !== 'screen') {
       this.recomputeMicStream(userId)
@@ -426,6 +446,43 @@ export class SfuClient {
     this.cb.onRemoteStream(userId, new MediaStream(tracks))
   }
 
+  private async consumeCamera(producerId: string, userId: number) {
+    // Полный аналог consumeMic — камера подхватывается сама, без явного
+    // «смотреть» (см. Source). Отличается только меткой источника и тем,
+    // какой поток пересобирается в конце.
+    if (this.closed || !this.recvTransport) return
+    if (this.isAlreadyConsuming(producerId)) return
+    this.consumingProducerIds.add(producerId)
+    try {
+      const consumer = await this.doConsume(producerId)
+      this.consumers.set(consumer.id, consumer)
+      this.consumerMeta.set(consumer.id, { userId, source: 'camera' })
+      consumer.on('transportclose', () => {
+        this.consumers.delete(consumer.id)
+        this.consumerMeta.delete(consumer.id)
+      })
+      await this.request('resumeConsumer', { consumerId: consumer.id })
+      this.recomputeCameraStream(userId)
+    } catch {
+      // Чужая камера не подключилась — остальной звонок это не ломает.
+    } finally {
+      this.consumingProducerIds.delete(producerId)
+    }
+  }
+
+  private recomputeCameraStream(userId: number) {
+    const tracks: MediaStreamTrack[] = []
+    for (const [cid, consumer] of this.consumers) {
+      const meta = this.consumerMeta.get(cid)
+      if (meta && meta.userId === userId && meta.source === 'camera') tracks.push(consumer.track)
+    }
+    if (tracks.length === 0) {
+      this.cb.onCameraRemoved(userId)
+      return
+    }
+    this.cb.onCameraStream(userId, new MediaStream(tracks))
+  }
+
   private recomputeScreenStream(userId: number) {
     const tracks: MediaStreamTrack[] = []
     for (const [cid, consumer] of this.consumers) {
@@ -495,6 +552,35 @@ export class SfuClient {
 
   get sharingScreen(): boolean {
     return this.screenProducers.length > 0
+  }
+
+  /** Включить камеру: один видеотрек отдельным продюсером.
+   *
+   * Отдельный продюсер, а не вторая дорожка в screen: у них разная судьба
+   * (камеру оставляют включённой, демонстрацию гасят), разное место в
+   * интерфейсе и разные правила подписки (см. Source). */
+  async startCamera(track: MediaStreamTrack): Promise<void> {
+    if (!this.sendTransport) throw new Error('send transport not ready')
+    // Повторный вызов не должен плодить продюсеров: гасим прежний.
+    this.stopCamera()
+    this.cameraProducer = await this.sendTransport.produce({
+      track,
+      appData: { source: 'camera' },
+    })
+  }
+
+  /** Выключить камеру: закрыть свой продюсер и уведомить SFU. */
+  stopCamera() {
+    if (!this.cameraProducer) return
+    void this.request('closeProducer', {
+      producerId: this.cameraProducer.id,
+    }).catch(() => {})
+    this.cameraProducer.close()
+    this.cameraProducer = undefined
+  }
+
+  get sendingCamera(): boolean {
+    return !!this.cameraProducer
   }
 
   /** Средний RTT (мс) по активной candidate-pair send-транспорта. */

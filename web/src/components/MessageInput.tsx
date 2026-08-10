@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Check, Mic, Pencil, Plus, Smile, Sticker as StickerIcon, Trash2, X } from 'lucide-react'
+import {
+  BarChart3, Check, Mic, Pencil, Plus, Smile, Sticker as StickerIcon, Trash2, X,
+} from 'lucide-react'
 import {
   Attachment,
   ChatMessageBase,
@@ -19,8 +21,11 @@ import {
   setCaretAtOffset,
 } from '../composerDom'
 import { ComposerDraft } from '../drafts'
+import { isMobileDevice } from '../deviceInfo'
+import { OutgoingPoll } from '../outbox'
 import Avatar from './Avatar'
 import EmojiPicker, { EmojiPickerAnchor, PickerMode } from './EmojiPicker'
+import CreatePollModal from './CreatePollModal'
 import { useNickname } from '../nicknames'
 
 export interface MessageInputPrefill {
@@ -37,6 +42,8 @@ export interface MessageInputPrefill {
 export interface OutgoingMessage {
   content: string
   attachments: Attachment[]
+  /** Опрос, создаваемый вместе с сообщением (см. backend Poll). */
+  poll?: OutgoingPoll
 }
 
 /** Файл в композере: от выбора до готовности к отправке. */
@@ -110,6 +117,7 @@ export default function MessageInput({
   saveDraft,
   mentionCandidates = [],
   canSendVoice = true,
+  onTyping,
 }: {
   /** Название текстового канала/собеседника/группы для плейсхолдера. */
   channelName: string
@@ -140,6 +148,10 @@ export default function MessageInput({
   /** Право «Отправление голосовых сообщений» здесь. По умолчанию true — в
    * личке и группе ролей нет вовсе, и спрашивать не у кого. */
   canSendVoice?: boolean
+  /** «Человек набирает текст». Зовётся на КАЖДОЕ нажатие клавиши — троттлинг
+   * и решение, слать ли что-то в сеть, целиком на вызывающем (см.
+   * shouldSendTyping в web/src/typing.ts). */
+  onTyping?: () => void
 }) {
   const replyAuthorNickname = useNickname(replyTarget?.author.id)
   const restored = draftKey && loadDraft ? loadDraft(draftKey) : undefined
@@ -150,6 +162,7 @@ export default function MessageInput({
   // Пикер один на обе кнопки композера — «стикер» и «смайл»; отличаются они
   // только вкладкой, на которой он откроется (см. pickerMode).
   const [emojiAnchor, setEmojiAnchor] = useState<EmojiPickerAnchor | null>(null)
+  const [pollOpen, setPollOpen] = useState(false)
   const [pickerMode, setPickerMode] = useState<PickerMode>('emoji')
   const [dragging, setDragging] = useState(false)
   // Композер — contentEditable, а не textarea: только так кастомный эмодзи
@@ -610,6 +623,16 @@ export default function MessageInput({
     onSend({ content: stickerToken(sticker.id), attachments: [] })
   }
 
+  /** Опрос уходит отдельным сообщением сразу из модалки — не «прикрепляется»
+   * к композеру, как файл. Причина простая: у опроса есть собственный текст
+   * (вопрос), и держать его в композере рядом со вторым текстом значит
+   * спрашивать человека дважды об одном. Набранное в поле при этом не
+   * теряется — уезжает подписью к опросу. */
+  const sendPoll = (poll: OutgoingPoll) => {
+    onSend({ content: value.trim(), attachments: [], poll })
+    applyValue('')
+  }
+
   // Вставка картинки из буфера (скриншот через Ctrl+V) — самый частый способ
   // поделиться картинкой, и без этого он бы просто не работал.
   //
@@ -944,6 +967,9 @@ export default function MessageInput({
             setMentionQuery(found?.query ?? '')
             setMentionActiveIndex(0)
             saveSelection()
+            // Правка уже отправленного — не «печатает…»: собеседник ждёт
+            // новое сообщение, а его не будет.
+            if (!editTarget && text.trim()) onTyping?.()
           }}
           onKeyDown={handleKeyDown}
           onKeyUp={saveSelection}
@@ -965,6 +991,18 @@ export default function MessageInput({
             onClick={(e) => openPicker(e, 'stickers')}
           >
             <StickerIcon size={18} />
+          </button>
+        )}
+        {/* Опрос — тоже отдельное сообщение, поэтому в режиме правки его нет
+            (та же причина, что у стикера и голосового выше). */}
+        {!editTarget && (
+          <button
+            type="button"
+            className="composer-btn"
+            title="Создать опрос"
+            onClick={() => setPollOpen(true)}
+          >
+            <BarChart3 size={18} />
           </button>
         )}
         <button
@@ -1014,6 +1052,14 @@ export default function MessageInput({
           // больше не трогают, иначе отправить подряд несколько стикеров
           // значило бы открывать панель заново на каждый.
           onClose={() => setEmojiAnchor(null)}
+        />
+      )}
+
+      {pollOpen && (
+        <CreatePollModal
+          isMobile={isMobileDevice()}
+          onClose={() => setPollOpen(false)}
+          onCreate={sendPoll}
         />
       )}
     </div>

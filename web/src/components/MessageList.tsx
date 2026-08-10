@@ -23,6 +23,8 @@ import DeleteMessageModal from './DeleteMessageModal'
 import EmojiPicker, { EmojiPickerAnchor } from './EmojiPicker'
 import ForwardMessageModal from './ForwardMessageModal'
 import MessageAttachments from './MessageAttachments'
+import LinkPreviewCard from './LinkPreviewCard'
+import PollCard from './PollCard'
 import MessageContextMenu from './MessageContextMenu'
 import MessageReactions from './MessageReactions'
 import MessageReactionsModal from './MessageReactionsModal'
@@ -879,7 +881,23 @@ export default function MessageList({
                   )}
                 </div>
               )}
+              {m.poll && (
+                <PollCard
+                  poll={m.poll}
+                  selfId={currentUserId}
+                  // Закрыть может автор сообщения либо тот, кто распоряжается
+                  // сообщениями здесь. onTogglePin приходит ровно по праву
+                  // delete_messages (см. AppShellChat), то есть служит здесь
+                  // признаком «я тут модерирую».
+                  canClose={isAuthor || !!onTogglePin}
+                />
+              )}
               <MessageAttachments attachments={m.attachments} />
+              {/* Карточка первой ссылки в тексте. Ниже вложений: файл, который
+                  человек приложил сам, важнее того, что мы подтянули за него
+                  со стороны. Удаляемое сообщение не разворачиваем — оно
+                  сейчас исчезнет. */}
+              {m.content && !pendingDelete && <LinkPreviewCard content={m.content} />}
               {/* Плашка «Ветка: имя» — вход в выросшее из этого сообщения
                   обсуждение (см. Channel.source_message). Показывается и у
                   закрытой ветки: закрытие убирает её из сайдбара, но не
