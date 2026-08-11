@@ -878,6 +878,14 @@ input {
   padding: 16px 8px 4px;
 }
 
+/* Канал тащат на заголовок раздела — подсвечиваем цель. Рамкой снизу, а не
+   заливкой всего блока: заголовок узкий, и залитый прямоугольник в 20px
+   читается как «выделен текст», а не как «сюда можно бросить». */
+.channel-category.drop-target {
+  box-shadow: inset 0 -2px 0 var(--blurple);
+  border-radius: 4px;
+}
+
 /* Название категории — кнопка «свернуть/развернуть» (см. ChannelSidebar):
    стрелка + текст в одну строку, фон кнопки не рисуем — визуально это
    по-прежнему просто подпись. */
@@ -6499,6 +6507,60 @@ button.moderator-panel-row-link {
    а показанный в камеру текст — нечитаемым. */
 .participant-tile-camera.self {
   transform: scaleX(-1);
+}
+
+/* ---- Выбор качества демонстрации (ScreenQualityModal.tsx) ---- */
+
+.screen-quality-modal {
+  width: min(460px, 92vw);
+}
+
+.screen-quality-options {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+/* Частота — три варианта в ряд: их меньше и они короче, в две колонки
+   осталась бы висеть пустая ячейка. */
+.screen-quality-fps {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.screen-quality-option {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--input-bg);
+  text-align: left;
+  cursor: pointer;
+}
+
+.screen-quality-option:hover {
+  border-color: var(--blurple);
+}
+
+.screen-quality-option.active {
+  border-color: var(--blurple);
+  background: color-mix(in srgb, var(--blurple) 18%, var(--input-bg));
+}
+
+.screen-quality-option-label {
+  color: var(--text-normal);
+  font-size: calc(14px * var(--font-scale, 1));
+  font-weight: 600;
+}
+
+.screen-quality-option-hint {
+  color: var(--text-faint);
+  font-size: calc(11px * var(--font-scale, 1));
 }
 
 /* ---- Соундборд звонка (SoundboardPanel.tsx) ---- */

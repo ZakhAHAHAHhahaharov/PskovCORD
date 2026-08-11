@@ -158,10 +158,24 @@ export interface ChannelMemberSettings {
   muted_forever: boolean
 }
 
+/** Раздел сайдбара, в который сгруппированы каналы сервера.
+ *
+ * Своих прав у раздела нет: приватность остаётся у самого канала, категория
+ * только группирует и задаёт порядок (см. backend chat.models.ChannelCategory). */
+export interface ChannelCategory {
+  id: number
+  server: number
+  name: string
+  position: number
+}
+
 export interface Channel {
   id: number
   server: number
   name: string
+  /** Раздел, в котором показан канал; null — «вне разделов». У веток всегда
+   * null: ветка живёт под своим родительским каналом, а не в разделе. */
+  category: number | null
   /** 'thread' — ветка (Discord: thread). Это тоже канал, а не отдельная
    * сущность: те же сообщения, реакции, закрепления и курсор прочтения,
    * отличается только наличием parent (см. backend chat.models.Channel). */
@@ -375,6 +389,9 @@ export interface Server {
   owner: number
   created_at: string
   channels: Channel[]
+  /** Разделы сайдбара в их порядке. Каналы сюда не вложены — они лежат
+   * плоско в channels со своим полем category (см. backend). */
+  categories: ChannelCategory[]
   /** Значок сервера (data-URL, до 512×512); пусто — инициалы в ServerRail. */
   icon: string
   banner_gradient: string
@@ -1556,11 +1573,39 @@ export const api = {
     }),
   unbanMember: (serverId: number, userId: number) =>
     req(`/api/servers/${serverId}/bans/${userId}`, { method: 'DELETE' }),
+  // --- разделы сайдбара (категории каналов) --------------------------------
+  serverCategories: (serverId: number): Promise<ChannelCategory[]> =>
+    req(`/api/servers/${serverId}/categories`),
+  createCategory: (serverId: number, name: string): Promise<ChannelCategory> =>
+    req(`/api/servers/${serverId}/categories`, {
+      method: 'POST',
+      body: JSON.stringify({ name }),
+    }),
+  updateCategory: (
+    serverId: number,
+    categoryId: number,
+    patch: { name?: string; position?: number },
+  ): Promise<ChannelCategory> =>
+    req(`/api/servers/${serverId}/categories/${categoryId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(patch),
+    }),
+  /** Удаляется только раздел — каналы внутри остаются и становятся «вне
+   * разделов» (см. backend, SET_NULL). */
+  deleteCategory: (serverId: number, categoryId: number) =>
+    req(`/api/servers/${serverId}/categories/${categoryId}`, { method: 'DELETE' }),
+  /** Перенести канал в раздел; null — вынести из разделов. */
+  moveChannelToCategory: (channelId: number, categoryId: number | null): Promise<Channel> =>
+    req(`/api/channels/${channelId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ category: categoryId }),
+    }),
+
   createChannel: (
     serverId: number,
     name: string,
     kind: string,
-    opts: { slowmodeSeconds?: number; isPrivate?: boolean } = {},
+    opts: { slowmodeSeconds?: number; isPrivate?: boolean; categoryId?: number | null } = {},
   ): Promise<Channel> =>
     req(`/api/servers/${serverId}/channels`, {
       method: 'POST',
@@ -1569,6 +1614,7 @@ export const api = {
         kind,
         slowmode_seconds: opts.slowmodeSeconds ?? 0,
         is_private: opts.isPrivate ?? false,
+        category: opts.categoryId ?? null,
       }),
     }),
 

@@ -31,6 +31,7 @@ from .models import (
     Attachment, Channel, ChannelMemberSettings, Conversation, ConversationMessage,
     ConversationParticipant, FriendNickname, Membership, Message, ProfileNote, Role, Server,
     ServerAuditLog, ServerBan, ServerEmoji, ServerInvite, ServerJoinRequest, Sticker, StickerPack,
+    ChannelCategory, MAX_CATEGORIES_PER_SERVER, MAX_CATEGORY_NAME_LEN,
     ChannelReadState, SoundboardSound, ThreadMember, UserRelationState,
     MAX_SOUND_BYTES, MAX_SOUNDS_PER_SERVER, MAX_SOUND_NAME_LEN, MIN_SOUND_NAME_LEN,
     MAX_ATTACHMENT_BYTES, MAX_EMOJI_BYTES, MAX_EMOJI_PER_SERVER,
@@ -43,7 +44,8 @@ from .permissions import (
     are_friends, blocked_user_ids, can_dm, can_see_channel, visible_channels,
 )
 from .serializers import (
-    AttachmentSerializer, ChannelInviteSerializer, ChannelMemberSettingsSerializer,
+    AttachmentSerializer, ChannelCategorySerializer, ChannelInviteSerializer,
+    ChannelMemberSettingsSerializer,
     ChannelSerializer, ConversationMessageSerializer,
     ConversationSerializer, MembershipSettingsSerializer, MessageSerializer,
     RoleSerializer, ServerAuditLogSerializer, ServerBanSerializer, ServerEmojiSerializer,
@@ -2157,10 +2159,19 @@ class ChannelCreate(APIView):
         if error:
             return error
         position = server.channels.count()
+        # Раздел, в котором нажали «+». Чужой/несуществующий id молча
+        # игнорируем, а не отказываем: канал создать всё равно надо, а
+        # промахнуться разделом не страшно — его переносят перетаскиванием.
+        category = None
+        raw_category = request.data.get("category")
+        if raw_category is not None:
+            category = ChannelCategory.objects.filter(
+                id=raw_category, server=server).first()
         channel = Channel.objects.create(
             server=server, name=name, kind=kind, position=position,
             slowmode_seconds=slowmode or 0,
             is_private=bool(request.data.get("is_private")),
+            category=category,
         )
         data = ChannelSerializer(channel, context={"request": request}).data
         # Живое обновление списка каналов у остальных участников сервера —
@@ -2172,6 +2183,120 @@ class ChannelCreate(APIView):
             "channel": _channel_broadcast_payload(data),
         })
         return Response(data, status=201)
+
+
+def _broadcast_categories(server):
+    """Разделы сервера изменились — всем участникам.
+
+    Полным списком, а не дельтой: разделов единицы, а порядок — свойство
+    всего списка сразу, и применять к нему дельты по одной значило бы ловить
+    промежуточные состояния, в которых две группы стоят на одном месте.
+    """
+    payload = {
+        "op": "server_categories",
+        "server_id": server.id,
+        "categories": ChannelCategorySerializer(
+            server.categories.all(), many=True).data,
+    }
+    async_to_sync(get_channel_layer().group_send)(
+        f"server_{server.id}", {"type": "broadcast", "payload": payload})
+
+
+class ServerCategoryList(APIView):
+    """GET — разделы сервера, POST — создать (нужен manage_channels).
+
+    Отдельная ручка ради GET нужна редко — разделы и так приезжают в
+    ServerSerializer вместе с каналами. Она здесь для симметрии с POST и
+    чтобы фронт мог перечитать список, не тянув сервер целиком.
+    """
+
+    def get(self, request, server_id):
+        server = get_object_or_404(Server, id=server_id)
+        if not is_member(request.user, server):
+            return Response({"detail": "Вы не участник сервера."}, status=403)
+        return Response(
+            ChannelCategorySerializer(server.categories.all(), many=True).data)
+
+    def post(self, request, server_id):
+        server = get_object_or_404(Server, id=server_id)
+        denied = _require_permission(request, server, "manage_channels")
+        if denied:
+            return denied
+        if server.categories.count() >= MAX_CATEGORIES_PER_SERVER:
+            return Response(
+                {"detail": f"Разделов уже {MAX_CATEGORIES_PER_SERVER} — "
+                           "больше не нужно."},
+                status=400)
+        name = str(request.data.get("name") or "").strip()
+        if not name:
+            return Response({"detail": "Нужно название раздела."}, status=400)
+        # В конец списка: новый раздел, вставший первым, сдвинул бы всё
+        # привычное вниз, и человек искал бы свои каналы заново.
+        last = server.categories.order_by("-position").first()
+        category = ChannelCategory.objects.create(
+            server=server,
+            name=name[:MAX_CATEGORY_NAME_LEN],
+            position=(last.position + 1) if last else 0,
+        )
+        _broadcast_categories(server)
+        return Response(ChannelCategorySerializer(category).data, status=201)
+
+
+class ServerCategoryDetail(APIView):
+    """PATCH — переименовать/переставить, DELETE — удалить раздел."""
+
+    def patch(self, request, server_id, category_id):
+        server = get_object_or_404(Server, id=server_id)
+        denied = _require_permission(request, server, "manage_channels")
+        if denied:
+            return denied
+        category = get_object_or_404(
+            ChannelCategory, id=category_id, server=server)
+        name = request.data.get("name")
+        position = request.data.get("position")
+        if name is None and position is None:
+            return Response({"detail": "Нечего менять."}, status=400)
+        updated = []
+        if name is not None:
+            name = str(name).strip()
+            if not name:
+                return Response({"detail": "Нужно название раздела."}, status=400)
+            category.name = name[:MAX_CATEGORY_NAME_LEN]
+            updated.append("name")
+        if position is not None:
+            try:
+                category.position = max(0, min(10_000, int(position)))
+            except (TypeError, ValueError):
+                return Response({"detail": "position — целое число."}, status=400)
+            updated.append("position")
+        category.save(update_fields=updated)
+        _broadcast_categories(server)
+        return Response(ChannelCategorySerializer(category).data)
+
+    def delete(self, request, server_id, category_id):
+        """Удаляется ТОЛЬКО раздел. Каналы внутри остаются и становятся «вне
+        разделов» (Channel.category = NULL по SET_NULL) — удаление папки в
+        интерфейсе не должно уносить переписку, которая в ней лежала."""
+        server = get_object_or_404(Server, id=server_id)
+        denied = _require_permission(request, server, "manage_channels")
+        if denied:
+            return denied
+        category = get_object_or_404(
+            ChannelCategory, id=category_id, server=server)
+        # Каналы осиротеют молча — но клиенту надо сказать и про них, иначе он
+        # оставит их нарисованными в разделе, которого уже нет.
+        orphan_ids = list(category.channels.values_list("id", flat=True))
+        category.delete()
+        _broadcast_categories(server)
+        if orphan_ids:
+            async_to_sync(get_channel_layer().group_send)(
+                f"server_{server.id}",
+                {"type": "broadcast", "payload": {
+                    "op": "channels_uncategorized",
+                    "server_id": server.id,
+                    "channel_ids": orphan_ids,
+                }})
+        return Response(status=204)
 
 
 class ChannelDetail(APIView):
@@ -2225,12 +2350,30 @@ class ChannelDetail(APIView):
         allowed_role_ids = request.data.get("allowed_role_ids")
         allowed_user_ids = request.data.get("allowed_user_ids")
         invites_paused = request.data.get("invites_paused")
+        # "category": <id> — перенести в раздел, null — вынести из разделов.
+        # Отличить «не прислали» от «прислали null» через .get() нельзя,
+        # поэтому спрашиваем сам факт наличия ключа: null здесь осмысленное
+        # значение, а не отсутствие изменения.
+        category_given = "category" in request.data
+        position_raw = request.data.get("position")
         if all(v is None for v in (
             name, status_text, slowmode_raw, is_spoiler, age_restricted,
             is_private, allowed_role_ids, allowed_user_ids, invites_paused,
-        )):
+            position_raw,
+        )) and not category_given:
             return Response({"detail": "Нечего менять."}, status=400)
         updated = []
+        if category_given:
+            error = self._apply_category(request, channel, server)
+            if error:
+                return error
+            updated.append("category")
+        if position_raw is not None:
+            try:
+                channel.position = max(0, min(10_000, int(position_raw)))
+            except (TypeError, ValueError):
+                return Response({"detail": "position — целое число."}, status=400)
+            updated.append("position")
         if name is not None:
             name = str(name).strip()
             if not name:
@@ -2285,6 +2428,28 @@ class ChannelDetail(APIView):
             "channel": _channel_broadcast_payload(data),
         })
         return Response(data)
+
+    @staticmethod
+    def _apply_category(request, channel, server):
+        """Перенос канала в раздел (или из разделов). Ошибка — Response."""
+        raw = request.data.get("category")
+        # Ветка живёт под своим родительским каналом, а не в разделе — иначе
+        # она разъехалась бы с ним по сайдбару, и «продолжение того же
+        # разговора» перестало бы быть рядом с разговором.
+        if channel.kind == Channel.THREAD:
+            return Response(
+                {"detail": "Ветка не переносится в раздел — она живёт под своим каналом."},
+                status=400)
+        if raw is None:
+            channel.category = None
+            return None
+        category = ChannelCategory.objects.filter(id=raw, server=server).first()
+        # Только раздел ЭТОГО сервера: иначе канал уехал бы в чужую
+        # категорию и пропал бы из сайдбара обоих серверов разом.
+        if not category:
+            return Response({"detail": "Раздел не найден."}, status=400)
+        channel.category = category
+        return None
 
     def delete(self, request, channel_id):
         """DELETE /api/channels/<id> — правый клик по каналу → «Удалить

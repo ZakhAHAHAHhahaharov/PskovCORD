@@ -529,13 +529,22 @@ export class SfuClient {
     await this.request('updateToken', { token })
   }
 
-  /** Начать демонстрацию экрана: продюсим видео (и системный звук, если есть). */
-  async startScreen(tracks: MediaStreamTrack[]): Promise<void> {
+  /** Начать демонстрацию экрана: продюсим видео (и системный звук, если есть).
+   *
+   * maxBitrate — потолок для ВИДЕО-дорожки, бит/с (см. settings
+   * .screenMaxBitrate). Нужен отдельно от разрешения: constraints у
+   * getDisplayMedia ограничивают картинку, но не поток, и на резком движении
+   * кодек всё равно раздувается. Звуковую дорожку не трогаем — она и так
+   * копеечная, а ограничивать её тем же числом было бы просто неверно. */
+  async startScreen(tracks: MediaStreamTrack[], maxBitrate?: number): Promise<void> {
     if (!this.sendTransport) throw new Error('send transport not ready')
     for (const track of tracks) {
       const producer = await this.sendTransport.produce({
         track,
         appData: { source: 'screen' },
+        ...(track.kind === 'video' && maxBitrate
+          ? { encodings: [{ maxBitrate }] }
+          : {}),
       })
       this.screenProducers.push(producer)
     }
