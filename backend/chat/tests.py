@@ -865,6 +865,35 @@ class GatewayVoiceSignalingTests(TransactionTestCase):
         raise AssertionError(f"op={op!r} не пришёл за {max_messages} сообщений")
 
     @staticmethod
+    async def _receive_presence_of(comm, user_id, timeout=2, max_messages=10):
+        """presence_update про КОНКРЕТНОГО пользователя.
+
+        Отдельно от _receive_until, потому что presence про разных людей —
+        это один и тот же op, и «дождаться presence_update» ловит чей угодно.
+        При подключении двух сокетов подряд каждый рассылает свой, порядок
+        доставки между ними не гарантирован, и тест, бравший первый
+        попавшийся, сравнивал статус alice с сообщением про bob.
+        """
+        seen = []
+        for _ in range(max_messages):
+            try:
+                msg = await comm.receive_json_from(timeout=timeout)
+            except asyncio.TimeoutError:
+                # Сообщения кончились раньше искомого. Голый TimeoutError из
+                # недр asgiref по стеку не читается вообще — а знать, ЧТО
+                # пришло вместо ожидаемого, здесь важнее всего: набор и
+                # порядок рассылок при подключении зависят от версии channels.
+                raise AssertionError(
+                    f"presence_update про user_id={user_id} не пришёл; "
+                    f"получено вместо него: {seen}") from None
+            seen.append(msg.get("op"))
+            if msg.get("op") == "presence_update" and msg.get("user_id") == user_id:
+                return msg
+        raise AssertionError(
+            f"presence_update про user_id={user_id} не пришёл "
+            f"за {max_messages} сообщений; получено: {seen}")
+
+    @staticmethod
     async def _assert_op_not_received(comm, op, timeout=0.3, interval=0.01):
         """Как receive_nothing (опрашивает очередь напрямую, БЕЗ вызова
         receive_json_from — тот при таймауте отменяет таск consumer'а и ломает
@@ -978,15 +1007,18 @@ class GatewayVoiceSignalingTests(TransactionTestCase):
     async def test_screen_share_update_ignored_when_not_in_voice(self):
         alice_ws = await self._connect(self.alice)  # не в голосе
         bob_ws = await self._connect(self.bob)
-        # connect() шлёт bob'у и "ready" (direct), и его собственный
-        # presence_update — иначе они "протекут" в проверку receive_nothing.
-        await bob_ws.receive_json_from(timeout=2)
-        await bob_ws.receive_json_from(timeout=2)
 
         await alice_ws.send_json_to({
             "op": "voice_screen_share_update", "sharing": True,
         })
-        self.assertTrue(await bob_ws.receive_nothing(timeout=0.3))
+        # Именно "не пришёл ЭТОТ op", а не "не пришло ничего": connect()
+        # рассылает "ready" и presence_update, и порядок их доставки
+        # относительно друг друга не гарантирован (см. комментарий в
+        # chat.consumers.connect). Раньше здесь стояло receive_nothing() с
+        # вычитыванием ровно двух сообщений заранее — держалось на том, какие
+        # именно два придут первыми, и рассыпалось от смены версии channels,
+        # хотя проверяемое поведение не менялось.
+        await self._assert_op_not_received(bob_ws, "voice_screen_share_update")
 
         await alice_ws.disconnect()
         await bob_ws.disconnect()
@@ -996,16 +1028,16 @@ class GatewayVoiceSignalingTests(TransactionTestCase):
         bob_ws = await self._connect(self.bob)
 
         # bob получает presence_update о подключении alice (online, статус по умолчанию).
-        await self._receive_until(bob_ws, "presence_update")
+        await self._receive_presence_of(bob_ws, self.alice.id)
 
         await alice_ws.send_json_to({"op": "set_status", "status": "dnd"})
-        msg = await self._receive_until(bob_ws, "presence_update")
+        msg = await self._receive_presence_of(bob_ws, self.alice.id)
         self.assertEqual(msg["user_id"], self.alice.id)
         self.assertEqual(msg["status"], "dnd")
         self.assertTrue(msg["online"])
 
         await alice_ws.send_json_to({"op": "set_status", "status": "invisible"})
-        msg = await self._receive_until(bob_ws, "presence_update")
+        msg = await self._receive_presence_of(bob_ws, self.alice.id)
         self.assertEqual(msg["user_id"], self.alice.id)
         self.assertEqual(msg["status"], "offline")
         self.assertFalse(msg["online"])
