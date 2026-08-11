@@ -5,12 +5,18 @@
 # Раз в неделю, а не ежедневно: проект небольшой, и десять PR каждое утро
 # читать перестанут на третий день, а вместе с ними перестанут читать и
 # security-обновления.
+#
+# target-branch: dev у каждой записи — иначе dependabot целится в ветку по
+# умолчанию, то есть в main. А мерж в main здесь это автодеплой на прод (см.
+# DEPLOY.md): обновление зависимости уезжало бы к живым пользователям мимо
+# dev и мимо всякой возможности сначала посмотреть на него.
 version: 2
 updates:
   # Экосистемы перечислены отдельно на каждый каталог — монорепо, и общего
   # package.json в корне нет.
   - package-ecosystem: npm
     directory: /web
+    target-branch: dev
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
@@ -23,6 +29,7 @@ updates:
 
   - package-ecosystem: npm
     directory: /sfu
+    target-branch: dev
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
@@ -32,6 +39,7 @@ updates:
 
   - package-ecosystem: npm
     directory: /desktop
+    target-branch: dev
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
@@ -41,6 +49,7 @@ updates:
 
   - package-ecosystem: pip
     directory: /backend
+    target-branch: dev
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
@@ -52,6 +61,7 @@ updates:
   # соседи) иначе остаются на месте годами.
   - package-ecosystem: github-actions
     directory: /
+    target-branch: dev
     schedule:
       interval: weekly
 
@@ -61,10 +71,12 @@ updates:
   # не так давно, а цена ошибки — молча не работающий конфиг.
   - package-ecosystem: docker
     directory: /sfu
+    target-branch: dev
     schedule:
       interval: weekly
 
   - package-ecosystem: docker
     directory: /deploy
+    target-branch: dev
     schedule:
       interval: weekly
