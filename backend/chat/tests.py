@@ -19,6 +19,7 @@ from unittest import mock
 import jwt
 from asgiref.sync import sync_to_async
 from channels.db import database_sync_to_async
+from channels.layers import channel_layers
 from channels.testing import WebsocketCommunicator
 from django.conf import settings
 from django.contrib.auth import get_user_model
@@ -54,6 +55,42 @@ from .permissions import can_dm, can_see_channel
 from .serializers import RoleSerializer
 
 User = get_user_model()
+
+
+class ChannelsTestCase(TransactionTestCase):
+    """TransactionTestCase, который не тащит слой каналов между тестами.
+
+    TransactionTestCase (а не TestCase) здесь нужен сам по себе:
+    database_sync_to_async в консьюмере открывает соединение с БД в отдельном
+    потоке, и единая транзакция TestCase с этим не совместима.
+
+    Отдельная база под них — из-за другого. channels кэширует созданный
+    RedisChannelLayer в channel_layers.backends на весь процесс, а каждый
+    async-тест идёт в СВОЁМ event loop'е. Слой из первого теста уносит с
+    собой asyncio-локи, привязанные к уже закрытому loop'у, и следующий тест
+    падает с «Lock is bound to a different event loop», утаскивая за собой
+    десятки чужих тестов. Зависит от порядка и потому проявляется через раз:
+    после обновления channels до 4.3 CI краснел примерно в половине
+    прогонов на одном и том же коммите.
+
+    Сбрасываем кэш в _pre_setup/_post_teardown, а НЕ в setUp/tearDown:
+    подклассы переопределяют их без вызова super(), и половина сбросов
+    просто не выполнилась бы.
+
+    Сигнатуры у этих двух хуков РАЗНЫЕ, и это не описка: в Django 5.2
+    _pre_setup — classmethod, а _post_teardown остался обычным методом.
+    Перепутать их не выйдет незаметно — тесты падают ещё на setUpClass с
+    «_pre_setup() missing 1 required positional argument».
+    """
+
+    @classmethod
+    def _pre_setup(cls):
+        channel_layers.backends = {}
+        super()._pre_setup()
+
+    def _post_teardown(self):
+        super()._post_teardown()
+        channel_layers.backends = {}
 
 
 class PresenceVoiceTests(TestCase):
@@ -820,7 +857,7 @@ class ServerAccessTests(APITestCase):
             resp.data["rules"], [{"title": "Без флуда", "text": "Не спамьте."}])
 
 
-class GatewayVoiceSignalingTests(TransactionTestCase):
+class GatewayVoiceSignalingTests(ChannelsTestCase):
     """WS-уровень: join отдаёт peers, relay работает 1:1 только внутри канала.
 
     TransactionTestCase, а не TestCase: database_sync_to_async в консьюмере
@@ -1186,7 +1223,7 @@ class GatewayVoiceSignalingTests(TransactionTestCase):
         await bob_ws.disconnect()
 
 
-class VoiceMoveUserTests(TransactionTestCase):
+class VoiceMoveUserTests(ChannelsTestCase):
     """{"op": "voice_move_user"} — перетаскивание участника голосового канала
     на другой канал (см. chat.consumers._handle_voice_move_user).
 
@@ -1352,7 +1389,7 @@ class VoiceMoveUserTests(TransactionTestCase):
         await bob_ws.disconnect()
 
 
-class SingleDeviceVoiceTests(TransactionTestCase):
+class SingleDeviceVoiceTests(ChannelsTestCase):
     """Один аккаунт — один голосовой звонок одновременно, будь то канал
     сервера или диалог/группа (см. chat.consumers._kick_other_devices)."""
 
@@ -1555,7 +1592,7 @@ class SingleDeviceVoiceTests(TransactionTestCase):
         await voice_tab.disconnect()
 
 
-class ChannelCreateBroadcastTests(TransactionTestCase):
+class ChannelCreateBroadcastTests(ChannelsTestCase):
     """POST /channels должен живьём разослать новый канал участникам сервера,
     а не только вернуть его в ответе создателю (иначе остальным нужно
     перезагружать страницу, чтобы увидеть новый канал)."""
@@ -1610,7 +1647,7 @@ class ChannelCreateBroadcastTests(TransactionTestCase):
         await bob_ws.disconnect()
 
 
-class MessageOpsTests(TransactionTestCase):
+class MessageOpsTests(ChannelsTestCase):
     """Удалить своё сообщение может автор, чужое — только владелец сервера.
     Редактировать можно ТОЛЬКО своё — владелец сервера чужое не правит."""
 
@@ -2508,7 +2545,7 @@ class PresenceEndpointTests(APITestCase):
         self.assertEqual(ids, {self.friend.id, peer.id})
 
 
-class FriendPresenceBroadcastTests(TransactionTestCase):
+class FriendPresenceBroadcastTests(ChannelsTestCase):
     """Presence друга долетает до него ЛИЧНО, даже когда общего сервера нет —
     иначе точке статуса в списке друзей неоткуда взяться (см.
     GatewayConsumer._broadcast_presence).
@@ -2689,7 +2726,7 @@ class HeartbeatSweepTests(TestCase):
         self.assertFalse(presence.heartbeat(self.uid))
 
 
-class GatewayPongTests(TransactionTestCase):
+class GatewayPongTests(ChannelsTestCase):
     """ping обязан получать ответ.
 
     Не ради presence (его продлевает сам ping), а ради клиента: соединение
@@ -2749,7 +2786,7 @@ class GatewayPongTests(TransactionTestCase):
         await comm.disconnect()
 
 
-class TypingIndicatorTests(TransactionTestCase):
+class TypingIndicatorTests(ChannelsTestCase):
     """typing_start: рассылка, троттлинг и — главное — проверка доступа.
 
     «Печатает…» это утечка присутствия: без проверки видимости канала
@@ -3696,7 +3733,7 @@ class EmojiKeyTests(TestCase):
                 emoji_keys.normalize(char), f"быстрая реакция {char} отклоняется")
 
 
-class ReactionAndDeliveryTests(TransactionTestCase):
+class ReactionAndDeliveryTests(ChannelsTestCase):
     """Реакции, привязка вложений к сообщению и подтверждение доставки —
     всё через gateway, ровно так, как это делает настоящий клиент."""
 
@@ -5592,7 +5629,7 @@ class SoundboardTests(APITestCase):
             uploads.sniff_sound(SimpleUploadedFile("x", b"<html>not audio</html>")))
 
 
-class PollTests(TransactionTestCase):
+class PollTests(ChannelsTestCase):
     """Опросы: создание вместе с сообщением, голосование, закрытие, доступ."""
 
     def setUp(self):
@@ -6577,7 +6614,7 @@ class VoiceChannelChatTests(APITestCase):
         self.assertEqual(resp.status_code, 400)
 
 
-class ThreadGatewayTests(TransactionTestCase):
+class ThreadGatewayTests(ChannelsTestCase):
     """Живые события веток по WebSocket: сообщение в ветку доходит до всех, а
     закрытая ветка возвращается из архива самой отправкой."""
 
