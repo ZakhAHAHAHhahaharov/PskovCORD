@@ -1,0 +1,70 @@
+# Обновления зависимостей. До этого их не проверял никто и ничем: в проекте
+# Django, Electron, mediasoup и три десятка npm-пакетов, часть из которых
+# смотрит в интернет (см. chat/linkpreview.py) или разбирает чужие медиапотоки.
+#
+# Раз в неделю, а не ежедневно: проект небольшой, и десять PR каждое утро
+# читать перестанут на третий день, а вместе с ними перестанут читать и
+# security-обновления.
+version: 2
+updates:
+  # Экосистемы перечислены отдельно на каждый каталог — монорепо, и общего
+  # package.json в корне нет.
+  - package-ecosystem: npm
+    directory: /web
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      # Патчи и минорки одной пачкой: по отдельному PR на каждый bump ревью
+      # превращается в рутину, которую пролистывают не глядя. Мажорные
+      # приходят отдельно — их и надо читать.
+      minor-and-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: npm
+    directory: /sfu
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      minor-and-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: npm
+    directory: /desktop
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      minor-and-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: pip
+    directory: /backend
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      minor-and-patch:
+        update-types: [minor, patch]
+
+  # Сами workflow'ы тоже стареют: закреплённые actions (checkout@v4 и
+  # соседи) иначе остаются на месте годами.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+
+  # Базовые образы. Прод-coturn и Node уже прибиты к версиям (см. issue #74),
+  # и без этого блока их пришлось бы двигать руками. Два блока с directory,
+  # а не один с directories: множественная форма поддерживается не везде и
+  # не так давно, а цена ошибки — молча не работающий конфиг.
+  - package-ecosystem: docker
+    directory: /sfu
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: docker
+    directory: /deploy
+    schedule:
+      interval: weekly

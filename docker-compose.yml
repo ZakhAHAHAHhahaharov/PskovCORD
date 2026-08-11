@@ -45,7 +45,10 @@ services:
       retries: 10
 
   coturn:
-    image: coturn/coturn:latest
+    # Версия прибита, как и в прод-файле: с ":latest" каждый ребилд мог
+    # затянуть другую сборку без единого шанса это заметить, и dev с продом
+    # незаметно разъезжались.
+    image: coturn/coturn:4.15.0
     network_mode: host
     command:
       - "--listening-port=3478"
