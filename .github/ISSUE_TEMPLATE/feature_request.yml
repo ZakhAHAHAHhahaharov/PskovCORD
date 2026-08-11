@@ -1,0 +1,28 @@
+name: Фича
+description: Предложить новую возможность
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Какую задачу это решает
+      description: >-
+        Не «сделайте кнопку X», а что именно сейчас неудобно. Решение часто
+        оказывается другим, чем казалось вначале.
+    validations:
+      required: true
+
+  - type: textarea
+    id: idea
+    attributes:
+      label: Как это могло бы работать
+      description: Если есть — как выглядит в Discord или где-то ещё.
+
+  - type: checkboxes
+    id: checked
+    attributes:
+      label: Проверено
+      options:
+        - label: >-
+            Заглянул в [TODO.md](https://github.com/ZakhAHAHAHhahaharov/PskovCORD/blob/main/TODO.md)
+            — этого там ещё нет

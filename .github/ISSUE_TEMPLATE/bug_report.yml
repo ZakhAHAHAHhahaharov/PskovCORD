@@ -1,0 +1,57 @@
+name: Баг
+description: Что-то работает не так, как должно
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: >-
+        Нашли **уязвимость**? Не сюда — см. [SECURITY.md](https://github.com/ZakhAHAHAHhahaharov/PskovCORD/blob/main/SECURITY.md).
+
+  - type: textarea
+    id: what
+    attributes:
+      label: Что произошло
+      description: И что вы ожидали вместо этого.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Как повторить
+      description: >-
+        По шагам. Если не воспроизводится стабильно — так и напишите, это
+        само по себе полезная информация (гонки и обрывы связи иначе
+        выглядят).
+      placeholder: |
+        1. Зайти в голосовой канал
+        2. Включить демонстрацию экрана
+        3. …
+    validations:
+      required: true
+
+  - type: dropdown
+    id: where
+    attributes:
+      label: Где
+      options:
+        - Веб (браузер)
+        - Десктоп (Electron)
+        - Не знаю / не важно
+    validations:
+      required: true
+
+  - type: input
+    id: env
+    attributes:
+      label: Браузер и ОС
+      placeholder: Chrome 131, Windows 11
+
+  - type: textarea
+    id: console
+    attributes:
+      label: Ошибки в консоли
+      description: >-
+        F12 → Console. Не обязательно, но обычно экономит переписку на день.
+        Токены и адреса лучше затереть.
+      render: text
