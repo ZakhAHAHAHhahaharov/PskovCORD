@@ -43,7 +43,7 @@ from .models import (
     Attachment, Channel, ChannelMemberSettings, Conversation, ConversationMessage,
     ConversationParticipant, MAX_ATTACHMENT_BYTES, MAX_EMOJI_BYTES,
     MAX_REACTIONS_PER_MESSAGE,
-    FriendNickname, Membership, Message, Poll, PollVote, ProfileNote, Reaction,
+    ChannelCategory, FriendNickname, Membership, Message, Poll, PollVote, ProfileNote, Reaction,
     Role, Server, ServerAuditLog, ServerBan,
     ServerEmoji, ServerInvite, ServerJoinRequest, Sticker, StickerPack,
     ChannelReadState, ThreadMember,
@@ -5371,6 +5371,98 @@ class InviteAndBanPermissionTests(APITestCase):
             "/api/servers/{}/bans".format(self.server.id),
             {"user_id": self.target.id}, format="json")
         self.assertEqual(resp.status_code, 403)
+
+
+class ChannelCategoryTests(APITestCase):
+    """Разделы сайдбара: права, перенос каналов и — главное — что удаление
+    раздела НЕ уносит с собой каналы."""
+
+    def setUp(self):
+        self.owner = User.objects.create_user(username="cat_owner", password="pw12345")
+        self.member = User.objects.create_user(username="cat_member", password="pw12345")
+        self.server = Server.objects.create(name="s", owner=self.owner)
+        Membership.objects.create(user=self.owner, server=self.server)
+        Membership.objects.create(user=self.member, server=self.server)
+        roles.create_default_role(self.server)
+        self.channel = Channel.objects.create(
+            server=self.server, name="general", kind=Channel.TEXT, position=0)
+
+    def _create(self, name="Общее"):
+        return self.client.post(
+            f"/api/servers/{self.server.id}/categories", {"name": name}, format="json")
+
+    def test_owner_creates_category(self):
+        self.client.force_authenticate(self.owner)
+        resp = self._create()
+        self.assertEqual(resp.status_code, 201, resp.data)
+        self.assertEqual(resp.data["name"], "Общее")
+
+    def test_regular_member_cannot_create(self):
+        self.client.force_authenticate(self.member)
+        self.assertEqual(self._create().status_code, 403)
+
+    def test_channel_moves_into_category_and_back(self):
+        self.client.force_authenticate(self.owner)
+        category_id = self._create().data["id"]
+
+        moved = self.client.patch(
+            f"/api/channels/{self.channel.id}",
+            {"category": category_id}, format="json")
+        self.assertEqual(moved.status_code, 200, moved.data)
+        self.assertEqual(moved.data["category"], category_id)
+
+        # null — осмысленное значение «вынести из разделов», а не «не менять».
+        out = self.client.patch(
+            f"/api/channels/{self.channel.id}", {"category": None}, format="json")
+        self.assertEqual(out.status_code, 200)
+        self.assertIsNone(out.data["category"])
+
+    def test_deleting_category_keeps_channels(self):
+        """Удаление папки в интерфейсе не должно уносить переписку."""
+        self.client.force_authenticate(self.owner)
+        category_id = self._create().data["id"]
+        self.client.patch(
+            f"/api/channels/{self.channel.id}",
+            {"category": category_id}, format="json")
+
+        resp = self.client.delete(
+            f"/api/servers/{self.server.id}/categories/{category_id}")
+        self.assertEqual(resp.status_code, 204)
+
+        self.channel.refresh_from_db()
+        self.assertIsNone(self.channel.category_id)
+        self.assertTrue(Channel.objects.filter(id=self.channel.id).exists())
+
+    def test_cannot_move_channel_into_foreign_category(self):
+        """Иначе канал уехал бы в чужой раздел и пропал из сайдбара обоих."""
+        other = Server.objects.create(name="чужой", owner=self.member)
+        Membership.objects.create(user=self.member, server=other)
+        foreign = ChannelCategory.objects.create(server=other, name="чужой раздел")
+
+        self.client.force_authenticate(self.owner)
+        resp = self.client.patch(
+            f"/api/channels/{self.channel.id}",
+            {"category": foreign.id}, format="json")
+        self.assertEqual(resp.status_code, 400)
+
+    def test_thread_cannot_be_categorized(self):
+        """Ветка живёт под своим каналом, а не в разделе."""
+        self.client.force_authenticate(self.owner)
+        category_id = self._create().data["id"]
+        thread = Channel.objects.create(
+            server=self.server, name="ветка", kind=Channel.THREAD,
+            parent=self.channel, position=1)
+        resp = self.client.patch(
+            f"/api/channels/{thread.id}", {"category": category_id}, format="json")
+        self.assertEqual(resp.status_code, 400)
+
+    def test_categories_come_with_server(self):
+        self.client.force_authenticate(self.owner)
+        self._create("Первый")
+        self._create("Второй")
+        servers = self.client.get("/api/servers").data
+        mine = next(s for s in servers if s["id"] == self.server.id)
+        self.assertEqual([c["name"] for c in mine["categories"]], ["Первый", "Второй"])
 
 
 class SoundboardTests(APITestCase):

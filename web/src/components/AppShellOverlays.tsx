@@ -17,6 +17,8 @@ import ThreadContextMenu from './ThreadContextMenu'
 import ThreadListModal from './ThreadListModal'
 import ThreadMembersModal from './ThreadMembersModal'
 import RenameThreadModal from './RenameThreadModal'
+import CategoryContextMenu from './CategoryContextMenu'
+import RenameCategoryModal from './RenameCategoryModal'
 import NewConversationModal from './NewConversationModal'
 import IncomingCallBanner from './IncomingCallBanner'
 import DiscoverModal from './DiscoverModal'
@@ -615,6 +617,37 @@ export default function AppShellOverlays({
           />
         )
       })()}
+      {server.categoryContextMenu && (
+        <CategoryContextMenu
+          x={server.categoryContextMenu.x}
+          y={server.categoryContextMenu.y}
+          name={server.categoryContextMenu.name}
+          onClose={() => server.setCategoryContextMenu(null)}
+          onRename={() =>
+            server.setRenameCategoryTarget({
+              id: server.categoryContextMenu!.id,
+              name: server.categoryContextMenu!.name,
+            })
+          }
+          onCreateCategory={() => server.setRenameCategoryTarget({ id: 0, name: '' })}
+          onDelete={() => void server.handleDeleteCategory(server.categoryContextMenu!.id)}
+        />
+      )}
+      {/* id === 0 — «создать раздел»: та же форма с одним полем, что и
+          переименование, и заводить под неё второй почти одинаковый компонент
+          незачем (см. RenameCategoryModal). */}
+      {server.renameCategoryTarget && (
+        <RenameCategoryModal
+          currentName={server.renameCategoryTarget.name}
+          creating={server.renameCategoryTarget.id === 0}
+          onSubmit={(name) =>
+            server.renameCategoryTarget!.id === 0
+              ? server.handleCreateCategory(name)
+              : server.handleRenameCategory(server.renameCategoryTarget!.id, name)
+          }
+          onClose={() => server.setRenameCategoryTarget(null)}
+        />
+      )}
       {server.threadListChannelId != null && (() => {
         const channel = server.channels.find((c) => c.id === server.threadListChannelId)
         if (!channel) return null

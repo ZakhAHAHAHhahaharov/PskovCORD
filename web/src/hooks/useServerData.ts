@@ -507,8 +507,17 @@ export function useServerData(userRef: RefObject<Me | null>) {
   const [createChannelKind, setCreateChannelKind] = useState<'text' | 'voice' | null>(
     null,
   )
+  // В каком разделе нажали «+». Отдельным состоянием рядом с видом канала, а
+  // не полем в нём: null здесь означает «вне разделов» — законное значение, а
+  // не «модалки нет» (за это отвечает createChannelKind).
+  const [createChannelCategoryId, setCreateChannelCategoryId] = useState<number | null>(
+    null,
+  )
 
-  const handleCreateChannel = (kind: 'text' | 'voice') => setCreateChannelKind(kind)
+  const handleCreateChannel = (kind: 'text' | 'voice', categoryId: number | null) => {
+    setCreateChannelCategoryId(categoryId)
+    setCreateChannelKind(kind)
+  }
 
   /** Ошибку наружу не глушим: модалка показывает её у себя и не закрывается,
    * чтобы набранное имя не пропало (см. CreateChannelModal). */
@@ -520,6 +529,7 @@ export function useServerData(userRef: RefObject<Me | null>) {
     const ch = await api.createChannel(serverId, data.name, kind, {
       slowmodeSeconds: data.slowmodeSeconds,
       isPrivate: data.isPrivate,
+      categoryId: createChannelCategoryId,
     })
     setServers((prev) =>
       prev.map((s) =>
@@ -527,6 +537,114 @@ export function useServerData(userRef: RefObject<Me | null>) {
       ),
     )
   }
+
+  /** Контекстное меню раздела и модалка переименования. Как и у остальных
+   * меню сайдбара, координаты храним здесь: сам сайдбар их только сообщает. */
+  const [categoryContextMenu, setCategoryContextMenu] = useState<{
+    id: number
+    name: string
+    x: number
+    y: number
+  } | null>(null)
+  const [renameCategoryTarget, setRenameCategoryTarget] = useState<{
+    id: number
+    name: string
+  } | null>(null)
+
+  // Обычная функция, а не useCallback: соседние обработчики этого хука
+  // объявлены так же, а React Compiler на useCallback вокруг setState с
+  // объектным параметром отказывается сохранять мемоизацию (Compilation
+  // Skipped) — и падает линтер, у которого это ошибка, а не предупреждение.
+  const openCategoryContextMenu = (
+    id: number,
+    name: string,
+    e: { clientX: number; clientY: number },
+  ) => {
+    setCategoryContextMenu({ id, name, x: e.clientX, y: e.clientY })
+  }
+
+  /** Перенести канал в раздел (перетаскиванием в сайдбаре). Состояние
+   * обновляем сразу, не дожидаясь эха: канал уезжает под курсором, и
+   * задержка в полсекунды выглядит как «не сработало». Ошибку откатываем. */
+  const handleMoveChannelToCategory = useCallback(
+    (channelId: number, categoryId: number | null) => {
+      const apply = (value: number | null) =>
+        setServers((prev) =>
+          prev.map((s) => ({
+            ...s,
+            channels: s.channels.map((c) =>
+              c.id === channelId ? { ...c, category: value } : c,
+            ),
+          })),
+        )
+      const previous =
+        serversRef.current
+          .flatMap((s) => s.channels)
+          .find((c) => c.id === channelId)?.category ?? null
+      if (previous === categoryId) return
+      apply(categoryId)
+      void api.moveChannelToCategory(channelId, categoryId).catch(() => apply(previous))
+    },
+    [],
+  )
+
+  /** Создать раздел. Список серверов перечитывать не нужно — своё состояние
+   * правим сразу, остальным прилетит server_categories (см. useGatewayEvents). */
+  const handleCreateCategory = useCallback(
+    async (name: string) => {
+      if (serverId == null) return
+      const category = await api.createCategory(serverId, name)
+      setServers((prev) =>
+        prev.map((s) =>
+          s.id === serverId ? { ...s, categories: [...s.categories, category] } : s,
+        ),
+      )
+    },
+    [serverId],
+  )
+
+  const handleRenameCategory = useCallback(
+    async (categoryId: number, name: string) => {
+      if (serverId == null) return
+      const updated = await api.updateCategory(serverId, categoryId, { name })
+      setServers((prev) =>
+        prev.map((s) =>
+          s.id === serverId
+            ? {
+                ...s,
+                categories: s.categories.map((c) =>
+                  c.id === categoryId ? updated : c,
+                ),
+              }
+            : s,
+        ),
+      )
+    },
+    [serverId],
+  )
+
+  /** Удалить раздел. Каналы внутри не удаляются — становятся «вне разделов»
+   * (см. backend, SET_NULL), поэтому чиним у себя и их тоже. */
+  const handleDeleteCategory = useCallback(
+    async (categoryId: number) => {
+      if (serverId == null) return
+      await api.deleteCategory(serverId, categoryId)
+      setServers((prev) =>
+        prev.map((s) =>
+          s.id === serverId
+            ? {
+                ...s,
+                categories: s.categories.filter((c) => c.id !== categoryId),
+                channels: s.channels.map((c) =>
+                  c.category === categoryId ? { ...c, category: null } : c,
+                ),
+              }
+            : s,
+        ),
+      )
+    },
+    [serverId],
+  )
 
   /** Где сейчас заводим ветку — канал и, если ветка растёт из сообщения, оно
    * само (нужно и для message_id, и чтобы предложить название по его тексту).
@@ -909,6 +1027,10 @@ export function useServerData(userRef: RefObject<Me | null>) {
     handleMuteServer, handleUnmuteServer, handleSetNotificationLevel,
     handleToggleIgnoreAtHere, handleToggleSuppressRoleMentions, handleLeaveServer,
     handleCreateChannel, handleTogglePinChannel, handleCopyChannelLink, handleSetChannelStatus,
+    handleMoveChannelToCategory, handleCreateCategory, handleRenameCategory,
+    handleDeleteCategory, openCategoryContextMenu,
+    categoryContextMenu, setCategoryContextMenu,
+    renameCategoryTarget, setRenameCategoryTarget,
     handleSetChannelSlowmode, handleSetChannelPrivacy, handleRenameChannel,
     handleSetChannelVisibility, handleCloneChannel, handleDeleteChannel,
     handleSetChannelMute, handleSetChannelNotificationLevel, handleSetChannelInvitesPaused,

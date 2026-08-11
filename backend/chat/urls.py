@@ -47,6 +47,11 @@ urlpatterns = [
          name="server-emoji"),
     path("servers/<int:server_id>/emoji/<int:emoji_id>",
          views.ServerEmojiDetail.as_view(), name="server-emoji-detail"),
+    # Разделы сайдбара (категории каналов).
+    path("servers/<int:server_id>/categories", views.ServerCategoryList.as_view(),
+         name="server-categories"),
+    path("servers/<int:server_id>/categories/<int:category_id>",
+         views.ServerCategoryDetail.as_view(), name="server-category-detail"),
     # Соундборд — короткие звуки, играющие у всех в голосовом канале.
     path("servers/<int:server_id>/sounds", views.ServerSoundList.as_view(),
          name="server-sounds"),

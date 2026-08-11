@@ -7,7 +7,7 @@ from accounts.serializers import (
 
 from . import presence, roles
 from .models import (
-    Attachment, Channel, Conversation, ConversationMessage,
+    Attachment, Channel, ChannelCategory, Conversation, ConversationMessage,
     ConversationParticipant, Membership,
     Message, Role, Server, ServerAuditLog, ServerBan, ServerEmoji, ServerInvite,
     ServerJoinRequest, SoundboardSound, Sticker, StickerPack, dm_room,
@@ -30,6 +30,18 @@ MAX_TAG_LEN = 32
 MAX_RULES = 20
 
 
+class ChannelCategorySerializer(serializers.ModelSerializer):
+    """Раздел сайдбара. Каналы сюда НЕ вкладываются: они и так приезжают
+    плоским списком в ServerSerializer.channels со своим category, а вложить
+    их ещё и сюда значило бы гонять один и тот же объект дважды и потом
+    следить, чтобы две копии не разошлись."""
+
+    class Meta:
+        model = ChannelCategory
+        fields = ["id", "server", "name", "position"]
+        read_only_fields = ["id", "server"]
+
+
 class ChannelSerializer(serializers.ModelSerializer):
     # Длительность текущего разговора и статус — только для голосовых
     # каналов, живут в presence (Redis), пока в канале кто-то есть.
@@ -49,7 +61,7 @@ class ChannelSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Channel
-        fields = ["id", "server", "name", "kind", "position",
+        fields = ["id", "server", "name", "kind", "position", "category",
                   "call_started_at", "topic", "status", "slowmode_seconds",
                   "is_spoiler", "age_restricted", "is_private", "allowed_role_ids",
                   "allowed_user_ids", "invites_paused", "my_settings",
@@ -243,6 +255,12 @@ class ServerSerializer(serializers.ModelSerializer):
     # не отдаём вовсе — получатель там неизвестен, и «показать на всякий
     # случай» означало бы утечку.
     channels = serializers.SerializerMethodField()
+    # Разделы сайдбара. Отдаются ВСЕ, без фильтрации по видимости: категория
+    # сама по себе ничего не скрывает и ничего не выдаёт, кроме своего
+    # названия, а фронту нужен полный список, чтобы отрисовать порядок групп.
+    # Пустой раздел (все каналы внутри приватные и не видны) фронт просто не
+    # показывает — см. web ChannelSidebar.
+    categories = ChannelCategorySerializer(many=True, read_only=True)
     # Права ЗАПРАШИВАЮЩЕГО на этом сервере — фронт по ним решает, показывать
     # ли шестерёнку редактора, кнопку «+ канал» и т.п. Без request в
     # контексте (например, при рассылке через WS) прав нет — фронт в таких
@@ -256,7 +274,7 @@ class ServerSerializer(serializers.ModelSerializer):
     class Meta:
         model = Server
         fields = [
-            "id", "name", "owner", "created_at", "channels", "icon",
+            "id", "name", "owner", "created_at", "channels", "categories", "icon",
             "banner_gradient", "banner_image", "description", "tags",
             "is_private", "access_mode", "age_restricted", "rules",
             "my_permissions", "my_settings", "member_count",

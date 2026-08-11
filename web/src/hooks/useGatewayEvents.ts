@@ -258,6 +258,30 @@ export function useGatewayEvents(params: UseGatewayEventsParams) {
     const offServerSounds = gateway.on('server_sounds', (d) => {
       setServerSounds(d.server_id, d.sounds)
     })
+    // Разделы сайдбара — полным списком, а не дельтой: порядок это свойство
+    // всего списка сразу (см. backend _broadcast_categories).
+    const offCategories = gateway.on('server_categories', (d) => {
+      setServers((prev) =>
+        prev.map((s) => (s.id === d.server_id ? { ...s, categories: d.categories } : s)),
+      )
+    })
+    // Раздел удалили — каналы внутри не исчезли, а вышли из разделов.
+    // Без этого они остались бы нарисованы в группе, которой уже нет.
+    const offUncategorized = gateway.on('channels_uncategorized', (d) => {
+      const orphans = new Set<number>(d.channel_ids)
+      setServers((prev) =>
+        prev.map((s) =>
+          s.id === d.server_id
+            ? {
+                ...s,
+                channels: s.channels.map((c) =>
+                  orphans.has(c.id) ? { ...c, category: null } : c,
+                ),
+              }
+            : s,
+        ),
+      )
+    })
     // Голос в опросе меняет не сообщение, а только его опрос — поэтому
     // отдельный op, а не message_update с целым сообщением: тот перетёр бы
     // заодно реакции и правки, приехавшие с другой стороны.
@@ -896,6 +920,8 @@ export function useGatewayEvents(params: UseGatewayEventsParams) {
       offMsgUpdate()
       offSoundboard()
       offServerSounds()
+      offCategories()
+      offUncategorized()
       offPollUpdate()
       offTyping()
       offPresence()

@@ -502,6 +502,43 @@ class ServerInvite(models.Model):
         return f"{self.invited_user} -> {self.server}"
 
 
+MAX_CATEGORY_NAME_LEN = 100
+# Потолок на число категорий сервера. Не от жадности: сайдбар с сотней
+# свёрнутых разделов бесполезен ровно так же, как список из сотни каналов,
+# ради которого категории и заводят.
+MAX_CATEGORIES_PER_SERVER = 50
+
+
+class ChannelCategory(models.Model):
+    """Раздел сайдбара, в который сгруппированы каналы сервера.
+
+    Отдельная модель, а не Channel с kind='category', как в Discord. Там это
+    исторически — у них всё «канал», включая то, во что нельзя писать. Здесь
+    Channel тащит на себе сообщения, курсоры прочтения, ветки, приватность,
+    медленный режим и личные настройки уведомлений; категории из этого не
+    нужно ничего, и вид канала, для которого половина полей обязана быть
+    пустой, пришлось бы обходить проверками в каждом втором запросе.
+
+    Прав у категории своих НЕТ. В Discord каналы наследуют права категории, и
+    это отдельная большая механика с переопределениями на каждом уровне —
+    сюда она не входит: приватность здесь остаётся у самого канала
+    (Channel.is_private/allowed_roles/allowed_users), а категория только
+    группирует и задаёт порядок.
+    """
+
+    server = models.ForeignKey(
+        Server, on_delete=models.CASCADE, related_name="categories")
+    name = models.CharField(max_length=MAX_CATEGORY_NAME_LEN)
+    position = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["position", "id"]
+
+    def __str__(self) -> str:
+        return f"{self.name} ({self.server_id})"
+
+
 class Channel(models.Model):
     TEXT = "text"
     VOICE = "voice"
@@ -526,6 +563,22 @@ class Channel(models.Model):
     name = models.CharField(max_length=100)
     kind = models.CharField(max_length=10, choices=KIND_CHOICES, default=TEXT)
     position = models.PositiveIntegerField(default=0)
+    # Раздел сайдбара, в котором показан канал. NULL — «вне разделов»: такие
+    # каналы идут отдельной группой сверху, как в Discord.
+    #
+    # SET_NULL, а не CASCADE, и это принципиально: удаление раздела не должно
+    # уносить с собой переписку. Каналы просто становятся «вне разделов» —
+    # ровно то, чего человек ожидает, удаляя ПАПКУ в интерфейсе.
+    #
+    # У веток всегда пусто: ветка живёт под своим родительским каналом, а не
+    # в разделе (см. parent ниже и проверку в chat.views.ChannelDetail).
+    category = models.ForeignKey(
+        ChannelCategory,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="channels",
+    )
     # Персистентный статус канала (правый клик → "Установить статус канала",
     # см. chat.views.ChannelDetail) — НЕ то же самое, что эфемерная тема
     # звонка (presence.call_topic/voice_topic_update): та живёт только пока

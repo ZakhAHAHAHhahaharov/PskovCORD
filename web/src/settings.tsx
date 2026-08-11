@@ -38,6 +38,32 @@ export interface Settings {
   desktopNotifications: boolean
   /** Проигрывать короткий звук вместе с уведомлением. */
   notificationSound: boolean
+  /** Качество демонстрации экрана — выбирается в модалке при её запуске
+   * (см. ScreenQualityModal) и запоминается для следующего раза. */
+  screenHeight: ScreenHeight
+  screenFps: ScreenFps
+}
+
+/** Высота картинки демонстрации. 0 — «как в источнике»: разрешение не
+ * ограничиваем вовсе и отдаём то, что дал браузер. */
+export type ScreenHeight = 0 | 720 | 1080 | 1440
+export type ScreenFps = 15 | 30 | 60
+
+/** Потолок битрейта под каждое сочетание высоты и частоты, бит/с.
+ *
+ * Нужен отдельно от разрешения: одни только constraints у getDisplayMedia
+ * ограничивают КАРТИНКУ, а не поток — кодек всё равно раздуется на резком
+ * движении, и 1080p60 без потолка легко уносит 15 Мбит/с в канал, где столько
+ * нет. Значения — вдвое ниже «идеальных» из рекомендаций WebRTC: демонстрация
+ * это чаще всего текст и интерфейс, а не видео.
+ */
+export function screenMaxBitrate(height: ScreenHeight, fps: ScreenFps): number {
+  const base = height === 0 || height >= 1440 ? 6_000_000
+    : height >= 1080 ? 3_000_000
+    : 1_500_000
+  // 60 кадров — примерно вдвое больше данных, 15 — примерно вдвое меньше.
+  const factor = fps >= 60 ? 1.7 : fps <= 15 ? 0.6 : 1
+  return Math.round(base * factor)
 }
 
 /** См. baseFontSize выше: во сколько раз масштабируются font-size в
@@ -64,6 +90,11 @@ export const DEFAULT_SETTINGS: Settings = {
   // в настройках.
   desktopNotifications: true,
   notificationSound: true,
+  // 1080p/30 — то, что раньше получалось само: getDisplayMedia без
+  // constraints обычно отдаёт разрешение экрана, а 30 кадров хватает всему,
+  // кроме игр. Кто хочет иначе — меняет в модалке при запуске показа.
+  screenHeight: 1080,
+  screenFps: 30,
 }
 
 const STORAGE_KEY = 'pskovcord:settings'
@@ -118,6 +149,7 @@ interface SettingsCtx extends Settings {
   setBaseFontSize: (v: number) => void
   setDesktopNotifications: (v: boolean) => void
   setNotificationSound: (v: boolean) => void
+  setScreenQuality: (height: ScreenHeight, fps: ScreenFps) => void
 }
 
 const Ctx = createContext<SettingsCtx>({
@@ -132,6 +164,7 @@ const Ctx = createContext<SettingsCtx>({
   setBaseFontSize: () => {},
   setDesktopNotifications: () => {},
   setNotificationSound: () => {},
+  setScreenQuality: () => {},
 })
 
 export const useSettings = () => useContext(Ctx)
@@ -170,6 +203,8 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     setBaseFontSize: (v) => setSettings((s) => ({ ...s, baseFontSize: v })),
     setDesktopNotifications: (v) => setSettings((s) => ({ ...s, desktopNotifications: v })),
     setNotificationSound: (v) => setSettings((s) => ({ ...s, notificationSound: v })),
+    setScreenQuality: (height, fps) =>
+      setSettings((s) => ({ ...s, screenHeight: height, screenFps: fps })),
   }
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>
