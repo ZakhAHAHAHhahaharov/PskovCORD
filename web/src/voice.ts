@@ -3,7 +3,7 @@ import type { VoiceState } from './components/AppShell'
 import { api } from './api'
 import { SfuClient } from './sfu'
 import { playDisconnectSound, playReconnectedSound } from './sounds'
-import { useSettings } from './settings'
+import { ScreenFps, ScreenHeight, screenMaxBitrate, useSettings } from './settings'
 
 interface VoiceGateway {
   voiceMuteUpdate: (muted: boolean, deafened: boolean) => void
@@ -46,7 +46,9 @@ export interface VoiceMesh {
   ownScreenStream: MediaStream | null
   /** Демонстрирую ли я сейчас свой экран. */
   isSharingScreen: boolean
-  toggleScreenShare: () => void
+  /** Запустить/остановить демонстрацию. quality — выбранное в
+   * ScreenQualityModal; при остановке не нужно и не передаётся. */
+  toggleScreenShare: (quality?: { height: ScreenHeight; fps: ScreenFps }) => void
   /** Камеры ДРУГИХ участников. В отличие от screenShares подписываться на них
    * не нужно — они приходят сами (см. sfu.ts, Source). */
   cameraStreams: Map<number, MediaStream>
@@ -754,9 +756,10 @@ export function useVoiceMesh(
   const startScreenWithFreshRights = async (
     sfu: SfuClient,
     tracks: MediaStreamTrack[],
+    maxBitrate: number,
   ) => {
     try {
-      await sfu.startScreen(tracks)
+      await sfu.startScreen(tracks, maxBitrate)
     } catch (err) {
       const denied = /not allowed by server role/.test((err as Error).message)
       const refresh = refreshCredentialsRef.current
@@ -765,19 +768,32 @@ export function useVoiceMesh(
       // чтобы повтор не создал второго продюсера на ту же дорожку.
       sfu.stopScreen()
       await sfu.updateToken(await refresh())
-      await sfu.startScreen(tracks)
+      await sfu.startScreen(tracks, maxBitrate)
     }
   }
 
-  const toggleScreenShare = () => {
+  const toggleScreenShare = (quality?: { height: ScreenHeight; fps: ScreenFps }) => {
     if (isSharingScreen) {
       stopSharing()
       return
     }
     if (!client.current) return
+    const height = quality?.height ?? 0
+    const fps = quality?.fps ?? 30
     // Системный звук берём вместе с картинкой, если браузер даёт (вкладка/экран).
+    //
+    // ideal, а не exact: exact заставил бы браузер отказать целиком, если
+    // выбранное окно физически меньше запрошенного — а показать окно 800×600
+    // в «1080p» это совершенно нормальное желание. height без width: у окон
+    // и вкладок соотношение сторон произвольное, и фиксировать обе стороны
+    // значит получить чёрные поля либо отказ.
     void navigator.mediaDevices
-      .getDisplayMedia({ video: true, audio: true })
+      .getDisplayMedia({
+        video: height > 0
+          ? { height: { ideal: height }, frameRate: { ideal: fps } }
+          : { frameRate: { ideal: fps } },
+        audio: true,
+      })
       .then(async (stream) => {
         // Пока открыт системный диалог выбора экрана, можно успеть выйти из
         // канала — тогда client.current уже null. Раньше здесь стоял
@@ -795,7 +811,8 @@ export function useVoiceMesh(
         const videoTrack = stream.getVideoTracks()[0]
         if (videoTrack) videoTrack.addEventListener('ended', stopSharing)
         try {
-          await startScreenWithFreshRights(sfu, stream.getTracks())
+          await startScreenWithFreshRights(
+            sfu, stream.getTracks(), screenMaxBitrate(height, fps))
         } catch (e) {
           // Не смогли отдать треки SFU (нет права «Показывать видео», обрыв) —
           // обязательно гасим сам захват, иначе он останется висеть.

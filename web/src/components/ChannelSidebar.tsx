@@ -6,7 +6,7 @@ import {
   ChevronDown, ChevronRight, CornerDownRight, Volume2, MicOff, HeadphoneOff, Monitor,
   Settings, Pin, Timer, Lock,
 } from 'lucide-react'
-import { Channel, Member, Server, User } from '../api'
+import { Channel, ChannelCategory, Member, Server, User } from '../api'
 import { styledNameProps } from '../nameStyle'
 import { VoiceRosterMember } from './VoiceStage'
 import Avatar from './Avatar'
@@ -29,6 +29,12 @@ const COLLAPSED_KEY = 'collapsedChannelCategories'
  * перетаскивание, а не, скажем, случайно принесённый файл или ссылка. */
 const VOICE_MOVE_MIME = 'application/x-pskovcord-voice-member'
 
+/** Тот же приём для перетаскивания САМОГО канала между разделами. Свой MIME,
+ * а не общий с VOICE_MOVE_MIME: у голосового канала drop-цель есть и на нём
+ * самом (перенос участника), и без разделения типов он ловил бы чужое
+ * перетаскивание. */
+const CHANNEL_MOVE_MIME = 'application/x-pskovcord-channel'
+
 interface VoiceMoveData {
   userId: number
   fromChannelId: number
@@ -36,10 +42,15 @@ interface VoiceMoveData {
 
 type ChannelKind = 'text' | 'voice'
 
-/** «Свёрнута ли категория» — личная настройка отображения конкретного
+/** Ключ группы в сайдбаре: `cat:<id>` — раздел, заведённый на сервере,
+ * `none:text`/`none:voice` — каналы вне разделов. Строкой, а не парой полей:
+ * он же уезжает в localStorage (см. useCollapsedCategories). */
+type GroupKey = string
+
+/** «Свёрнута ли группа» — личная настройка отображения конкретного
  * сервера, как «Скрыть имена» (см. hiddenNames.ts): только localStorage,
- * никакой синхронизации с сервером. Ключ — `<serverId>:<kind>`, чтобы
- * свёрнутые голосовые на одном сервере не сворачивали их на всех. */
+ * никакой синхронизации с сервером. Ключ — `<serverId>:<группа>`, чтобы
+ * свёрнутое на одном сервере не сворачивалось на всех. */
 function loadCollapsed(): string[] {
   try {
     const parsed = JSON.parse(localStorage.getItem(COLLAPSED_KEY) || '[]')
@@ -53,15 +64,15 @@ function useCollapsedCategories(serverId: number | undefined) {
   const [keys, setKeys] = useState<string[]>(loadCollapsed)
 
   const isCollapsed = useCallback(
-    (kind: ChannelKind) => serverId != null && keys.includes(`${serverId}:${kind}`),
+    (group: GroupKey) => serverId != null && keys.includes(`${serverId}:${group}`),
     [keys, serverId],
   )
 
   const toggle = useCallback(
-    (kind: ChannelKind) => {
+    (group: GroupKey) => {
       if (serverId == null) return
       setKeys((prev) => {
-        const key = `${serverId}:${kind}`
+        const key = `${serverId}:${group}`
         const next = prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]
         try {
           localStorage.setItem(COLLAPSED_KEY, JSON.stringify(next))
@@ -313,6 +324,9 @@ export default function ChannelSidebar({
   onJoinVoice,
   onLeaveVoice,
   onCreateChannel,
+  categories,
+  onMoveChannelToCategory,
+  onCategoryContextMenu,
   onOpenSettings,
   onOpenProfile,
   onWatchScreen,
@@ -342,7 +356,19 @@ export default function ChannelSidebar({
   onSelectText: (c: Channel) => void
   onJoinVoice: (c: Channel) => void
   onLeaveVoice: () => void
-  onCreateChannel: (kind: 'text' | 'voice') => void
+  /** categoryId — в какой раздел создавать; null — вне разделов. */
+  onCreateChannel: (kind: 'text' | 'voice', categoryId: number | null) => void
+  /** Разделы сервера в их порядке (см. backend ChannelCategory). */
+  categories: ChannelCategory[]
+  /** Перенос канала в раздел перетаскиванием. null — вынести из разделов. */
+  onMoveChannelToCategory?: (channelId: number, categoryId: number | null) => void
+  /** Правый клик по названию раздела — переименовать/удалить. Не приходит
+   * для групп «вне разделов»: там переименовывать нечего. */
+  onCategoryContextMenu?: (
+    categoryId: number,
+    name: string,
+    e: ReactMouseEvent,
+  ) => void
   onOpenSettings: () => void
   onOpenProfile: () => void
   /** Клик по бейджу «демка» рядом с ником — открыть демонстрацию этого
@@ -376,6 +402,8 @@ export default function ChannelSidebar({
   // Голосовой канал, над которым сейчас держат перетаскиваемого участника —
   // подсветка цели drop'а (см. voice-channel-block ниже).
   const [dragOverChannelId, setDragOverChannelId] = useState<number | null>(null)
+  // Заголовок группы, над которым сейчас держат перетаскиваемый канал.
+  const [dragOverCategory, setDragOverCategory] = useState<GroupKey | null>(null)
   const { isCollapsed, toggle: toggleCategory } = useCollapsedCategories(server?.id)
   // Для себя — локальное состояние mesh'а (мгновенный отклик на клик);
   // для остальных — то, что пришло в members (видно всем, даже не
@@ -411,9 +439,6 @@ export default function ChannelSidebar({
     return ai - bi
   })
 
-  const textCollapsed = isCollapsed('text')
-  const voiceCollapsed = isCollapsed('voice')
-
   const voiceMembersOf = (channelId: number) =>
     members.filter((m) => m.voice_channel === String(channelId))
 
@@ -427,6 +452,235 @@ export default function ChannelSidebar({
   // Тем же правом закрыто и «Отключить от канала» в ParticipantContextMenu —
   // перетаскивание ЧУЖОЙ строки на другой канал того же порядка серьёзности.
   const canManageMembers = !!perms?.manage_members
+
+  /** Группы сайдбара сверху вниз: сначала каналы вне разделов, потом сами
+   * разделы в своём порядке — как в Discord.
+   *
+   * Вне разделов текст и голос по-прежнему разнесены на две группы: пока
+   * разделов не завели вовсе, сайдбар обязан выглядеть ровно как раньше, а
+   * не свалить всё в одну кучу. Внутри РАЗДЕЛА они идут подряд — там
+   * разделять уже нечего, на то раздел и заводили. */
+  const groups: {
+    key: GroupKey
+    title: string
+    channels: Channel[]
+    /** Какой вид канала создаёт кнопка «+» этой группы. У раздела — текстовый
+     * (самый частый), у групп «вне разделов» — их собственный вид. */
+    createKind: ChannelKind
+    categoryId: number | null
+  }[] = []
+
+  const uncategorizedText = textChannels.filter((c) => c.category == null)
+  const uncategorizedVoice = voiceChannels.filter((c) => c.category == null)
+  if (uncategorizedText.length > 0 || categories.length === 0) {
+    groups.push({
+      key: 'none:text', title: 'Текстовые каналы',
+      channels: uncategorizedText, createKind: 'text', categoryId: null,
+    })
+  }
+  if (uncategorizedVoice.length > 0 || categories.length === 0) {
+    groups.push({
+      key: 'none:voice', title: 'Голосовые каналы',
+      channels: uncategorizedVoice, createKind: 'voice', categoryId: null,
+    })
+  }
+  for (const category of categories) {
+    groups.push({
+      key: `cat:${category.id}`,
+      title: category.name,
+      // Текст выше голоса — тот же порядок, что и вне разделов, чтобы взгляд
+      // не переучивался при переходе от группы к группе.
+      channels: [
+        ...textChannels.filter((c) => c.category === category.id),
+        ...voiceChannels.filter((c) => c.category === category.id),
+      ],
+      createKind: 'text',
+      categoryId: category.id,
+    })
+  }
+
+  /** Строка текстового канала вместе с его ветками. */
+  const renderTextChannel = (c: Channel) => (
+    <Fragment key={c.id}>
+      <button
+        className={`channel-item ${activeChannelId === c.id ? 'active' : ''}`}
+        onClick={() => onSelectText(c)}
+        draggable={canManageChannels}
+        onDragStart={(e) => {
+          if (!canManageChannels) return
+          e.dataTransfer.setData(CHANNEL_MOVE_MIME, String(c.id))
+          e.dataTransfer.effectAllowed = 'move'
+        }}
+        onContextMenu={
+          onChannelContextMenu
+            ? (e) => {
+                e.preventDefault()
+                onChannelContextMenu(c, e)
+              }
+            : undefined
+        }
+      >
+        <span className="channel-icon">#</span>
+        <span className="channel-name">{c.name}</span>
+        {/* Медленный режим и приватность видны прямо в списке — иначе
+            о них узнаёшь только упёршись в отказ при отправке. */}
+        {c.is_private && <Lock size={12} className="channel-badge-icon" />}
+        {c.slowmode_seconds > 0 && (
+          <Timer size={12} className="channel-badge-icon" />
+        )}
+      </button>
+      <ChannelThreadRows
+        threads={threadsOf(c.id)}
+        openThreadId={openThreadId}
+        onSelect={onOpenThread}
+      />
+    </Fragment>
+  )
+
+  /** Блок голосового канала: строка, участники, ветки и цель перетаскивания.
+   * collapsed — свёрнутый вид (только аватарки внахлёст, без списка). */
+  const renderVoiceChannel = (c: Channel, collapsed: boolean) => {
+    const inChannel = voiceMembersOf(c.id)
+    const isMyVoiceChannel = voice?.room.kind === 'channel' && voice.room.id === c.id
+    const isPinned = pinnedIds.includes(c.id)
+    const masked = isHidden(c.id)
+    // Перетаскивание участника на этот канал — общее для свёрнутого
+    // и развёрнутого вида (drop-цель в обоих, тащить-источник —
+    // только строки в развёрнутом, их в свёрнутом просто нет).
+    const dropHandlers = onMoveVoiceUser
+      ? {
+          onDragOver: (e: ReactDragEvent) => {
+            if (!e.dataTransfer.types.includes(VOICE_MOVE_MIME)) return
+            e.preventDefault()
+            e.dataTransfer.dropEffect = 'move'
+          },
+          onDragEnter: (e: ReactDragEvent) => {
+            if (!e.dataTransfer.types.includes(VOICE_MOVE_MIME)) return
+            setDragOverChannelId(c.id)
+          },
+          onDragLeave: (e: ReactDragEvent) => {
+            // Уход на дочерний элемент (аватарку, иконку) — не уход
+            // с блока целиком, relatedTarget тогда всё ещё внутри.
+            if (e.currentTarget.contains(e.relatedTarget as Node)) return
+            setDragOverChannelId((prev) => (prev === c.id ? null : prev))
+          },
+          onDrop: (e: ReactDragEvent) => {
+            e.preventDefault()
+            setDragOverChannelId(null)
+            const raw = e.dataTransfer.getData(VOICE_MOVE_MIME)
+            if (!raw) return
+            try {
+              const data = JSON.parse(raw) as VoiceMoveData
+              if (data.fromChannelId === c.id) return // уже здесь
+              onMoveVoiceUser(data.userId, c)
+            } catch {
+              // Мусор в dataTransfer (не наше перетаскивание) — игнор.
+            }
+          },
+        }
+      : {}
+    if (collapsed) {
+      return (
+        <div
+          key={c.id}
+          className={`voice-channel-block ${dragOverChannelId === c.id ? 'drop-target' : ''}`}
+          {...dropHandlers}
+        >
+          <button
+            className="channel-item active"
+            onClick={() => onJoinVoice(c)}
+            onContextMenu={
+              onChannelContextMenu
+                ? (e) => {
+                    e.preventDefault()
+                    onChannelContextMenu(c, e)
+                  }
+                : undefined
+            }
+          >
+            <span className="channel-icon in-voice">
+              <Volume2 size={15} />
+            </span>
+            <VoiceStackedAvatars members={inChannel} speakingUserIds={speakingUserIds} />
+          </button>
+        </div>
+      )
+    }
+    return (
+      <div
+        key={c.id}
+        className={`voice-channel-block ${dragOverChannelId === c.id ? 'drop-target' : ''}`}
+        {...dropHandlers}
+      >
+        <button
+          className={`channel-item ${voice?.room.id === c.id ? 'active' : ''}`}
+          onClick={() => onJoinVoice(c)}
+          draggable={canManageChannels}
+          onDragStart={(e) => {
+            if (!canManageChannels) return
+            e.dataTransfer.setData(CHANNEL_MOVE_MIME, String(c.id))
+            e.dataTransfer.effectAllowed = 'move'
+          }}
+          onContextMenu={
+            onChannelContextMenu
+              ? (e) => {
+                  e.preventDefault()
+                  onChannelContextMenu(c, e)
+                }
+              : undefined
+          }
+        >
+          <span className={`channel-icon${isMyVoiceChannel ? ' in-voice' : ''}`}>
+            <Volume2 size={15} />
+          </span>
+          <span className="channel-name">{c.name}</span>
+          {isPinned && <Pin size={12} className="channel-pin-badge" />}
+        </button>
+        {c.status && <div className="voice-channel-status">{c.status}</div>}
+        {inChannel.length > 0 && (
+          <div className="voice-call-info">
+            {c.call_started_at != null && (
+              <CallDuration startedAt={c.call_started_at} />
+            )}
+            <CallTopic topic={c.topic} canEdit={voice?.room.id === c.id} />
+          </div>
+        )}
+        {inChannel.map((m) => {
+          const speaking = speakingUserIds.has(m.id)
+          const mic = micStateOf(m)
+          const canOpenMenu = m.id !== user.id && !!onParticipantContextMenu
+          // Своя строка тащится всегда (это просто переключение
+          // канала, права не нужны — см. handleMoveVoiceUser);
+          // чужая — только если можно ею управлять.
+          const canDrag = !!onMoveVoiceUser && (m.id === user.id || canManageMembers)
+          return (
+            <VoiceUserRow
+              key={m.id}
+              member={m}
+              channelId={c.id}
+              speaking={speaking}
+              muted={mic.muted}
+              deafened={mic.deafened}
+              canOpenMenu={canOpenMenu}
+              canDrag={canDrag}
+              masked={masked}
+              onOpenParticipantProfile={onOpenParticipantProfile}
+              onParticipantContextMenu={onParticipantContextMenu}
+              onWatchScreen={onWatchScreen}
+            />
+          )
+        })}
+        {/* У голосового канала есть свой текстовый чат (см.
+            AppShellChat), а значит бывают и ветки из его сообщений —
+            показываются так же, как у текстового канала. */}
+        <ChannelThreadRows
+          threads={threadsOf(c.id)}
+          openThreadId={openThreadId}
+          onSelect={onOpenThread}
+        />
+      </div>
+    )
+  }
 
   return (
     <aside className="channel-sidebar">
@@ -447,235 +701,96 @@ export default function ChannelSidebar({
       <div className="channel-scroll" style={{ paddingBottom: voice ? 116 : 60 }}>
         {server && (
           <>
-            <div className="channel-category">
-              {/* Клик по названию категории сворачивает/разворачивает её —
-                  создание канала осталось за кнопкой «+» справа (раньше на
-                  названии висело именно оно). */}
-              <button
-                className="cat-label"
-                type="button"
-                title={textCollapsed ? 'Развернуть' : 'Свернуть'}
-                onClick={() => toggleCategory('text')}
-              >
-                {textCollapsed ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
-                Текстовые каналы
-              </button>
-              {canManageChannels && (
-                <button
-                  className="cat-add"
-                  title="Создать текстовый канал"
-                  onClick={() => onCreateChannel('text')}
-                >
-                  +
-                </button>
-              )}
-            </div>
-            {/* Свёрнутая категория всё равно показывает открытый прямо сейчас
-                канал — иначе, свернув её, теряешь из виду, где находишься. */}
-            {textChannels
-              .filter((c) => {
-                if (!textCollapsed) return true
-                // Свёрнутая категория оставляет на виду не только открытый
-                // канал, но и канал открытой ВЕТКИ: иначе строка ветки, в
-                // которой сейчас пишут, висела бы в свёрнутом списке без
-                // своего родителя.
-                if (c.id === activeChannelId) return true
-                return threadsOf(c.id).some((t) => t.id === openThreadId)
-              })
-              .map((c) => (
-              <Fragment key={c.id}>
-                <button
-                  className={`channel-item ${activeChannelId === c.id ? 'active' : ''}`}
-                  onClick={() => onSelectText(c)}
-                  onContextMenu={
-                    onChannelContextMenu
-                      ? (e) => {
-                          e.preventDefault()
-                          onChannelContextMenu(c, e)
-                        }
-                      : undefined
-                  }
-                >
-                  <span className="channel-icon">#</span>
-                  <span className="channel-name">{c.name}</span>
-                  {/* Медленный режим и приватность видны прямо в списке — иначе
-                      о них узнаёшь только упёршись в отказ при отправке. */}
-                  {c.is_private && <Lock size={12} className="channel-badge-icon" />}
-                  {c.slowmode_seconds > 0 && (
-                    <Timer size={12} className="channel-badge-icon" />
-                  )}
-                </button>
-                <ChannelThreadRows
-                  threads={threadsOf(c.id)}
-                  openThreadId={openThreadId}
-                  onSelect={onOpenThread}
-                />
-              </Fragment>
-            ))}
-
-            <div className="channel-category">
-              <button
-                className="cat-label"
-                type="button"
-                title={voiceCollapsed ? 'Развернуть' : 'Свернуть'}
-                onClick={() => toggleCategory('voice')}
-              >
-                {voiceCollapsed ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
-                Голосовые каналы
-              </button>
-              {canManageChannels && (
-                <button
-                  className="cat-add"
-                  title="Создать голосовой канал"
-                  onClick={() => onCreateChannel('voice')}
-                >
-                  +
-                </button>
-              )}
-            </div>
-            {/* Свёрнутая категория оставляет на виду только тот канал, в
-                котором мы сейчас сидим (по той же причине, что и активный
-                текстовый выше) — но без списка участников: вместо него
-                строка аватарок внахлёст, см. VoiceStackedAvatars. */}
-            {voiceChannels
-              .filter((c) => !voiceCollapsed || (voice?.room.kind === 'channel' && voice.room.id === c.id))
-              .map((c) => {
-              const inChannel = voiceMembersOf(c.id)
-              const isMyVoiceChannel = voice?.room.kind === 'channel' && voice.room.id === c.id
-              const isPinned = pinnedIds.includes(c.id)
-              const masked = isHidden(c.id)
-              // Перетаскивание участника на этот канал — общее для свёрнутого
-              // и развёрнутого вида (drop-цель в обоих, тащить-источник —
-              // только строки в развёрнутом, их в свёрнутом просто нет).
-              const dropHandlers = onMoveVoiceUser
-                ? {
-                    onDragOver: (e: ReactDragEvent) => {
-                      if (!e.dataTransfer.types.includes(VOICE_MOVE_MIME)) return
+            {groups.map((group) => {
+              const collapsed = isCollapsed(group.key)
+              // Пустой раздел виден только тем, кто может завести в нём
+              // канал: остальным это просто заголовок, за которым ничего
+              // нет (все каналы внутри могут быть приватными и невидимыми).
+              if (group.channels.length === 0 && !canManageChannels) return null
+              return (
+                <Fragment key={group.key}>
+                  <div
+                    className={`channel-category ${
+                      dragOverCategory === group.key ? 'drop-target' : ''
+                    }`}
+                    // Перетаскивание САМОГО КАНАЛА на заголовок — перенос его
+                    // в этот раздел. Цель именно заголовок, а не вся группа:
+                    // внутри группы уже есть свои drop-цели у голосовых
+                    // каналов (перенос участника), и две вложенных цели с
+                    // разным смыслом ловили бы чужие события.
+                    onDragOver={(e) => {
+                      if (!e.dataTransfer.types.includes(CHANNEL_MOVE_MIME)) return
                       e.preventDefault()
                       e.dataTransfer.dropEffect = 'move'
-                    },
-                    onDragEnter: (e: ReactDragEvent) => {
-                      if (!e.dataTransfer.types.includes(VOICE_MOVE_MIME)) return
-                      setDragOverChannelId(c.id)
-                    },
-                    onDragLeave: (e: ReactDragEvent) => {
-                      // Уход на дочерний элемент (аватарку, иконку) — не уход
-                      // с блока целиком, relatedTarget тогда всё ещё внутри.
+                    }}
+                    onDragEnter={(e) => {
+                      if (!e.dataTransfer.types.includes(CHANNEL_MOVE_MIME)) return
+                      setDragOverCategory(group.key)
+                    }}
+                    onDragLeave={(e) => {
                       if (e.currentTarget.contains(e.relatedTarget as Node)) return
-                      setDragOverChannelId((prev) => (prev === c.id ? null : prev))
-                    },
-                    onDrop: (e: ReactDragEvent) => {
+                      setDragOverCategory((prev) => (prev === group.key ? null : prev))
+                    }}
+                    onDrop={(e) => {
                       e.preventDefault()
-                      setDragOverChannelId(null)
-                      const raw = e.dataTransfer.getData(VOICE_MOVE_MIME)
-                      if (!raw) return
-                      try {
-                        const data = JSON.parse(raw) as VoiceMoveData
-                        if (data.fromChannelId === c.id) return // уже здесь
-                        onMoveVoiceUser(data.userId, c)
-                      } catch {
-                        // Мусор в dataTransfer (не наше перетаскивание) — игнор.
-                      }
-                    },
-                  }
-                : {}
-              if (voiceCollapsed) {
-                return (
-                  <div
-                    key={c.id}
-                    className={`voice-channel-block ${dragOverChannelId === c.id ? 'drop-target' : ''}`}
-                    {...dropHandlers}
+                      setDragOverCategory(null)
+                      const raw = e.dataTransfer.getData(CHANNEL_MOVE_MIME)
+                      if (!raw || !onMoveChannelToCategory) return
+                      const channelId = Number(raw)
+                      if (Number.isNaN(channelId)) return
+                      onMoveChannelToCategory(channelId, group.categoryId)
+                    }}
                   >
+                    {/* Клик по названию сворачивает/разворачивает группу —
+                        создание канала осталось за кнопкой «+» справа. */}
                     <button
-                      className="channel-item active"
-                      onClick={() => onJoinVoice(c)}
+                      className="cat-label"
+                      type="button"
+                      title={collapsed ? 'Развернуть' : 'Свернуть'}
+                      onClick={() => toggleCategory(group.key)}
                       onContextMenu={
-                        onChannelContextMenu
+                        group.categoryId != null && onCategoryContextMenu
                           ? (e) => {
                               e.preventDefault()
-                              onChannelContextMenu(c, e)
+                              onCategoryContextMenu(group.categoryId!, group.title, e)
                             }
                           : undefined
                       }
                     >
-                      <span className="channel-icon in-voice">
-                        <Volume2 size={15} />
-                      </span>
-                      <VoiceStackedAvatars members={inChannel} speakingUserIds={speakingUserIds} />
+                      {collapsed ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
+                      {group.title}
                     </button>
+                    {canManageChannels && (
+                      <button
+                        className="cat-add"
+                        title={
+                          group.createKind === 'voice'
+                            ? 'Создать голосовой канал'
+                            : 'Создать текстовый канал'
+                        }
+                        onClick={() => onCreateChannel(group.createKind, group.categoryId)}
+                      >
+                        +
+                      </button>
+                    )}
                   </div>
-                )
-              }
-              return (
-                <div
-                  key={c.id}
-                  className={`voice-channel-block ${dragOverChannelId === c.id ? 'drop-target' : ''}`}
-                  {...dropHandlers}
-                >
-                  <button
-                    className={`channel-item ${
-                      voice?.room.id === c.id ? 'active' : ''
-                    }`}
-                    onClick={() => onJoinVoice(c)}
-                    onContextMenu={
-                      onChannelContextMenu
-                        ? (e) => {
-                            e.preventDefault()
-                            onChannelContextMenu(c, e)
-                          }
-                        : undefined
-                    }
-                  >
-                    <span className={`channel-icon${isMyVoiceChannel ? ' in-voice' : ''}`}>
-                      <Volume2 size={15} />
-                    </span>
-                    <span className="channel-name">{c.name}</span>
-                    {isPinned && <Pin size={12} className="channel-pin-badge" />}
-                  </button>
-                  {c.status && <div className="voice-channel-status">{c.status}</div>}
-                  {inChannel.length > 0 && (
-                    <div className="voice-call-info">
-                      {c.call_started_at != null && (
-                        <CallDuration startedAt={c.call_started_at} />
-                      )}
-                      <CallTopic topic={c.topic} canEdit={voice?.room.id === c.id} />
-                    </div>
-                  )}
-                  {inChannel.map((m) => {
-                    const speaking = speakingUserIds.has(m.id)
-                    const mic = micStateOf(m)
-                    const canOpenMenu = m.id !== user.id && !!onParticipantContextMenu
-                    // Своя строка тащится всегда (это просто переключение
-                    // канала, права не нужны — см. handleMoveVoiceUser);
-                    // чужая — только если можно ею управлять.
-                    const canDrag =
-                      !!onMoveVoiceUser && (m.id === user.id || canManageMembers)
-                    return (
-                      <VoiceUserRow
-                        key={m.id}
-                        member={m}
-                        channelId={c.id}
-                        speaking={speaking}
-                        muted={mic.muted}
-                        deafened={mic.deafened}
-                        canOpenMenu={canOpenMenu}
-                        canDrag={canDrag}
-                        masked={masked}
-                        onOpenParticipantProfile={onOpenParticipantProfile}
-                        onParticipantContextMenu={onParticipantContextMenu}
-                        onWatchScreen={onWatchScreen}
-                      />
-                    )
-                  })}
-                  {/* У голосового канала есть свой текстовый чат (см.
-                      AppShellChat), а значит бывают и ветки из его сообщений —
-                      показываются так же, как у текстового канала. */}
-                  <ChannelThreadRows
-                    threads={threadsOf(c.id)}
-                    openThreadId={openThreadId}
-                    onSelect={onOpenThread}
-                  />
-                </div>
+                  {group.channels
+                    .filter((c) => {
+                      if (!collapsed) return true
+                      // Свёрнутая группа всё равно показывает то, где мы
+                      // сейчас находимся — иначе, свернув её, теряешь из
+                      // виду своё место: открытый канал, канал открытой
+                      // ветки и голосовой, в котором сидим.
+                      if (c.id === activeChannelId) return true
+                      if (voice?.room.kind === 'channel' && voice.room.id === c.id) return true
+                      return threadsOf(c.id).some((t) => t.id === openThreadId)
+                    })
+                    .map((c) =>
+                      c.kind === 'voice'
+                        ? renderVoiceChannel(c, collapsed)
+                        : renderTextChannel(c),
+                    )}
+                </Fragment>
               )
             })}
           </>

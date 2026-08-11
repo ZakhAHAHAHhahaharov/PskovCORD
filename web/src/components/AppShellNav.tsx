@@ -105,6 +105,9 @@ export default function AppShellNav({
           }}
           onLeaveVoice={voice.handleLeaveVoice}
           onCreateChannel={server.handleCreateChannel}
+          categories={server.currentServer?.categories ?? []}
+          onMoveChannelToCategory={server.handleMoveChannelToCategory}
+          onCategoryContextMenu={server.openCategoryContextMenu}
           onOpenSettings={openMobileSettings}
           onOpenProfile={onOpenProfile}
           onWatchScreen={voice.handleWatchBadge}
