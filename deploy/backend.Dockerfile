@@ -15,7 +15,7 @@ COPY web/ ./
 RUN npm run build
 
 # ---- этап 2: backend ----
-FROM python:3.12.13-slim
+FROM python:3.14.0-slim
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
