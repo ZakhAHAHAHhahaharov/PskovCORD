@@ -38,6 +38,8 @@ interface CallParticipant {
    * ростер строится из полного профиля (conversation.participants). */
   join_sound?: JoinSoundKey
   join_sound_url?: string
+  leave_sound?: JoinSoundKey
+  leave_sound_url?: string
 }
 
 interface IncomingCall {
@@ -377,6 +379,8 @@ export function useGatewayEvents(params: UseGatewayEventsParams) {
             // сюда что-то другое незачем.
             join_sound: 'default' as const,
             join_sound_url: '',
+            leave_sound: 'default' as const,
+            leave_sound_url: '',
           },
         ]
       })

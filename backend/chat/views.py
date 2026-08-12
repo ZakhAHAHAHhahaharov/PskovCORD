@@ -665,6 +665,8 @@ class ServerMembers(APIView):
                 # там, где следят за составом голосового канала.
                 "join_sound": u.join_sound,
                 "join_sound_url": u.join_sound_url(),
+                "leave_sound": u.leave_sound,
+                "leave_sound_url": u.leave_sound_url(),
             })
         # Онлайн сверху, затем по имени.
         data.sort(key=lambda x: (not x["online"], x["username"].lower()))

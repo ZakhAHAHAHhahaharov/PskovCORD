@@ -3,6 +3,9 @@
 // компиляции и в рантайм не попадает вовсе.
 import type { JoinSoundKey } from './joinSound'
 
+/** Какой из двух звуков голосового канала настраивается. */
+export type VoiceSoundKind = 'join' | 'leave'
+
 /** Статус, который выбирает сам пользователь. */
 export type UserStatus = 'online' | 'dnd' | 'invisible'
 /** Что видят другие: invisible всегда маскируется под offline. */
@@ -101,6 +104,10 @@ export interface Me extends User {
    * Отдельно от join_sound_url: переключение на готовый вариант файл не
    * удаляет, и без этого поля вернуться к своему звуку было бы нельзя. */
   custom_join_sound_url: string
+  /** То же для звука ВЫХОДА (см. выше). */
+  leave_sound: JoinSoundKey
+  leave_sound_url: string
+  custom_leave_sound_url: string
 }
 
 /** Тяжёлая часть чужого профиля — грузится, когда открыли карточку. */
@@ -735,6 +742,9 @@ export interface Member extends Omit<User, 'status' | 'dm_privacy'> {
   join_sound: JoinSoundKey
   /** Адрес своего файла; пусто, если выбран готовый вариант. */
   join_sound_url: string
+  /** То же для звука ВЫХОДА из канала. */
+  leave_sound: JoinSoundKey
+  leave_sound_url: string
 }
 
 /** Минимум, нужный автокомплиту @упоминаний (MessageInput) и рендеру
@@ -1319,10 +1329,14 @@ export function uploadEmoji(
 /** Загрузка СВОЕГО звука входа. Формат опознаётся сервером по содержимому,
  * имя файла на диске он собирает сам — присланное не используется (см.
  * backend join_sound_upload_to). */
-export function uploadJoinSound(file: File, opts: UploadOptions = {}): Promise<Me> {
+export function uploadVoiceSound(
+  kind: VoiceSoundKind,
+  file: File,
+  opts: UploadOptions = {},
+): Promise<Me> {
   const form = new FormData()
   form.append('file', file, file.name)
-  return postForm<Me>('/api/auth/me/join-sound', form, { ...opts, method: 'PUT' })
+  return postForm<Me>(`/api/auth/me/${kind}-sound`, form, { ...opts, method: 'PUT' })
 }
 
 /** Загрузка звука соундборда (нужно право create_expressions на сервере).
@@ -1547,16 +1561,17 @@ export const api = {
   deleteEmoji: (serverId: number, emojiId: number) =>
     req(`/api/servers/${serverId}/emoji/${emojiId}`, { method: 'DELETE' }),
 
-  // --- личный звук входа ----------------------------------------------------
-  /** Выбрать готовый вариант. 'custom' примут только если файл уже загружен. */
-  setJoinSound: (key: JoinSoundKey): Promise<Me> =>
-    req('/api/auth/me/join-sound', {
+  // --- личные звуки входа/выхода --------------------------------------------
+  /** Выбрать готовый вариант. 'custom' примут только если файл уже загружен.
+   * kind — 'join' или 'leave': ручка одна, вид задаётся путём. */
+  setVoiceSound: (kind: VoiceSoundKind, key: JoinSoundKey): Promise<Me> =>
+    req(`/api/auth/me/${kind}-sound`, {
       method: 'PUT',
-      body: JSON.stringify({ join_sound: key }),
+      body: JSON.stringify({ sound: key }),
     }),
   /** Убрать свой файл и вернуться на стандартный звук. */
-  clearJoinSound: (): Promise<Me> =>
-    req('/api/auth/me/join-sound', { method: 'DELETE' }),
+  clearVoiceSound: (kind: VoiceSoundKind): Promise<Me> =>
+    req(`/api/auth/me/${kind}-sound`, { method: 'DELETE' }),
 
   // --- соундборд ------------------------------------------------------------
   serverSounds: (serverId: number): Promise<SoundboardSound[]> =>

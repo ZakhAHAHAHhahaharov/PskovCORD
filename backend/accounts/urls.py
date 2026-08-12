@@ -4,7 +4,7 @@ from .views import (
     ChangePasswordView,
     LoginView,
     LogoutView,
-    JoinSoundView,
+    VoiceSoundView,
     MeView,
     NameFontListView,
     QRConfirmView,
@@ -26,9 +26,11 @@ urlpatterns = [
     path("switch", SwitchAccountView.as_view(), name="switch-account"),
     path("logout", LogoutView.as_view(), name="logout"),
     path("me", MeView.as_view(), name="me"),
-    # Личный звук входа в голосовой канал: PUT — выбрать готовый или
-    # загрузить свой, DELETE — убрать свой файл.
-    path("me/join-sound", JoinSoundView.as_view(), name="join-sound"),
+    # Личные звуки входа в голосовой канал и выхода из него: PUT — выбрать
+    # готовый или загрузить свой, DELETE — убрать свой файл. Обработчик один
+    # (см. VoiceSoundView), вид задаётся параметром.
+    path("me/join-sound", VoiceSoundView.as_view(kind="join"), name="join-sound"),
+    path("me/leave-sound", VoiceSoundView.as_view(kind="leave"), name="leave-sound"),
     path("name-fonts", NameFontListView.as_view(), name="name-fonts"),
     path("change-password", ChangePasswordView.as_view(), name="change-password"),
     path("sessions", SessionListView.as_view(), name="sessions"),

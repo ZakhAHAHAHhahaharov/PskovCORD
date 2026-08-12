@@ -6594,35 +6594,70 @@ button.moderator-panel-row-link {
 
 /* ---- Выбор качества демонстрации (ScreenQualityModal.tsx) ---- */
 
-.screen-quality-modal {
-  width: min(460px, 92vw);
+/* Попап у кнопки, а не центрированная модалка: кнопка живёт в панели
+   управления звонком внизу экрана, и перебрасывать взгляд в центр ради двух
+   переключателей незачем. position:fixed + left/top ставит скрипт (см. сам
+   компонент) — он же прижимает попап к краям экрана. */
+.screen-quality-popover {
+  position: fixed;
+  z-index: 3000;
+  /* Ширина по содержимому: раскладка горизонтальная, и жёсткая ширина либо
+     резала бы подписи, либо оставляла пустоту справа. max-width — только
+     чтобы попап не вылезал за узкий экран. */
+  width: max-content;
+  max-width: calc(100vw - 16px);
+  padding: 12px 14px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--modal-bg);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
 }
 
+.screen-quality-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 10px;
+  color: var(--heading-text);
+  font-size: calc(14px * var(--font-scale, 1));
+  font-weight: 600;
+}
+
+/* Подпись слева, варианты справа в один ряд — так обе строки («Разрешение»
+   и «Кадров в секунду») читаются как таблица из двух колонок, а не как две
+   отдельные секции одна под другой. */
+.screen-quality-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.screen-quality-row-label {
+  flex: 0 0 auto;
+  min-width: 118px;
+  color: var(--text-muted);
+  font-size: calc(12px * var(--font-scale, 1));
+  font-weight: 600;
+}
+
+/* Горизонтально. Раньше здесь была grid-сетка в две колонки — в узкой
+   колонке она выстраивала варианты лесенкой на пол-экрана по высоте. */
 .screen-quality-options {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
-  margin-bottom: 16px;
-}
-
-/* Частота — три варианта в ряд: их меньше и они короче, в две колонки
-   осталась бы висеть пустая ячейка. */
-.screen-quality-fps {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 8px;
-  margin-bottom: 16px;
+  display: flex;
+  gap: 6px;
 }
 
 .screen-quality-option {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  padding: 10px 12px;
+  gap: 1px;
+  padding: 7px 10px;
   border: 1px solid var(--border-color);
   border-radius: 6px;
   background: var(--input-bg);
   text-align: left;
+  white-space: nowrap;
   cursor: pointer;
 }
 
@@ -6637,13 +6672,51 @@ button.moderator-panel-row-link {
 
 .screen-quality-option-label {
   color: var(--text-normal);
-  font-size: calc(14px * var(--font-scale, 1));
+  font-size: calc(13px * var(--font-scale, 1));
   font-weight: 600;
 }
 
 .screen-quality-option-hint {
   color: var(--text-faint);
   font-size: calc(11px * var(--font-scale, 1));
+}
+
+.screen-quality-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+/* Подсказка забирает свободное место, кнопки прижимаются вправо. */
+.screen-quality-note {
+  flex: 1;
+  color: var(--text-faint);
+  font-size: calc(11px * var(--font-scale, 1));
+}
+
+.screen-quality-actions .btn-secondary,
+.screen-quality-actions .btn-primary {
+  flex: 0 0 auto;
+  padding: 7px 16px;
+}
+
+/* Узкий экран: подписи строк уходят наверх, варианты переносятся — иначе
+   ряд из четырёх кнопок не влезает и попап упирается в max-width. */
+@media (max-width: 600px) {
+  .screen-quality-row {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 5px;
+  }
+
+  .screen-quality-options {
+    flex-wrap: wrap;
+  }
+
+  .screen-quality-note {
+    display: none;
+  }
 }
 
 /* ---- Соундборд звонка (SoundboardPanel.tsx) ---- */

@@ -1272,7 +1272,8 @@ export default function SettingsModal({
                   onChange={setMicThreshold}
                   onReset={() => setMicThreshold(DEFAULT_SETTINGS.micThreshold)}
                 />
-                <JoinSoundFields />
+                <JoinSoundFields kind="join" />
+                <JoinSoundFields kind="leave" />
               </SettingsSection>
             )}
 
