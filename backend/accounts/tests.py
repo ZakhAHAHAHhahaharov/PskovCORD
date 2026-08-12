@@ -926,3 +926,28 @@ class JoinSoundTests(APITestCase):
         resp = self.client.put(
             "/api/auth/me/join-sound", {"join_sound": "pop"}, format="json")
         self.assertIn(resp.status_code, (401, 403))
+
+    def test_uploaded_file_stays_reachable_after_picking_preset(self):
+        """Переключился на готовый — свой файл всё ещё видно СЕБЕ.
+
+        join_sound_url отвечает «что играть остальным» и при готовом варианте
+        пуст. Если бы собственный интерфейс смотрел на него же, он решил бы,
+        что файла нет: плитка «Свой звук» стала бы недоступной, кнопка
+        «Убрать» исчезла — и вернуться к своему звуку было бы уже нельзя.
+        """
+        self.client.put(
+            "/api/auth/me/join-sound", {"file": self._ogg()}, format="multipart")
+        resp = self.client.put(
+            "/api/auth/me/join-sound", {"join_sound": "blip"}, format="json")
+        self.assertEqual(resp.data["join_sound"], "blip")
+        # Остальным играть нечего...
+        self.assertEqual(resp.data["join_sound_url"], "")
+        # ...а себе файл по-прежнему виден.
+        self.assertTrue(resp.data["custom_join_sound_url"])
+
+    def test_delete_clears_both_urls(self):
+        self.client.put(
+            "/api/auth/me/join-sound", {"file": self._ogg()}, format="multipart")
+        resp = self.client.delete("/api/auth/me/join-sound")
+        self.assertEqual(resp.data["join_sound_url"], "")
+        self.assertEqual(resp.data["custom_join_sound_url"], "")

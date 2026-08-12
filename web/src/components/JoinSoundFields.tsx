@@ -34,7 +34,7 @@ export default function JoinSoundFields() {
     setError('')
     // Предпрослушивание — сразу, ещё до ответа сервера: выбор звука это
     // прежде всего «послушать, как он звучит», и ждать ради этого сеть незачем.
-    playJoinSoundFor(key, user.join_sound_url)
+    playJoinSoundFor(key, user.custom_join_sound_url)
     if (key === current) return
     setBusy(true)
     try {
@@ -110,15 +110,15 @@ export default function JoinSoundFields() {
         <button
           type="button"
           className={`join-sound-option ${current === 'custom' ? 'active' : ''}`}
-          disabled={busy || !user.join_sound_url}
+          disabled={busy || !user.custom_join_sound_url}
           onClick={() => void choose('custom')}
-          title={user.join_sound_url ? undefined : 'Сначала загрузите файл'}
+          title={user.custom_join_sound_url ? undefined : 'Сначала загрузите файл'}
         >
           <span className="join-sound-option-label">
             <Play size={11} /> Свой звук
           </span>
           <span className="join-sound-option-hint">
-            {user.join_sound_url ? 'Загружен' : 'Не загружен'}
+            {user.custom_join_sound_url ? 'Загружен' : 'Не загружен'}
           </span>
         </button>
       </div>
@@ -131,9 +131,9 @@ export default function JoinSoundFields() {
           onClick={() => fileRef.current?.click()}
         >
           {busy ? <Loader2 size={14} className="spin" /> : <Upload size={14} />}
-          {user.join_sound_url ? 'Заменить файл' : 'Загрузить свой'}
+          {user.custom_join_sound_url ? 'Заменить файл' : 'Загрузить свой'}
         </button>
-        {user.join_sound_url && (
+        {user.custom_join_sound_url && (
           <button
             type="button"
             className="join-sound-remove"

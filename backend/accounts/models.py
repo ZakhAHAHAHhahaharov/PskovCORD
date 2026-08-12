@@ -255,7 +255,8 @@ class User(AbstractUser):
         upload_to=join_sound_upload_to, max_length=300, blank=True)
 
     def join_sound_url(self) -> str:
-        """Адрес своего файла — пусто, если выбран готовый вариант.
+        """ЧТО ИГРАТЬ ОСТАЛЬНЫМ: адрес файла или пусто, если выбран готовый
+        вариант. Это поле уезжает в ростер и в participants диалога.
 
         Пусто и тогда, когда выбран 'custom', но файла нет: так бывает у того,
         кто выбрал «свой» и не успел загрузить. Клиент в этом случае молча
@@ -265,6 +266,20 @@ class User(AbstractUser):
         if self.join_sound != JOIN_SOUND_CUSTOM or not self.join_sound_file:
             return ""
         return self.join_sound_file.url
+
+    def custom_join_sound_url(self) -> str:
+        """ЕСТЬ ЛИ У МЕНЯ ЗАГРУЖЕННЫЙ ФАЙЛ — независимо от текущего выбора.
+
+        Отдельно от join_sound_url выше, потому что это разные вопросы, и
+        путать их дорого: переключение на готовый вариант файл не удаляет
+        (см. join_sound_file), и без этого поля собственный интерфейс решил
+        бы, что файла нет, — плитка «Свой звук» стала бы недоступной, а
+        кнопка «Убрать» исчезла, то есть вернуться к своему звуку было бы
+        уже нельзя.
+
+        Только в MeSerializer: это свой профиль, скрывать в нём нечего.
+        """
+        return self.join_sound_file.url if self.join_sound_file else ""
 
     def __str__(self) -> str:
         return self.username

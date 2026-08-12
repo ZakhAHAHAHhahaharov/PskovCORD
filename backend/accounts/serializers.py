@@ -160,6 +160,9 @@ class MeSerializer(serializers.ModelSerializer):
     # Метод модели, а не поле таблицы: пусто, пока выбран готовый вариант
     # (см. User.join_sound_url).
     join_sound_url = serializers.ReadOnlyField()
+    # Есть ли загруженный файл — независимо от того, выбран он сейчас или нет
+    # (см. User.custom_join_sound_url: это разные вопросы).
+    custom_join_sound_url = serializers.ReadOnlyField()
 
     class Meta:
         model = User
@@ -174,7 +177,7 @@ class MeSerializer(serializers.ModelSerializer):
             # Свой звук входа: сам выбор и адрес загруженного файла. В
             # UserSerializer их нет намеренно — он едет в каждое сообщение;
             # другим звук отдаётся вместе с ростером (см. chat.views).
-            "join_sound", "join_sound_url",
+            "join_sound", "join_sound_url", "custom_join_sound_url",
         ]
 
     def get_avatar_animated(self, obj) -> bool:
