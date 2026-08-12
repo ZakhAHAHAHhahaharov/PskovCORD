@@ -1,3 +1,8 @@
+// import type, а не обычный import: joinSound.ts сам импортирует отсюда
+// mediaUrl, и обычный импорт замкнул бы цикл. Тип же стирается при
+// компиляции и в рантайм не попадает вовсе.
+import type { JoinSoundKey } from './joinSound'
+
 /** Статус, который выбирает сам пользователь. */
 export type UserStatus = 'online' | 'dnd' | 'invisible'
 /** Что видят другие: invisible всегда маскируется под offline. */
@@ -86,6 +91,16 @@ export interface Me extends User {
   /** ISO-дата регистрации — "В числе участников с" в карточке. */
   date_joined: string
   dm_privacy: DmPrivacy
+  /** Свой звук входа в голосовой канал — его слышат ОСТАЛЬНЫЕ, когда я
+   * захожу. Хранится на аккаунте, а не в настройках устройства: должен
+   * звучать одинаково у всех слушателей (см. joinSound.ts). */
+  join_sound: JoinSoundKey
+  /** Что играть остальным: адрес файла или пусто при готовом варианте. */
+  join_sound_url: string
+  /** Есть ли у меня загруженный файл — независимо от текущего выбора.
+   * Отдельно от join_sound_url: переключение на готовый вариант файл не
+   * удаляет, и без этого поля вернуться к своему звуку было бы нельзя. */
+  custom_join_sound_url: string
 }
 
 /** Тяжёлая часть чужого профиля — грузится, когда открыли карточку. */
@@ -714,6 +729,12 @@ export interface Member extends Omit<User, 'status' | 'dm_privacy'> {
    * Не путать с приватным никнеймом друга (см. nicknames.ts): тот вижу
    * только я, этот — весь сервер. */
   server_nickname: string
+  /** Личный звук входа в голосовой канал — его проигрывают ОСТАЛЬНЫЕ, когда
+   * этот человек заходит (см. joinSound.ts). В сообщениях этих полей нет:
+   * автор сообщения никуда не «входит». */
+  join_sound: JoinSoundKey
+  /** Адрес своего файла; пусто, если выбран готовый вариант. */
+  join_sound_url: string
 }
 
 /** Минимум, нужный автокомплиту @упоминаний (MessageInput) и рендеру
@@ -1168,9 +1189,11 @@ export function mediaUrl(path: string): string {
 interface UploadOptions {
   onProgress?: (fraction: number) => void
   signal?: AbortSignal
+  /** HTTP-метод; по умолчанию POST (см. postForm). */
+  method?: 'POST' | 'PUT'
 }
 
-/** POST multipart-формы. XHR, а не fetch, ради upload.onprogress: файл до
+/** Отправка multipart-формы. XHR, а не fetch, ради upload.onprogress: файл до
  * 25 МБ на медленном канале идёт секунды, и полоса прогресса здесь не
  * украшение — без неё непонятно, висит загрузка или нет.
  *
@@ -1181,7 +1204,10 @@ function postForm<T>(path: string, form: FormData, opts: UploadOptions = {}): Pr
   const send = (token: string | null, allowRetry: boolean): Promise<T> =>
     new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest()
-      xhr.open('POST', `${API}${path}`)
+      // Метод параметром: загрузка вложения/эмодзи/стикера — это POST
+      // (создаём новое), а замена своего звука входа — PUT (единственное
+      // поле профиля, которое просто перезаписывается).
+      xhr.open(opts.method ?? 'POST', `${API}${path}`)
       xhr.withCredentials = true
       if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`)
 
@@ -1189,7 +1215,9 @@ function postForm<T>(path: string, form: FormData, opts: UploadOptions = {}): Pr
         if (e.lengthComputable) opts.onProgress?.(e.loaded / e.total)
       }
       xhr.onload = () => {
-        if (xhr.status === 201) {
+        // Любой 2xx, а не только 201: PUT отвечает 200, и «успех» здесь
+        // определяется классом кода, а не одним конкретным значением.
+        if (xhr.status >= 200 && xhr.status < 300) {
           try {
             resolve(JSON.parse(xhr.responseText))
           } catch {
@@ -1286,6 +1314,15 @@ export function uploadEmoji(
   form.append('file', file, `${name}.${blobExt(file)}`)
   if (staticFrame) form.append('static', staticFrame, `${name}-static.png`)
   return postForm<CustomEmoji>(`/api/servers/${serverId}/emoji`, form, opts)
+}
+
+/** Загрузка СВОЕГО звука входа. Формат опознаётся сервером по содержимому,
+ * имя файла на диске он собирает сам — присланное не используется (см.
+ * backend join_sound_upload_to). */
+export function uploadJoinSound(file: File, opts: UploadOptions = {}): Promise<Me> {
+  const form = new FormData()
+  form.append('file', file, file.name)
+  return postForm<Me>('/api/auth/me/join-sound', form, { ...opts, method: 'PUT' })
 }
 
 /** Загрузка звука соундборда (нужно право create_expressions на сервере).
@@ -1509,6 +1546,17 @@ export const api = {
     }),
   deleteEmoji: (serverId: number, emojiId: number) =>
     req(`/api/servers/${serverId}/emoji/${emojiId}`, { method: 'DELETE' }),
+
+  // --- личный звук входа ----------------------------------------------------
+  /** Выбрать готовый вариант. 'custom' примут только если файл уже загружен. */
+  setJoinSound: (key: JoinSoundKey): Promise<Me> =>
+    req('/api/auth/me/join-sound', {
+      method: 'PUT',
+      body: JSON.stringify({ join_sound: key }),
+    }),
+  /** Убрать свой файл и вернуться на стандартный звук. */
+  clearJoinSound: (): Promise<Me> =>
+    req('/api/auth/me/join-sound', { method: 'DELETE' }),
 
   // --- соундборд ------------------------------------------------------------
   serverSounds: (serverId: number): Promise<SoundboardSound[]> =>

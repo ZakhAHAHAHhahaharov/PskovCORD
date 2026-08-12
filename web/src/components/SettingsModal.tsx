@@ -34,6 +34,7 @@ import { api, Session, DmPrivacy } from '../api'
 import QrScannerModal from './QrScannerModal'
 import PasswordInput from './PasswordInput'
 import ToggleSwitch from './ToggleSwitch'
+import JoinSoundFields from './JoinSoundFields'
 import {
   NotificationPermissionState,
   notificationSupport,
@@ -1271,6 +1272,7 @@ export default function SettingsModal({
                   onChange={setMicThreshold}
                   onReset={() => setMicThreshold(DEFAULT_SETTINGS.micThreshold)}
                 />
+                <JoinSoundFields />
               </SettingsSection>
             )}
 

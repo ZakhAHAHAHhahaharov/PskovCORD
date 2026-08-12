@@ -6509,6 +6509,89 @@ button.moderator-panel-row-link {
   transform: scaleX(-1);
 }
 
+/* ---- Личный звук входа (JoinSoundFields.tsx) ---- */
+
+.join-sound-options {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.join-sound-option {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 9px 11px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--input-bg);
+  text-align: left;
+  cursor: pointer;
+}
+
+.join-sound-option:hover:not(:disabled) {
+  border-color: var(--blurple);
+}
+
+.join-sound-option.active {
+  border-color: var(--blurple);
+  background: color-mix(in srgb, var(--blurple) 18%, var(--input-bg));
+}
+
+.join-sound-option:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.join-sound-option-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--text-normal);
+  font-size: calc(13px * var(--font-scale, 1));
+  font-weight: 600;
+}
+
+.join-sound-option-hint {
+  color: var(--text-faint);
+  font-size: calc(11px * var(--font-scale, 1));
+}
+
+.join-sound-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+/* Кнопка загрузки переиспользует .settings-permission-btn — тот же размер и
+   вес, что у «Разрешить в браузере» рядом в настройках; заводить второй
+   почти одинаковый стиль незачем. Иконке нужен только зазор. */
+.join-sound-actions .settings-permission-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 0;
+}
+
+.join-sound-remove {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 8px 12px;
+  border: none;
+  border-radius: 4px;
+  background: none;
+  color: var(--text-muted);
+  font-size: calc(13px * var(--font-scale, 1));
+  cursor: pointer;
+}
+
+.join-sound-remove:hover:not(:disabled) {
+  color: var(--red);
+}
+
 /* ---- Выбор качества демонстрации (ScreenQualityModal.tsx) ---- */
 
 .screen-quality-modal {

@@ -10,7 +10,7 @@ from django.utils import timezone
 from rest_framework.test import APITestCase
 from rest_framework.throttling import SimpleRateThrottle
 
-from .models import NameFont, QRLoginRequest
+from .models import MAX_JOIN_SOUND_BYTES, NameFont, QRLoginRequest
 
 User = get_user_model()
 
@@ -829,3 +829,125 @@ class QRLoginTests(APITestCase):
         self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {other_login.data['access']}")
         resp = self.client.post(f"/api/auth/qr/{token}/confirm", {"code": "00"})
         self.assertEqual(resp.status_code, 404)
+
+
+class JoinSoundTests(APITestCase):
+    """Личный звук входа: выбор готового, загрузка своего и — главное —
+    что формат опознаётся по СОДЕРЖИМОМУ.
+
+    Файлы отдаёт nginx напрямую с нашего origin, и валидный OGG под именем
+    "evil.html" уехал бы документом на домене, где в localStorage лежит JWT.
+    """
+
+    def setUp(self):
+        self.user = User.objects.create_user(username="js_user", password="pw12345")
+        self.other = User.objects.create_user(username="js_other", password="pw12345")
+        self.client.force_authenticate(self.user)
+
+    @staticmethod
+    def _ogg(size=2048):
+        return SimpleUploadedFile(
+            "sound.ogg", b"OggS" + b"\x00" * (size - 4), content_type="audio/ogg")
+
+    def test_default_is_standard_sound(self):
+        resp = self.client.get("/api/auth/me")
+        self.assertEqual(resp.data["join_sound"], "default")
+        self.assertEqual(resp.data["join_sound_url"], "")
+
+    def test_pick_preset(self):
+        resp = self.client.put(
+            "/api/auth/me/join-sound", {"join_sound": "chime"}, format="json")
+        self.assertEqual(resp.status_code, 200, resp.data)
+        self.assertEqual(resp.data["join_sound"], "chime")
+
+    def test_unknown_preset_rejected(self):
+        resp = self.client.put(
+            "/api/auth/me/join-sound", {"join_sound": "сирена"}, format="json")
+        self.assertEqual(resp.status_code, 400)
+
+    def test_custom_without_file_rejected(self):
+        """Иначе человек выберет «свой» и услышит тишину, думая, что выбрал
+        звук."""
+        resp = self.client.put(
+            "/api/auth/me/join-sound", {"join_sound": "custom"}, format="json")
+        self.assertEqual(resp.status_code, 400)
+
+    def test_upload_switches_to_custom(self):
+        resp = self.client.put(
+            "/api/auth/me/join-sound", {"file": self._ogg()}, format="multipart")
+        self.assertEqual(resp.status_code, 200, resp.data)
+        self.assertEqual(resp.data["join_sound"], "custom")
+        # Путь собран сервером из опознанного типа, а не из имени файла.
+        self.assertTrue(resp.data["join_sound_url"].endswith(".ogg"))
+        self.assertIn("/media/join_sounds/", resp.data["join_sound_url"])
+
+    def test_rejects_non_audio_content(self):
+        bogus = SimpleUploadedFile(
+            "sound.ogg", b"<html><script>alert(1)</script></html>",
+            content_type="audio/ogg")
+        resp = self.client.put(
+            "/api/auth/me/join-sound", {"file": bogus}, format="multipart")
+        self.assertEqual(resp.status_code, 400)
+
+    def test_rejects_oversized(self):
+        big = SimpleUploadedFile(
+            "big.ogg", b"OggS" + b"\x00" * MAX_JOIN_SOUND_BYTES,
+            content_type="audio/ogg")
+        resp = self.client.put(
+            "/api/auth/me/join-sound", {"file": big}, format="multipart")
+        self.assertEqual(resp.status_code, 400)
+
+    def test_switching_to_preset_keeps_uploaded_file(self):
+        """Передумал и вернулся — звук на месте, заливать заново не нужно."""
+        self.client.put(
+            "/api/auth/me/join-sound", {"file": self._ogg()}, format="multipart")
+        self.client.put(
+            "/api/auth/me/join-sound", {"join_sound": "pop"}, format="json")
+        self.user.refresh_from_db()
+        self.assertTrue(self.user.join_sound_file)
+        # Пока выбран готовый вариант, url наружу не отдаётся.
+        self.assertEqual(self.user.join_sound_url(), "")
+
+        back = self.client.put(
+            "/api/auth/me/join-sound", {"join_sound": "custom"}, format="json")
+        self.assertEqual(back.status_code, 200)
+        self.assertTrue(back.data["join_sound_url"])
+
+    def test_delete_returns_to_default(self):
+        self.client.put(
+            "/api/auth/me/join-sound", {"file": self._ogg()}, format="multipart")
+        resp = self.client.delete("/api/auth/me/join-sound")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data["join_sound"], "default")
+        self.assertEqual(resp.data["join_sound_url"], "")
+
+    def test_anonymous_cannot_set(self):
+        self.client.force_authenticate(None)
+        resp = self.client.put(
+            "/api/auth/me/join-sound", {"join_sound": "pop"}, format="json")
+        self.assertIn(resp.status_code, (401, 403))
+
+    def test_uploaded_file_stays_reachable_after_picking_preset(self):
+        """Переключился на готовый — свой файл всё ещё видно СЕБЕ.
+
+        join_sound_url отвечает «что играть остальным» и при готовом варианте
+        пуст. Если бы собственный интерфейс смотрел на него же, он решил бы,
+        что файла нет: плитка «Свой звук» стала бы недоступной, кнопка
+        «Убрать» исчезла — и вернуться к своему звуку было бы уже нельзя.
+        """
+        self.client.put(
+            "/api/auth/me/join-sound", {"file": self._ogg()}, format="multipart")
+        resp = self.client.put(
+            "/api/auth/me/join-sound", {"join_sound": "blip"}, format="json")
+        self.assertEqual(resp.data["join_sound"], "blip")
+        # Остальным играть нечего...
+        self.assertEqual(resp.data["join_sound_url"], "")
+        # ...а себе файл по-прежнему виден.
+        self.assertTrue(resp.data["custom_join_sound_url"])
+
+    def test_delete_clears_both_urls(self):
+        self.client.put(
+            "/api/auth/me/join-sound", {"file": self._ogg()}, format="multipart")
+        resp = self.client.delete("/api/auth/me/join-sound")
+        self.assertEqual(resp.data["join_sound_url"], "")
+        self.assertEqual(resp.data["custom_join_sound_url"], "")

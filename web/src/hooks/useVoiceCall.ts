@@ -8,6 +8,7 @@ import type { VoiceRosterMember } from '../components/VoiceStage'
 import type { VoiceStatus } from '../components/VoiceProvider'
 import { conversationDisplayName } from '../conversation'
 import { useGateway } from '../gateway'
+import { JoinSoundKey, playJoinSoundFor } from '../joinSound'
 import {
   playJoinSound,
   playLeaveSound,
@@ -30,6 +31,11 @@ interface CallParticipant {
   name_color_1: string
   name_color_2: string
   name_anim_speed: number
+  /** Личный звук входа — приезжает из conversation.participants (см.
+   * joinSound.ts). Необязательный: событие dm_voice_state_update несёт
+   * только краткую карточку. */
+  join_sound?: JoinSoundKey
+  join_sound_url?: string
 }
 
 interface IncomingCall {
@@ -433,7 +439,11 @@ export function useVoiceCall(
     )
     const prevIds = voiceRosterRef.current
     for (const id of currentIds) {
-      if (!prevIds.has(id)) playJoinSound()
+      if (prevIds.has(id)) continue
+      // Личный звук зашедшего, а не общий: он выбирает его сам в настройках,
+      // и слышат его именно те, кто уже в канале (см. joinSound.ts).
+      const joined = members.find((m) => m.id === id)
+      playJoinSoundFor(joined?.join_sound, joined?.join_sound_url)
     }
     for (const id of prevIds) {
       if (!currentIds.has(id)) playLeaveSound()
@@ -452,7 +462,11 @@ export function useVoiceCall(
     )
     const prevIds = dmVoiceRosterRef.current
     for (const id of currentIds) {
-      if (!prevIds.has(id)) playJoinSound()
+      if (prevIds.has(id)) continue
+      // Личный звук — как и в канале сервера. Ростер здесь строится из
+      // conversation.participants, куда бэкенд их и подмешивает.
+      const joined = dmCallParticipants[id]
+      playJoinSoundFor(joined?.join_sound, joined?.join_sound_url)
     }
     for (const id of prevIds) {
       if (!currentIds.has(id)) playLeaveSound()

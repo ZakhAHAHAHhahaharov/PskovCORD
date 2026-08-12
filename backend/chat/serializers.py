@@ -895,7 +895,20 @@ class ConversationSerializer(serializers.ModelSerializer):
         qs = obj.participants.all()
         if request is not None:
             qs = qs.exclude(id=request.user.id)
-        return UserSerializer(qs, many=True).data
+        # Личный звук входа подмешивается здесь, а не в самом UserSerializer:
+        # тот подставляется в КАЖДОЕ сообщение и в каждый reply_to, а звук
+        # нужен только там, где следят за составом звонка. Список участников
+        # диалога запрашивается редко, лишняя пара коротких строк в нём
+        # ничего не весит. Тот же приём, что и у ростера сервера (см.
+        # chat.views.ServerMembers).
+        return [
+            {
+                **UserSerializer(user).data,
+                "join_sound": user.join_sound,
+                "join_sound_url": user.join_sound_url(),
+            }
+            for user in qs
+        ]
 
     def get_last_message(self, obj):
         cached = self.context.get("last_messages")
