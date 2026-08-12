@@ -99,6 +99,11 @@ server {
         add_header X-Content-Type-Options "nosniff" always;
     }
 
+    location /media/leave_sounds/ {
+        alias /opt/pskovcord/deploy/media/leave_sounds/;
+        add_header X-Content-Type-Options "nosniff" always;
+    }
+
     # Прочие пользовательские загрузки (favicon-наборы, см. core.models.Favicon) —
     # тем же приёмом, что и /static/: bind-mount ./media из
     # docker-compose.prod.yml, отдаём напрямую, минуя Django.
