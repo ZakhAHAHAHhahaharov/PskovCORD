@@ -13,6 +13,7 @@ import { playLeaveSound, playScreenShareRequestSound, playWakeUpSound } from '..
 import { channelPlace, clearTyping, conversationPlace, markTyping } from '../typing'
 import { notify, notificationBody } from '../notifications'
 import { playSoundboardSound, setServerSounds } from '../soundboard'
+import type { JoinSoundKey } from '../joinSound'
 import { conversationDisplayName } from '../conversation'
 import { useSettings } from '../settings'
 
@@ -33,6 +34,10 @@ interface CallParticipant {
   name_color_1: string
   name_color_2: string
   name_anim_speed: number
+  /** Личный звук входа — как и avatar_animated, приезжает только там, где
+   * ростер строится из полного профиля (conversation.participants). */
+  join_sound?: JoinSoundKey
+  join_sound_url?: string
 }
 
 interface IncomingCall {
@@ -366,6 +371,12 @@ export function useGatewayEvents(params: UseGatewayEventsParams) {
             role_ids: [],
             is_owner: false,
             server_nickname: '',
+            // Личный звук входа — тоже только из api.members(). Здесь
+            // стандартный: этот человек в канале уже ЕСТЬ (событие про то и
+            // пришло), его звук в этот момент уже отзвучал, и подставлять
+            // сюда что-то другое незачем.
+            join_sound: 'default' as const,
+            join_sound_url: '',
           },
         ]
       })

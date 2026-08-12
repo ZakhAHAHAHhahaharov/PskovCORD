@@ -157,6 +157,9 @@ class MeSerializer(serializers.ModelSerializer):
     несколько мегабайт base64."""
 
     avatar_animated = serializers.SerializerMethodField()
+    # Метод модели, а не поле таблицы: пусто, пока выбран готовый вариант
+    # (см. User.join_sound_url).
+    join_sound_url = serializers.ReadOnlyField()
 
     class Meta:
         model = User
@@ -168,6 +171,10 @@ class MeSerializer(serializers.ModelSerializer):
             "status", "banner_gradient", "banner_image", "banner_color",
             "dm_privacy",
             "name_font", "name_effect", "name_color_1", "name_color_2", "name_anim_speed",
+            # Свой звук входа: сам выбор и адрес загруженного файла. В
+            # UserSerializer их нет намеренно — он едет в каждое сообщение;
+            # другим звук отдаётся вместе с ростером (см. chat.views).
+            "join_sound", "join_sound_url",
         ]
 
     def get_avatar_animated(self, obj) -> bool:

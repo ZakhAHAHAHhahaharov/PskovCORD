@@ -658,6 +658,13 @@ class ServerMembers(APIView):
                 # Никнейм НА ЭТОМ СЕРВЕРЕ — виден всем участникам (в отличие
                 # от приватного FriendNickname, см. chat.models.Membership).
                 "server_nickname": m.nickname,
+                # Личный звук входа — его проигрывают ОСТАЛЬНЫЕ, когда этот
+                # человек заходит в голосовой канал (см. web joinSound.ts).
+                # Здесь, в ростере, а НЕ в UserSerializer: тот подставляется в
+                # каждое сообщение и в каждый reply_to, а звук нужен ровно
+                # там, где следят за составом голосового канала.
+                "join_sound": u.join_sound,
+                "join_sound_url": u.join_sound_url(),
             })
         # Онлайн сверху, затем по имени.
         data.sort(key=lambda x: (not x["online"], x["username"].lower()))

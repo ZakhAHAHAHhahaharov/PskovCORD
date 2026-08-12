@@ -1,5 +1,51 @@
+import uuid
+
 from django.contrib.auth.models import AbstractUser
 from django.db import models
+
+# Личный звук входа в голосовой канал. Играет НЕ у владельца, а у всех, кто
+# уже сидит в канале, — это «мелодия выхода на сцену», а не уведомление себе.
+#
+# Ключи готовых вариантов совпадают с теми, что рисует и проигрывает клиент
+# (см. web/src/joinSound.ts). Сами звуки, кроме 'default', синтезируются в
+# браузере через Web Audio — файлов для них не нужно вовсе.
+JOIN_SOUND_DEFAULT = "default"
+JOIN_SOUND_NONE = "none"
+JOIN_SOUND_CUSTOM = "custom"
+JOIN_SOUND_PRESETS = (
+    (JOIN_SOUND_DEFAULT, "Стандартный"),
+    (JOIN_SOUND_NONE, "Без звука"),
+    ("blip", "Короткий сигнал"),
+    ("chime", "Колокольчик"),
+    ("pop", "Хлопок"),
+    ("rise", "Восходящий"),
+    (JOIN_SOUND_CUSTOM, "Свой файл"),
+)
+
+# Свой звук — короткий. Длительность проверить нечем (ffmpeg в проекте
+# сознательно нет, см. chat.uploads.sniff_sound), поэтому ограничением служит
+# размер: 512 КБ это несколько секунд в любом принимаемом формате. Ровно тот
+# же лимит, что у соундборда, — и по той же причине.
+MAX_JOIN_SOUND_BYTES = 512 * 1024
+
+
+def join_sound_upload_to(instance, filename: str) -> str:
+    """MEDIA_ROOT/join_sounds/<токен>/sound.<ext>.
+
+    Имя и расширение собираются здесь целиком, клиентское не используется —
+    ровно по той же причине, что у эмодзи и соундборда: под /media/ файлы
+    отдаёт nginx НАПРЯМУЮ и Content-Type выбирает по расширению. Валидный OGG
+    под именем "evil.html" иначе уехал бы документом на нашем origin, где в
+    localStorage лежит JWT.
+
+    Токен, а не id пользователя, в пути: /media/ отдаётся без проверки прав,
+    и угадываемый путь означал бы, что чужой звук можно скачать, просто
+    подставив номер.
+    """
+    from chat.uploads import SOUND_EXTENSIONS
+
+    ext = SOUND_EXTENSIONS.get(instance.join_sound_content_type, "bin")
+    return f"join_sounds/{instance.join_sound_token}/sound.{ext}"
 
 
 class NameFont(models.Model):
@@ -195,6 +241,30 @@ class User(AbstractUser):
     # ужесточение потом её не рвёт (проверяется только при создании).
     dm_privacy = models.CharField(
         max_length=10, choices=DM_PRIVACY_CHOICES, default=DM_EVERYONE)
+
+    # Личный звук входа в голосовой канал — его слышат ОСТАЛЬНЫЕ, когда я
+    # захожу (см. JOIN_SOUND_PRESETS выше).
+    join_sound = models.CharField(
+        max_length=16, choices=JOIN_SOUND_PRESETS, default=JOIN_SOUND_DEFAULT)
+    # Ниже — только для join_sound == 'custom'. Файл НЕ удаляется при
+    # переключении на готовый вариант: передумал и вернулся — звук на месте,
+    # а заливать его заново ради этого не нужно.
+    join_sound_token = models.UUIDField(default=uuid.uuid4, editable=False)
+    join_sound_content_type = models.CharField(max_length=100, blank=True, default="")
+    join_sound_file = models.FileField(
+        upload_to=join_sound_upload_to, max_length=300, blank=True)
+
+    def join_sound_url(self) -> str:
+        """Адрес своего файла — пусто, если выбран готовый вариант.
+
+        Пусто и тогда, когда выбран 'custom', но файла нет: так бывает у того,
+        кто выбрал «свой» и не успел загрузить. Клиент в этом случае молча
+        откатывается на стандартный звук (см. web/src/joinSound.ts) — тишина
+        вместо звука выглядела бы поломкой.
+        """
+        if self.join_sound != JOIN_SOUND_CUSTOM or not self.join_sound_file:
+            return ""
+        return self.join_sound_file.url
 
     def __str__(self) -> str:
         return self.username
