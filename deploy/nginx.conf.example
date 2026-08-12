@@ -75,6 +75,30 @@ server {
         add_header X-Content-Type-Options "nosniff" always;
     }
 
+    # Звуки: соундборд серверов и личные звуки входа в голосовой канал.
+    # ОТДЕЛЬНЫЙ location до общего /media/ и по той же причине, что у эмодзи:
+    # файлы сюда кладут пользователи, а отдаются они с того же домена, где в
+    # localStorage лежит JWT.
+    #
+    # Content-Disposition здесь НЕТ, только nosniff: звук существует ради
+    # того, чтобы его проиграл <audio>, и «скачать вместо открыть» этому не
+    # мешает, но и не помогает. nosniff же обязателен — он запрещает браузеру
+    # «опознать» документ в файле, отданном как аудио.
+    #
+    # Первый рубеж, как и у эмодзи, на бэкенде и он же главный: формат
+    # определяется по СИГНАТУРЕ (chat/uploads.py sniff_sound), а имя файла на
+    # диске сервер собирает сам из опознанного типа — клиентское не
+    # используется вовсе (см. sound_upload_to и join_sound_upload_to).
+    location /media/soundboard/ {
+        alias /opt/pskovcord/deploy/media/soundboard/;
+        add_header X-Content-Type-Options "nosniff" always;
+    }
+
+    location /media/join_sounds/ {
+        alias /opt/pskovcord/deploy/media/join_sounds/;
+        add_header X-Content-Type-Options "nosniff" always;
+    }
+
     # Прочие пользовательские загрузки (favicon-наборы, см. core.models.Favicon) —
     # тем же приёмом, что и /static/: bind-mount ./media из
     # docker-compose.prod.yml, отдаём напрямую, минуя Django.

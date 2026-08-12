@@ -10,6 +10,7 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth import login as django_login, logout as django_logout
 from django.utils import timezone
 from rest_framework import generics, permissions
+from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
@@ -22,7 +23,12 @@ from rest_framework_simplejwt.token_blacklist.models import (
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 
-from .models import LoginSession, NameFont, QRLoginRequest
+from chat import uploads
+
+from .models import (
+    JOIN_SOUND_CUSTOM, JOIN_SOUND_DEFAULT, JOIN_SOUND_PRESETS,
+    LoginSession, MAX_JOIN_SOUND_BYTES, NameFont, QRLoginRequest,
+)
 from .serializers import (
     ChangePasswordSerializer,
     MeSerializer,
@@ -298,6 +304,78 @@ class LogoutView(APIView):
                 pass
         django_logout(request)
         return Response(status=204)
+
+
+class JoinSoundView(APIView):
+    """PUT /api/auth/me/join-sound — выбрать звук входа в голосовой канал.
+
+    Готовый вариант приходит обычным JSON'ом ({"join_sound": "chime"}), свой
+    файл — multipart'ом в поле `file` (тогда join_sound становится 'custom').
+
+    Отдельная ручка, а не поле в MeView.patch: там ProfileUpdateSerializer с
+    JSON-полями, а сюда приезжает файл, который надо опознать по содержимому
+    и сохранить под именем, собранным сервером. Мешать это в один
+    обработчик значило бы разводить два разных парсера и две ветки валидации
+    внутри одного метода.
+    """
+
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
+
+    def put(self, request):
+        user = request.user
+        uploaded = request.FILES.get("file")
+
+        if uploaded is not None:
+            if uploaded.size == 0:
+                return Response({"detail": "Пустой файл."}, status=400)
+            if uploaded.size > MAX_JOIN_SOUND_BYTES:
+                return Response(
+                    {"detail": f"Звук слишком большой (макс. "
+                               f"{MAX_JOIN_SOUND_BYTES // 1024} КБ). Это короткий "
+                               "сигнал на пару секунд, а не музыка."},
+                    status=400)
+            content_type = uploads.sniff_sound(uploaded)
+            if content_type is None:
+                return Response(
+                    {"detail": "Подойдёт только MP3, OGG, WAV, WEBM или M4A."},
+                    status=400)
+            # Новый токен на каждую загрузку: старый путь остаётся
+            # недостижимым, а закэшированный у слушателей прежний файл не
+            # подменяется новым под тем же адресом.
+            user.join_sound_token = uuid.uuid4()
+            user.join_sound_content_type = content_type
+            user.join_sound_file.save(uploaded.name, uploaded, save=False)
+            user.join_sound = JOIN_SOUND_CUSTOM
+            user.save(update_fields=[
+                "join_sound", "join_sound_file", "join_sound_token",
+                "join_sound_content_type",
+            ])
+            return Response(MeSerializer(user).data)
+
+        choice = str(request.data.get("join_sound") or "").strip()
+        valid = {key for key, _label in JOIN_SOUND_PRESETS}
+        if choice not in valid:
+            return Response({"detail": "Неизвестный звук."}, status=400)
+        # 'custom' без загруженного файла принимать нечего: играть будет
+        # нечему, и человек услышит тишину, думая, что выбрал звук.
+        if choice == JOIN_SOUND_CUSTOM and not user.join_sound_file:
+            return Response(
+                {"detail": "Сначала загрузите свой файл."}, status=400)
+        user.join_sound = choice
+        user.save(update_fields=["join_sound"])
+        return Response(MeSerializer(user).data)
+
+    def delete(self, request):
+        """Убрать свой загруженный файл и вернуться на стандартный звук."""
+        user = request.user
+        if user.join_sound_file:
+            user.join_sound_file.delete(save=False)
+        user.join_sound_file = ""
+        user.join_sound_content_type = ""
+        user.join_sound = JOIN_SOUND_DEFAULT
+        user.save(update_fields=[
+            "join_sound", "join_sound_file", "join_sound_content_type"])
+        return Response(MeSerializer(user).data)
 
 
 class MeView(APIView):

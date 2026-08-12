@@ -9,7 +9,7 @@ import boWompReverseUrl from './assets/sounds/bo-womp_reverse_.ogg'
  * base:'./' — иначе в Electron/file:// абсолютный путь "/sounds/..." был бы
  * битым). Остальное — короткие синтезированные тона, чистый Web Audio API.
  */
-function playFile(url: string, volume = 0.7) {
+export function playFile(url: string, volume = 0.7) {
   try {
     const audio = new Audio(url)
     audio.volume = volume
@@ -48,7 +48,18 @@ function beep(freq: number, durationMs: number, startDelayMs = 0, gain = 0.15) {
   osc.stop(start + dur + 0.02)
 }
 
-/** Кто-то вошёл в голосовой канал, где мы уже находимся. */
+/** Собрать сигнал из нот. Вынесено отдельно ради готовых вариантов личного
+ * звука входа (см. joinSound.ts): там их пять, и городить под каждый свою
+ * функцию с парой beep'ов значило бы пять почти одинаковых функций. */
+export function toneSequence(
+  notes: { freq: number; ms: number; delay?: number; gain?: number }[],
+) {
+  for (const note of notes) beep(note.freq, note.ms, note.delay ?? 0, note.gain ?? 0.15)
+}
+
+/** Кто-то вошёл в голосовой канал, где мы уже находимся — СТАНДАРТНЫЙ звук.
+ * Личный звук конкретного человека проигрывает playJoinSoundFor (joinSound.ts),
+ * который на этот и откатывается, если у человека выбран обычный вариант. */
 export function playJoinSound() {
   playFile(boWompUrl)
 }

@@ -4,6 +4,7 @@ from .views import (
     ChangePasswordView,
     LoginView,
     LogoutView,
+    JoinSoundView,
     MeView,
     NameFontListView,
     QRConfirmView,
@@ -25,6 +26,9 @@ urlpatterns = [
     path("switch", SwitchAccountView.as_view(), name="switch-account"),
     path("logout", LogoutView.as_view(), name="logout"),
     path("me", MeView.as_view(), name="me"),
+    # Личный звук входа в голосовой канал: PUT — выбрать готовый или
+    # загрузить свой, DELETE — убрать свой файл.
+    path("me/join-sound", JoinSoundView.as_view(), name="join-sound"),
     path("name-fonts", NameFontListView.as_view(), name="name-fonts"),
     path("change-password", ChangePasswordView.as_view(), name="change-password"),
     path("sessions", SessionListView.as_view(), name="sessions"),
