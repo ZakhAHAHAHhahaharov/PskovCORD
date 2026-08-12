@@ -306,23 +306,39 @@ class LogoutView(APIView):
         return Response(status=204)
 
 
-class JoinSoundView(APIView):
-    """PUT /api/auth/me/join-sound — выбрать звук входа в голосовой канал.
+class VoiceSoundView(APIView):
+    """PUT/DELETE /api/auth/me/join-sound и /api/auth/me/leave-sound —
+    личные звуки входа в голосовой канал и выхода из него.
 
-    Готовый вариант приходит обычным JSON'ом ({"join_sound": "chime"}), свой
-    файл — multipart'ом в поле `file` (тогда join_sound становится 'custom').
+    Один класс на оба: механика у них одна и та же (готовый вариант JSON'ом,
+    свой файл multipart'ом, удаление файла), различаются только имена полей.
+    Разводить это в два почти одинаковых обработчика значило бы чинить
+    каждую будущую правку дважды — а именно так и расходятся близнецы.
+    Какой из двух — задаётся в urls.py параметром `kind`.
 
     Отдельная ручка, а не поле в MeView.patch: там ProfileUpdateSerializer с
     JSON-полями, а сюда приезжает файл, который надо опознать по содержимому
-    и сохранить под именем, собранным сервером. Мешать это в один
-    обработчик значило бы разводить два разных парсера и две ветки валидации
-    внутри одного метода.
+    и сохранить под именем, собранным сервером.
     """
 
     parser_classes = [MultiPartParser, FormParser, JSONParser]
+    #: 'join' или 'leave' — подставляется из urls.py (as_view(kind=...)).
+    kind = "join"
+
+    @property
+    def _f(self):
+        """Имена полей модели для выбранного вида звука."""
+        k = self.kind
+        return {
+            "choice": f"{k}_sound",
+            "file": f"{k}_sound_file",
+            "token": f"{k}_sound_token",
+            "content_type": f"{k}_sound_content_type",
+        }
 
     def put(self, request):
         user = request.user
+        f = self._f
         uploaded = request.FILES.get("file")
 
         if uploaded is not None:
@@ -342,39 +358,37 @@ class JoinSoundView(APIView):
             # Новый токен на каждую загрузку: старый путь остаётся
             # недостижимым, а закэшированный у слушателей прежний файл не
             # подменяется новым под тем же адресом.
-            user.join_sound_token = uuid.uuid4()
-            user.join_sound_content_type = content_type
-            user.join_sound_file.save(uploaded.name, uploaded, save=False)
-            user.join_sound = JOIN_SOUND_CUSTOM
-            user.save(update_fields=[
-                "join_sound", "join_sound_file", "join_sound_token",
-                "join_sound_content_type",
-            ])
+            setattr(user, f["token"], uuid.uuid4())
+            setattr(user, f["content_type"], content_type)
+            getattr(user, f["file"]).save(uploaded.name, uploaded, save=False)
+            setattr(user, f["choice"], JOIN_SOUND_CUSTOM)
+            user.save(update_fields=list(f.values()))
             return Response(MeSerializer(user).data)
 
-        choice = str(request.data.get("join_sound") or "").strip()
+        choice = str(request.data.get("sound") or "").strip()
         valid = {key for key, _label in JOIN_SOUND_PRESETS}
         if choice not in valid:
             return Response({"detail": "Неизвестный звук."}, status=400)
         # 'custom' без загруженного файла принимать нечего: играть будет
         # нечему, и человек услышит тишину, думая, что выбрал звук.
-        if choice == JOIN_SOUND_CUSTOM and not user.join_sound_file:
+        if choice == JOIN_SOUND_CUSTOM and not getattr(user, f["file"]):
             return Response(
                 {"detail": "Сначала загрузите свой файл."}, status=400)
-        user.join_sound = choice
-        user.save(update_fields=["join_sound"])
+        setattr(user, f["choice"], choice)
+        user.save(update_fields=[f["choice"]])
         return Response(MeSerializer(user).data)
 
     def delete(self, request):
         """Убрать свой загруженный файл и вернуться на стандартный звук."""
         user = request.user
-        if user.join_sound_file:
-            user.join_sound_file.delete(save=False)
-        user.join_sound_file = ""
-        user.join_sound_content_type = ""
-        user.join_sound = JOIN_SOUND_DEFAULT
-        user.save(update_fields=[
-            "join_sound", "join_sound_file", "join_sound_content_type"])
+        f = self._f
+        existing = getattr(user, f["file"])
+        if existing:
+            existing.delete(save=False)
+        setattr(user, f["file"], "")
+        setattr(user, f["content_type"], "")
+        setattr(user, f["choice"], JOIN_SOUND_DEFAULT)
+        user.save(update_fields=[f["choice"], f["file"], f["content_type"]])
         return Response(MeSerializer(user).data)
 
 

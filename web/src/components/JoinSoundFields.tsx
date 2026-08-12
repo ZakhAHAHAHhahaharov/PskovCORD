@@ -1,8 +1,10 @@
 import { useRef, useState } from 'react'
 import { Loader2, Play, Trash2, Upload } from 'lucide-react'
-import { api, uploadJoinSound } from '../api'
+import { api, VoiceSoundKind, uploadVoiceSound } from '../api'
 import { useAuth } from '../auth'
-import { JOIN_SOUND_OPTIONS, JoinSoundKey, playJoinSoundFor } from '../joinSound'
+import {
+  JOIN_SOUND_OPTIONS, JoinSoundKey, playJoinSoundFor, playLeaveSoundFor,
+} from '../joinSound'
 
 /** MAX_JOIN_SOUND_BYTES на бэкенде. Дублируется здесь не ради валидации (она
  * всё равно на сервере), а чтобы не гнать по сети заведомо отвергнутый файл и
@@ -10,17 +12,21 @@ import { JOIN_SOUND_OPTIONS, JoinSoundKey, playJoinSoundFor } from '../joinSound
 const MAX_BYTES = 512 * 1024
 
 /**
- * Выбор личного звука входа в голосовой канал.
+ * Выбор личного звука входа в голосовой канал ИЛИ выхода из него.
  *
- * Ключевое, что должен понимать читающий эту настройку: звук слышат ОСТАЛЬНЫЕ,
- * а не он сам. Поэтому подпись говорит об этом прямо — иначе настройка
- * читается как «что я слышу, когда заходят другие», а это ровно наоборот.
+ * Один компонент на оба: механика у них одна и та же, различаются подписи и
+ * пара имён полей. Два почти одинаковых компонента расходились бы при первой
+ * же правке — а правки тут будут, это настройка, которую видно.
+ *
+ * Ключевое, что должен понимать читающий: звук слышат ОСТАЛЬНЫЕ, а не он
+ * сам. Поэтому подпись говорит об этом прямо — иначе настройка читается как
+ * «что я слышу, когда заходят другие», а это ровно наоборот.
  *
  * Хранится на аккаунте, а не в локальных настройках устройства (в отличие от
  * громкости и темы): звук должен звучать одинаково у всех слушателей и не
  * зависеть от того, с какого браузера человек зашёл.
  */
-export default function JoinSoundFields() {
+export default function JoinSoundFields({ kind }: { kind: VoiceSoundKind }) {
   const { user, updateLocalUser } = useAuth()
   const fileRef = useRef<HTMLInputElement>(null)
   const [busy, setBusy] = useState(false)
@@ -28,17 +34,30 @@ export default function JoinSoundFields() {
 
   if (!user) return null
 
-  const current = user.join_sound as JoinSoundKey
+  const isJoin = kind === 'join'
+  const current = (isJoin ? user.join_sound : user.leave_sound) as JoinSoundKey
+  // «Есть ли загруженный файл» — отдельно от «что играть остальным»
+  // (join_sound_url пуст при готовом варианте). Без этого поля плитка «Свой
+  // звук» стала бы недоступной, стоит переключиться на готовый, и вернуться
+  // к своему файлу было бы уже нельзя.
+  const customUrl = isJoin ? user.custom_join_sound_url : user.custom_leave_sound_url
+  const preview = isJoin ? playJoinSoundFor : playLeaveSoundFor
+  const title = isJoin
+    ? 'Звук моего входа в голосовой канал'
+    : 'Звук моего выхода из голосового канала'
+  const hint = isJoin
+    ? 'Его слышат те, кто уже сидит в канале, когда вы заходите.'
+    : 'Его слышат те, кто остаётся в канале, когда вы уходите.' 
 
   const choose = async (key: JoinSoundKey) => {
     setError('')
     // Предпрослушивание — сразу, ещё до ответа сервера: выбор звука это
     // прежде всего «послушать, как он звучит», и ждать ради этого сеть незачем.
-    playJoinSoundFor(key, user.custom_join_sound_url)
+    preview(key, customUrl)
     if (key === current) return
     setBusy(true)
     try {
-      updateLocalUser(await api.setJoinSound(key))
+      updateLocalUser(await api.setVoiceSound(kind, key))
     } catch (e) {
       setError((e as Error).message)
     } finally {
@@ -58,7 +77,7 @@ export default function JoinSoundFields() {
     }
     setBusy(true)
     try {
-      updateLocalUser(await uploadJoinSound(file))
+      updateLocalUser(await uploadVoiceSound(kind, file))
     } catch (e) {
       setError((e as Error).message)
     } finally {
@@ -70,7 +89,7 @@ export default function JoinSoundFields() {
     setError('')
     setBusy(true)
     try {
-      updateLocalUser(await api.clearJoinSound())
+      updateLocalUser(await api.clearVoiceSound(kind))
     } catch (e) {
       setError((e as Error).message)
     } finally {
@@ -81,11 +100,10 @@ export default function JoinSoundFields() {
   return (
     <div className="settings-field">
       <div className="settings-field-header">
-        <span className="settings-field-label">Звук моего входа в голосовой канал</span>
+        <span className="settings-field-label">{title}</span>
       </div>
       <div className="settings-hint">
-        Его слышат те, кто уже сидит в канале, когда вы заходите. Себе вы его
-        не услышите — только при выборе здесь.
+        {hint} Себе вы его не услышите — только при выборе здесь.
       </div>
 
       <div className="join-sound-options">
@@ -110,15 +128,15 @@ export default function JoinSoundFields() {
         <button
           type="button"
           className={`join-sound-option ${current === 'custom' ? 'active' : ''}`}
-          disabled={busy || !user.custom_join_sound_url}
+          disabled={busy || !customUrl}
           onClick={() => void choose('custom')}
-          title={user.custom_join_sound_url ? undefined : 'Сначала загрузите файл'}
+          title={customUrl ? undefined : 'Сначала загрузите файл'}
         >
           <span className="join-sound-option-label">
             <Play size={11} /> Свой звук
           </span>
           <span className="join-sound-option-hint">
-            {user.custom_join_sound_url ? 'Загружен' : 'Не загружен'}
+            {customUrl ? 'Загружен' : 'Не загружен'}
           </span>
         </button>
       </div>
@@ -131,9 +149,9 @@ export default function JoinSoundFields() {
           onClick={() => fileRef.current?.click()}
         >
           {busy ? <Loader2 size={14} className="spin" /> : <Upload size={14} />}
-          {user.custom_join_sound_url ? 'Заменить файл' : 'Загрузить свой'}
+          {customUrl ? 'Заменить файл' : 'Загрузить свой'}
         </button>
-        {user.custom_join_sound_url && (
+        {customUrl && (
           <button
             type="button"
             className="join-sound-remove"

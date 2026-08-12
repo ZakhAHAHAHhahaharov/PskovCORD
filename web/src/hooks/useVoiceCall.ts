@@ -8,7 +8,7 @@ import type { VoiceRosterMember } from '../components/VoiceStage'
 import type { VoiceStatus } from '../components/VoiceProvider'
 import { conversationDisplayName } from '../conversation'
 import { useGateway } from '../gateway'
-import { JoinSoundKey, playJoinSoundFor } from '../joinSound'
+import { JoinSoundKey, playJoinSoundFor, playLeaveSoundFor } from '../joinSound'
 import {
   playJoinSound,
   playLeaveSound,
@@ -36,6 +36,8 @@ interface CallParticipant {
    * только краткую карточку. */
   join_sound?: JoinSoundKey
   join_sound_url?: string
+  leave_sound?: JoinSoundKey
+  leave_sound_url?: string
 }
 
 interface IncomingCall {
@@ -446,7 +448,12 @@ export function useVoiceCall(
       playJoinSoundFor(joined?.join_sound, joined?.join_sound_url)
     }
     for (const id of prevIds) {
-      if (!currentIds.has(id)) playLeaveSound()
+      if (currentIds.has(id)) continue
+      // Личный звук ушедшего. Ищем в members, а не в currentIds: его там уже
+      // нет (он и вышел), но строка ростера с профилем ещё на месте — она
+      // пропадает только когда человек уходит с сервера целиком.
+      const left = members.find((m) => m.id === id)
+      playLeaveSoundFor(left?.leave_sound, left?.leave_sound_url)
     }
     voiceRosterRef.current = currentIds
   }, [members, voice, isChannelVoice, user])
@@ -455,11 +462,21 @@ export function useVoiceCall(
   // приходит через dm_voice_state_update/dm_voice_peers прямо в
   // dmCallParticipants (см. useGatewayEvents), не через members.
   const dmVoiceRosterRef = useRef<Set<number>>(new Set())
+  // Звук выхода каждого участника звонка, запомненный ПОКА ОН ЕЩЁ В СПИСКЕ.
+  // В отличие от канала сервера, где строка ростера остаётся и после выхода
+  // из голоса, здесь участник исчезает из dmCallParticipants целиком — и в
+  // момент, когда пора играть его звук, спросить о нём уже некого.
+  const leaveSoundsRef = useRef<Map<number, { key?: JoinSoundKey; url?: string }>>(new Map())
   useEffect(() => {
     if (!user) return
     const currentIds = new Set(
       Object.keys(dmCallParticipants).map(Number).filter((id) => id !== user.id),
     )
+    for (const [id, p] of Object.entries(dmCallParticipants)) {
+      leaveSoundsRef.current.set(Number(id), {
+        key: p.leave_sound, url: p.leave_sound_url,
+      })
+    }
     const prevIds = dmVoiceRosterRef.current
     for (const id of currentIds) {
       if (prevIds.has(id)) continue
@@ -469,7 +486,13 @@ export function useVoiceCall(
       playJoinSoundFor(joined?.join_sound, joined?.join_sound_url)
     }
     for (const id of prevIds) {
-      if (!currentIds.has(id)) playLeaveSound()
+      if (currentIds.has(id)) continue
+      // Здесь профиль ушедшего уже удалён из dmCallParticipants — ростер
+      // звонка и есть список присутствующих. Запоминаем звуки отдельно,
+      // пока человек ещё в списке (см. leaveSoundsRef).
+      const sound = leaveSoundsRef.current.get(id)
+      playLeaveSoundFor(sound?.key, sound?.url)
+      leaveSoundsRef.current.delete(id)
     }
     dmVoiceRosterRef.current = currentIds
   }, [dmCallParticipants, user])

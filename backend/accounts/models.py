@@ -9,6 +9,8 @@ from django.db import models
 # Ключи готовых вариантов совпадают с теми, что рисует и проигрывает клиент
 # (см. web/src/joinSound.ts). Сами звуки, кроме 'default', синтезируются в
 # браузере через Web Audio — файлов для них не нужно вовсе.
+# Те же ключи служат и звуку ВЫХОДА (см. User.leave_sound): набор вариантов у
+# них общий, отличается только момент, когда он играет.
 JOIN_SOUND_DEFAULT = "default"
 JOIN_SOUND_NONE = "none"
 JOIN_SOUND_CUSTOM = "custom"
@@ -27,6 +29,15 @@ JOIN_SOUND_PRESETS = (
 # размер: 512 КБ это несколько секунд в любом принимаемом формате. Ровно тот
 # же лимит, что у соундборда, — и по той же причине.
 MAX_JOIN_SOUND_BYTES = 512 * 1024
+
+
+def leave_sound_upload_to(instance, filename: str) -> str:
+    """MEDIA_ROOT/leave_sounds/<токен>/sound.<ext> — см. join_sound_upload_to,
+    всё то же самое и по тем же причинам."""
+    from chat.uploads import SOUND_EXTENSIONS
+
+    ext = SOUND_EXTENSIONS.get(instance.leave_sound_content_type, "bin")
+    return f"leave_sounds/{instance.leave_sound_token}/sound.{ext}"
 
 
 def join_sound_upload_to(instance, filename: str) -> str:
@@ -253,6 +264,27 @@ class User(AbstractUser):
     join_sound_content_type = models.CharField(max_length=100, blank=True, default="")
     join_sound_file = models.FileField(
         upload_to=join_sound_upload_to, max_length=300, blank=True)
+
+    # Звук ВЫХОДА — зеркало звука входа: те же варианты, тот же файл-путь,
+    # то же правило «слышат остальные». Отдельные поля, а не один звук на
+    # оба события: уходить под ту же мелодию, под которую пришёл, — не то,
+    # чего от этой настройки ждут.
+    leave_sound = models.CharField(
+        max_length=16, choices=JOIN_SOUND_PRESETS, default=JOIN_SOUND_DEFAULT)
+    leave_sound_token = models.UUIDField(default=uuid.uuid4, editable=False)
+    leave_sound_content_type = models.CharField(max_length=100, blank=True, default="")
+    leave_sound_file = models.FileField(
+        upload_to=leave_sound_upload_to, max_length=300, blank=True)
+
+    def leave_sound_url(self) -> str:
+        """Что играть остальным при моём выходе — см. join_sound_url."""
+        if self.leave_sound != JOIN_SOUND_CUSTOM or not self.leave_sound_file:
+            return ""
+        return self.leave_sound_file.url
+
+    def custom_leave_sound_url(self) -> str:
+        """Есть ли загруженный файл выхода — см. custom_join_sound_url."""
+        return self.leave_sound_file.url if self.leave_sound_file else ""
 
     def join_sound_url(self) -> str:
         """ЧТО ИГРАТЬ ОСТАЛЬНЫМ: адрес файла или пусто, если выбран готовый

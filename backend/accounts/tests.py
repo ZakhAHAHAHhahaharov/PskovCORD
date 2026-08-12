@@ -856,20 +856,20 @@ class JoinSoundTests(APITestCase):
 
     def test_pick_preset(self):
         resp = self.client.put(
-            "/api/auth/me/join-sound", {"join_sound": "chime"}, format="json")
+            "/api/auth/me/join-sound", {"sound": "chime"}, format="json")
         self.assertEqual(resp.status_code, 200, resp.data)
         self.assertEqual(resp.data["join_sound"], "chime")
 
     def test_unknown_preset_rejected(self):
         resp = self.client.put(
-            "/api/auth/me/join-sound", {"join_sound": "сирена"}, format="json")
+            "/api/auth/me/join-sound", {"sound": "сирена"}, format="json")
         self.assertEqual(resp.status_code, 400)
 
     def test_custom_without_file_rejected(self):
         """Иначе человек выберет «свой» и услышит тишину, думая, что выбрал
         звук."""
         resp = self.client.put(
-            "/api/auth/me/join-sound", {"join_sound": "custom"}, format="json")
+            "/api/auth/me/join-sound", {"sound": "custom"}, format="json")
         self.assertEqual(resp.status_code, 400)
 
     def test_upload_switches_to_custom(self):
@@ -902,14 +902,14 @@ class JoinSoundTests(APITestCase):
         self.client.put(
             "/api/auth/me/join-sound", {"file": self._ogg()}, format="multipart")
         self.client.put(
-            "/api/auth/me/join-sound", {"join_sound": "pop"}, format="json")
+            "/api/auth/me/join-sound", {"sound": "pop"}, format="json")
         self.user.refresh_from_db()
         self.assertTrue(self.user.join_sound_file)
         # Пока выбран готовый вариант, url наружу не отдаётся.
         self.assertEqual(self.user.join_sound_url(), "")
 
         back = self.client.put(
-            "/api/auth/me/join-sound", {"join_sound": "custom"}, format="json")
+            "/api/auth/me/join-sound", {"sound": "custom"}, format="json")
         self.assertEqual(back.status_code, 200)
         self.assertTrue(back.data["join_sound_url"])
 
@@ -924,7 +924,7 @@ class JoinSoundTests(APITestCase):
     def test_anonymous_cannot_set(self):
         self.client.force_authenticate(None)
         resp = self.client.put(
-            "/api/auth/me/join-sound", {"join_sound": "pop"}, format="json")
+            "/api/auth/me/join-sound", {"sound": "pop"}, format="json")
         self.assertIn(resp.status_code, (401, 403))
 
     def test_uploaded_file_stays_reachable_after_picking_preset(self):
@@ -938,7 +938,7 @@ class JoinSoundTests(APITestCase):
         self.client.put(
             "/api/auth/me/join-sound", {"file": self._ogg()}, format="multipart")
         resp = self.client.put(
-            "/api/auth/me/join-sound", {"join_sound": "blip"}, format="json")
+            "/api/auth/me/join-sound", {"sound": "blip"}, format="json")
         self.assertEqual(resp.data["join_sound"], "blip")
         # Остальным играть нечего...
         self.assertEqual(resp.data["join_sound_url"], "")
@@ -951,3 +951,33 @@ class JoinSoundTests(APITestCase):
         resp = self.client.delete("/api/auth/me/join-sound")
         self.assertEqual(resp.data["join_sound_url"], "")
         self.assertEqual(resp.data["custom_join_sound_url"], "")
+
+    def test_leave_sound_is_independent(self):
+        """Вход и выход настраиваются раздельно: уходить под ту же мелодию,
+        под которую пришёл, — не то, чего от настройки ждут."""
+        self.client.put("/api/auth/me/join-sound", {"sound": "chime"}, format="json")
+        resp = self.client.put(
+            "/api/auth/me/leave-sound", {"sound": "pop"}, format="json")
+        self.assertEqual(resp.status_code, 200, resp.data)
+        self.assertEqual(resp.data["join_sound"], "chime")
+        self.assertEqual(resp.data["leave_sound"], "pop")
+
+    def test_leave_sound_upload_and_clear(self):
+        up = self.client.put(
+            "/api/auth/me/leave-sound", {"file": self._ogg()}, format="multipart")
+        self.assertEqual(up.status_code, 200, up.data)
+        self.assertEqual(up.data["leave_sound"], "custom")
+        self.assertIn("/media/leave_sounds/", up.data["leave_sound_url"])
+        # Файл входа при этом не тронут — у них разные поля и разные пути.
+        self.assertEqual(up.data["custom_join_sound_url"], "")
+
+        cleared = self.client.delete("/api/auth/me/leave-sound")
+        self.assertEqual(cleared.data["leave_sound"], "default")
+        self.assertEqual(cleared.data["custom_leave_sound_url"], "")
+
+    def test_leave_sound_rejects_non_audio(self):
+        bogus = SimpleUploadedFile(
+            "s.ogg", b"<html>nope</html>", content_type="audio/ogg")
+        resp = self.client.put(
+            "/api/auth/me/leave-sound", {"file": bogus}, format="multipart")
+        self.assertEqual(resp.status_code, 400)

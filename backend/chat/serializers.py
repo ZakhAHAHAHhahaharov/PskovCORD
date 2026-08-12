@@ -906,6 +906,8 @@ class ConversationSerializer(serializers.ModelSerializer):
                 **UserSerializer(user).data,
                 "join_sound": user.join_sound,
                 "join_sound_url": user.join_sound_url(),
+                "leave_sound": user.leave_sound,
+                "leave_sound_url": user.leave_sound_url(),
             }
             for user in qs
         ]
