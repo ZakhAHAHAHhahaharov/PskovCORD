@@ -1,4 +1,5 @@
 import { useLayoutEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { MonitorPlay } from 'lucide-react'
 import { ScreenFps, ScreenHeight, useSettings } from '../settings'
 import { useEscToClose } from '../modalStack'
@@ -98,7 +99,17 @@ export default function ScreenQualityModal({
     onClose()
   }
 
-  return (
+  // Портал в body — а не просто ребёнок ScreenShareButton (тот сидит внутри
+  // .voice-controls-bar). У панели opacity:0/pointer-events:none, пока
+  // курсор неподвижен (см. VoiceStage.CONTROLS_HIDE_DELAY_MS) — не выйди
+  // попап порталом, он утащил бы это состояние тоже: opacity родителя
+  // применяется ко всему поддереву рендера, ДАЖЕ к position:fixed
+  // потомкам, значение самого попапа тут ничего не решает. Раньше
+  // (центрированная модалка, см. ebddcd0) это было незаметно — путь курсора
+  // к центру экрана сам сбрасывал таймер скрытия панели, а у попапа рядом с
+  // кнопкой сбрасывать нечем: пауза на 2.5с при выборе качества гасила его
+  // подряд с панелью, и по нему переставали попадать клики.
+  return createPortal(
     <div className="screen-quality-popover" ref={ref}>
       <div className="screen-quality-head">
         <MonitorPlay size={15} /> Демонстрация экрана
@@ -149,6 +160,7 @@ export default function ScreenQualityModal({
           Начать
         </button>
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }

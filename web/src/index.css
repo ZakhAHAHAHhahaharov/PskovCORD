@@ -5405,7 +5405,13 @@ button.moderator-panel-row-link {
   color: var(--text-normal);
 }
 
-.member-name.dim {
+/* :not(...) у неоновых/градиентных/мультяшных/выделенных ников — иначе это
+   правило (2 класса) и .name-style.effect-* (тоже 2 класса) равны по
+   специфичности, и .dim, идущий в файле ПОЗЖЕ, всегда перебивал бы выбранный
+   пользователем цвет серым, даже когда name_color_1 задан явно. Сам эффект
+   (анимация подпрыгивания/пульсации и т.п.) при этом никуда не девался — там
+   отдельное свойство animation, тускнел только color. */
+.member-name.dim:not(.effect-gradient):not(.effect-neon):not(.effect-cartoon):not(.effect-highlight) {
   color: var(--text-faint);
 }
 
