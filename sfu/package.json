@@ -14,7 +14,7 @@
   },
   "dependencies": {
     "jsonwebtoken": "^9.0.2",
-    "mediasoup": "^3.24.1",
+    "mediasoup": "^3.24.2",
     "ws": "^8.21.3"
   },
   "devDependencies": {
