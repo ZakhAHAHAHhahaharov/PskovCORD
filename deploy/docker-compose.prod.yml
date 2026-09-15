@@ -46,7 +46,7 @@ services:
       - "--realm=pskord.zlgvpn.org"
       - "--use-auth-secret"
       - "--static-auth-secret=${TURN_SECRET}"
-      - "--external-ip=94.26.90.101"
+      - "--external-ip=${SFU_ANNOUNCED_IP:-94.26.90.101}"
       - "--fingerprint"
       - "--no-cli"
     restart: unless-stopped
