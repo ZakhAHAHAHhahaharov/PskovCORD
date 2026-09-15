@@ -1,8 +1,12 @@
 import { useState } from 'react'
-import { Check, X } from 'lucide-react'
+import { Check, ShieldCheck, X } from 'lucide-react'
 import { api } from '../api'
+import { useAuth } from '../auth'
 import { APP_VERSION, currentPlatform, recentErrors } from '../errorTransport'
 import { useEscToClose } from '../modalStack'
+
+/** Путь нарочно не /admin/ — см. backend/config/urls.py и DEPLOY.md. */
+const ADMIN_PANEL_PATH = '/adminpskordpro/'
 
 const MAX_LENGTH = 4000
 
@@ -32,6 +36,8 @@ function pluralErrors(count: number): string {
  * не чинится, а рядом со стектрейсом минутной давности — это готовый тикет.
  */
 export default function BugReportModal({ onClose }: { onClose: () => void }) {
+  const { user } = useAuth()
+  const commitHash = APP_VERSION.split('+')[1] || ''
   const [description, setDescription] = useState('')
   const [steps, setSteps] = useState('')
   const [sending, setSending] = useState(false)
@@ -138,10 +144,7 @@ export default function BugReportModal({ onClose }: { onClose: () => void }) {
 
         {error && <p className="bug-report-error">{error}</p>}
 
-        <div className="delete-message-actions">
-          <button type="button" className="btn-secondary" onClick={onClose} disabled={sending}>
-            Отмена
-          </button>
+        <div className="delete-message-actions bug-report-actions">
           <button
             type="button"
             className="btn-primary"
@@ -150,7 +153,26 @@ export default function BugReportModal({ onClose }: { onClose: () => void }) {
           >
             {sending ? 'Отправляем…' : 'Отправить'}
           </button>
+          <button
+            type="button"
+            className="btn-primary btn-primary-danger"
+            onClick={onClose}
+            disabled={sending}
+          >
+            Отмена
+          </button>
+          {user?.is_superuser && (
+            <a className="btn-secondary bug-report-admin-link" href={ADMIN_PANEL_PATH} target="_blank" rel="noreferrer">
+              <ShieldCheck size={14} />
+              Админ-панель
+            </a>
+          )}
         </div>
+
+        {/* В обращение (см. submit() выше) уезжает полный APP_VERSION —
+            здесь же нужен только хеш, версию пакета в интерфейсе никто
+            не спрашивает. */}
+        {commitHash && <p className="bug-report-version">#{commitHash}</p>}
       </div>
     </div>
   )

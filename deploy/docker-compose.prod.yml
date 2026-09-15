@@ -79,6 +79,11 @@ services:
     build:
       context: ..
       dockerfile: deploy/backend.Dockerfile
+      # Проставляет GITHUB_SHA в web-build стадии (см. backend.Dockerfile и
+      # web/vite.config.ts) — сам GITHUB_SHA берёт deploy.sh на сервере,
+      # тут не GH Actions раннер, откуда он есть по умолчанию.
+      args:
+        GITHUB_SHA: ${GITHUB_SHA:-}
     env_file: ../backend/.env
     environment:
       # Прод-значения голоса задаём здесь (перекрывают backend/.env), чтобы не

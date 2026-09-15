@@ -7,15 +7,21 @@
 # Теги зафиксированы до патча: плавающие node:20-alpine / python:3.12-slim
 # могли затянуть в прод другую версию на любой пересборке (то есть на каждый
 # push в main) без единой строчки ревью. Бампить руками осознанно.
-FROM node:20.20.2-alpine AS web-build
+FROM node:26.8.1-alpine AS web-build
 WORKDIR /web
 COPY web/package.json web/package-lock.json ./
 RUN npm ci
 COPY web/ ./
+# Хеш коммита для APP_VERSION (см. web/vite.config.ts) — на GH Actions
+# раннере GITHUB_SHA есть сам по себе, но прод собирается уже НА СЕРВЕРЕ
+# (deploy.sh -> docker compose build), где его никто не проставляет. Значит
+# передавать явно, build-arg'ом из docker-compose.prod.yml.
+ARG GITHUB_SHA
+ENV GITHUB_SHA=$GITHUB_SHA
 RUN npm run build
 
 # ---- этап 2: backend ----
-FROM python:3.12.13-slim
+FROM python:3.14.6-slim
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 

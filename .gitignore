@@ -30,6 +30,9 @@ deploy/staticfiles/
 backend/media/
 deploy/media/
 
+# Личные настройки Claude Code (permission overrides и т.п.)
+.claude/settings.local.json
+
 # IDE / OS
 .idea/
 .vscode/
