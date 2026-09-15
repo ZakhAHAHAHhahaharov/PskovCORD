@@ -108,6 +108,9 @@ export interface Me extends User {
   leave_sound: JoinSoundKey
   leave_sound_url: string
   custom_leave_sound_url: string
+  /** Только для ссылки на админку в BugReportModal — нигде больше на
+   * фронте роль не проверяется, все реальные ограничения — на бэкенде. */
+  is_superuser: boolean
 }
 
 /** Тяжёлая часть чужого профиля — грузится, когда открыли карточку. */

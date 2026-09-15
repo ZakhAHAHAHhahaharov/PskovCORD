@@ -1,8 +1,12 @@
 import { useState } from 'react'
-import { Check, X } from 'lucide-react'
+import { Check, ShieldCheck, X } from 'lucide-react'
 import { api } from '../api'
+import { useAuth } from '../auth'
 import { APP_VERSION, currentPlatform, recentErrors } from '../errorTransport'
 import { useEscToClose } from '../modalStack'
+
+/** Путь нарочно не /admin/ — см. backend/config/urls.py и DEPLOY.md. */
+const ADMIN_PANEL_PATH = '/adminpskordpro/'
 
 const MAX_LENGTH = 4000
 
@@ -32,6 +36,7 @@ function pluralErrors(count: number): string {
  * не чинится, а рядом со стектрейсом минутной давности — это готовый тикет.
  */
 export default function BugReportModal({ onClose }: { onClose: () => void }) {
+  const { user } = useAuth()
   const [description, setDescription] = useState('')
   const [steps, setSteps] = useState('')
   const [sending, setSending] = useState(false)
@@ -151,6 +156,18 @@ export default function BugReportModal({ onClose }: { onClose: () => void }) {
             {sending ? 'Отправляем…' : 'Отправить'}
           </button>
         </div>
+
+        {user?.is_superuser && (
+          <a
+            className="bug-report-admin-link"
+            href={ADMIN_PANEL_PATH}
+            target="_blank"
+            rel="noreferrer"
+          >
+            <ShieldCheck size={14} />
+            Админ-панель
+          </a>
+        )}
 
         {APP_VERSION && <p className="bug-report-version">{APP_VERSION}</p>}
       </div>

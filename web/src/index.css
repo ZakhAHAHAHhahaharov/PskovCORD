@@ -11013,6 +11013,23 @@ button.settings-row-clickable:hover .settings-row-label {
 
 /* Хеш коммита рядом с версией — чтобы можно было на глаз сверить со
    стектрейсом в тикете, не переписывая версию из поля app_version вручную. */
+/* Видна только суперюзерам (see BugReportModal.tsx) — быстрый переход в
+   Django-админку прямо из формы репорта, без запоминания /adminpskordpro/. */
+.bug-report-admin-link {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin: 14px 0 0;
+  font-size: 12px;
+  color: var(--text-faint);
+  text-decoration: none;
+}
+
+.bug-report-admin-link:hover {
+  color: var(--blurple);
+}
+
 .bug-report-version {
   margin: 14px 0 0;
   padding-top: 10px;
