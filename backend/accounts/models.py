@@ -75,6 +75,17 @@ class NameFont(models.Model):
         related_name="uploaded_name_fonts",
         verbose_name="Загрузил",
     )
+    # У разных шрифтов разный x-height при одном и том же font-size —
+    # рукописные/курсивные (Dancing Script и т.п.) визуально выглядят мельче
+    # жирных гротесков при одинаковом номинальном размере. Правится один раз
+    # здесь (CSS size-adjust у @font-face, см. useNameFonts.ts) — не в каждом
+    # месте, где применяется шрифт (сообщения, ростер, карточка профиля,
+    # превью в пикере), и без правки кода на каждый новый "мелкий" шрифт.
+    size_adjust = models.PositiveIntegerField(
+        default=100,
+        verbose_name="Масштаб (% от номинального размера)",
+        help_text="100 — как есть. Увеличьте для мелких/тонких шрифтов (например, рукописных).",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

@@ -210,12 +210,14 @@ export default function DisplayNameStyleModal({
 
             {error && <div className="login-error">{error}</div>}
 
-            <button className="btn-primary" onClick={handleSave} disabled={saving}>
-              {saving ? <Loader2 size={15} className="spin" /> : 'Сохранить'}
-            </button>
-            <button className="modal-close" onClick={onClose}>
-              Отмена
-            </button>
+            <div className="dns-save-actions">
+              <button className="btn-primary" onClick={handleSave} disabled={saving}>
+                {saving ? <Loader2 size={15} className="spin" /> : 'Сохранить'}
+              </button>
+              <button className="btn-primary btn-primary-danger" onClick={onClose}>
+                Отмена
+              </button>
+            </div>
           </div>
 
           {/* data-theme здесь ВСЕГДА явный ('dark' И 'light' — оба со своими
