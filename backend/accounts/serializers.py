@@ -181,7 +181,11 @@ class MeSerializer(serializers.ModelSerializer):
             # другим звук отдаётся вместе с ростером (см. chat.views).
             "join_sound", "join_sound_url", "custom_join_sound_url",
             "leave_sound", "leave_sound_url", "custom_leave_sound_url",
+            # Только для ссылки на админку в BugReportModal — ProfileUpdateSerializer
+            # (PATCH) этого поля не знает, так что сюда его read-only достаточно.
+            "is_superuser",
         ]
+        read_only_fields = ["is_superuser"]
 
     def get_avatar_animated(self, obj) -> bool:
         return bool(obj.avatar_anim)

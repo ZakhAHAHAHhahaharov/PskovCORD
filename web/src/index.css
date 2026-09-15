@@ -11005,10 +11005,54 @@ button.settings-row-clickable:hover .settings-row-label {
   color: var(--text-faint);
 }
 
+/* Обе кнопки во всю ширину, «Отправить» сверху, «Отмена» — под ней и
+   деструктивным цветом (закрыть форму с уже написанным текстом — тоже
+   действие, которое стоит терять осознанно, а не тянуться мимо кнопки). */
+.bug-report-actions {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.bug-report-actions .btn-primary,
+.bug-report-actions .btn-secondary {
+  margin-top: 0;
+  width: 100%;
+  /* .btn-secondary по умолчанию компактнее (список действий строкой) —
+     здесь она в одном столбце с .btn-primary и должна быть той же высоты. */
+  padding: 11px;
+  font-size: calc(15px * var(--font-scale, 1));
+  box-sizing: border-box;
+}
+
 .bug-report-error {
   margin: 12px 0 0;
   font-size: 13px;
   color: var(--red);
+}
+
+/* Хеш коммита рядом с версией — чтобы можно было на глаз сверить со
+   стектрейсом в тикете, не переписывая версию из поля app_version вручную. */
+/* Видна только суперюзерам (see BugReportModal.tsx) — быстрый переход в
+   Django-админку прямо из формы репорта, без запоминания /adminpskordpro/.
+   .btn-secondary — обычный серый, чтобы не спорить взглядом с основным
+   действием (Отправить) и деструктивным (Отмена) выше. */
+.bug-report-admin-link {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  text-decoration: none;
+}
+
+.bug-report-version {
+  margin: 14px 0 0;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-color);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  text-align: center;
+  color: var(--text-faint);
+  user-select: text;
 }
 
 .bug-report-done {
