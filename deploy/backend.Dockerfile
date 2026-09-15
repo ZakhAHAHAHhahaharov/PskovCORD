@@ -7,7 +7,7 @@
 # Теги зафиксированы до патча: плавающие node:20-alpine / python:3.12-slim
 # могли затянуть в прод другую версию на любой пересборке (то есть на каждый
 # push в main) без единой строчки ревью. Бампить руками осознанно.
-FROM node:20.20.2-alpine AS web-build
+FROM node:26.8.1-alpine AS web-build
 WORKDIR /web
 COPY web/package.json web/package-lock.json ./
 RUN npm ci
