@@ -26,4 +26,10 @@ jobs:
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_KEY }}
           port: ${{ secrets.SSH_PORT }}
+          # Дефолт appleboy/ssh-action — 10m. Сборка sfu (npm ci) без кэша
+          # слоя (после бампа package-lock.json, см. Dependabot) сама по
+          # себе уже занимала ~11-12 минут — см. инцидент 2026-09-15, где
+          # именно на этом шаге деплой оборвался по таймауту, а не по ошибке
+          # сборки.
+          command_timeout: 25m
           script: bash /opt/pskovcord/deploy/deploy.sh
