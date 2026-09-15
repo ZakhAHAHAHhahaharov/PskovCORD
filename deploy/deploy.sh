@@ -12,6 +12,12 @@ echo "[deploy] fetching latest main..."
 git fetch origin
 git reset --hard origin/main
 
+# Для APP_VERSION в веб-клиенте (см. web/vite.config.ts) — на GH Actions
+# раннере GITHUB_SHA есть сам по себе, а этот скрипт выполняется уже на
+# сервере (по SSH), где его никто не проставляет. Без export'а прод вечно
+# показывал бы плашку "+dev", как при локальной разработке.
+export GITHUB_SHA="$(git rev-parse HEAD)"
+
 echo "[deploy] building images (backend + sfu)..."
 $COMPOSE build
 

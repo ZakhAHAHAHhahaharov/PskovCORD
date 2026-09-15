@@ -12,6 +12,12 @@ WORKDIR /web
 COPY web/package.json web/package-lock.json ./
 RUN npm ci
 COPY web/ ./
+# Хеш коммита для APP_VERSION (см. web/vite.config.ts) — на GH Actions
+# раннере GITHUB_SHA есть сам по себе, но прод собирается уже НА СЕРВЕРЕ
+# (deploy.sh -> docker compose build), где его никто не проставляет. Значит
+# передавать явно, build-arg'ом из docker-compose.prod.yml.
+ARG GITHUB_SHA
+ENV GITHUB_SHA=$GITHUB_SHA
 RUN npm run build
 
 # ---- этап 2: backend ----
