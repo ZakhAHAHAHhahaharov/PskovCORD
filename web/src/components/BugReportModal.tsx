@@ -37,6 +37,7 @@ function pluralErrors(count: number): string {
  */
 export default function BugReportModal({ onClose }: { onClose: () => void }) {
   const { user } = useAuth()
+  const commitHash = APP_VERSION.split('+')[1] || ''
   const [description, setDescription] = useState('')
   const [steps, setSteps] = useState('')
   const [sending, setSending] = useState(false)
@@ -168,7 +169,10 @@ export default function BugReportModal({ onClose }: { onClose: () => void }) {
           )}
         </div>
 
-        {APP_VERSION && <p className="bug-report-version">{APP_VERSION}</p>}
+        {/* В обращение (см. submit() выше) уезжает полный APP_VERSION —
+            здесь же нужен только хеш, версию пакета в интерфейсе никто
+            не спрашивает. */}
+        {commitHash && <p className="bug-report-version">#{commitHash}</p>}
       </div>
     </div>
   )
