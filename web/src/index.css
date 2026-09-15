@@ -11005,6 +11005,19 @@ button.settings-row-clickable:hover .settings-row-label {
   color: var(--text-faint);
 }
 
+/* Обе кнопки во всю ширину, «Отправить» сверху, «Отмена» — под ней и
+   деструктивным цветом (закрыть форму с уже написанным текстом — тоже
+   действие, которое стоит терять осознанно, а не тянуться мимо кнопки). */
+.bug-report-actions {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.bug-report-actions .btn-primary {
+  margin-top: 0;
+  width: 100%;
+}
+
 .bug-report-error {
   margin: 12px 0 0;
   font-size: 13px;

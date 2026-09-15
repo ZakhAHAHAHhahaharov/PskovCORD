@@ -143,10 +143,7 @@ export default function BugReportModal({ onClose }: { onClose: () => void }) {
 
         {error && <p className="bug-report-error">{error}</p>}
 
-        <div className="delete-message-actions">
-          <button type="button" className="btn-secondary" onClick={onClose} disabled={sending}>
-            Отмена
-          </button>
+        <div className="delete-message-actions bug-report-actions">
           <button
             type="button"
             className="btn-primary"
@@ -154,6 +151,14 @@ export default function BugReportModal({ onClose }: { onClose: () => void }) {
             disabled={sending || !description.trim()}
           >
             {sending ? 'Отправляем…' : 'Отправить'}
+          </button>
+          <button
+            type="button"
+            className="btn-primary btn-primary-danger"
+            onClick={onClose}
+            disabled={sending}
+          >
+            Отмена
           </button>
         </div>
 
