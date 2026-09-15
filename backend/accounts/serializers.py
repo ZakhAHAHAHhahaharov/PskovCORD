@@ -100,7 +100,7 @@ class NameFontSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = NameFont
-        fields = ["id", "label", "file"]
+        fields = ["id", "label", "file", "size_adjust"]
 
 
 class UserSerializer(serializers.ModelSerializer):

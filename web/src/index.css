@@ -1618,6 +1618,23 @@ input {
   background: rgba(88, 101, 242, 0.12);
 }
 
+/* Сохранить/Отмена — раньше .btn-primary шёл без width (сжимался по
+   тексту), а Отмена (.modal-close) была во всю ширину, но синяя, как
+   Сохранить — визуально спорили друг с другом. Теперь обе одной ширины
+   и высоты, Отмена — деструктивного цвета (закрыть с несохранённым
+   черновиком стиля — тоже действие, которое стоит терять осознанно). */
+.dns-save-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 20px;
+}
+
+.dns-save-actions .btn-primary {
+  margin-top: 0;
+  width: 100%;
+}
+
 .dns-font-card-sample {
   font-size: calc(20px * var(--font-scale, 1));
   font-weight: 700;
@@ -5560,6 +5577,22 @@ button.moderator-panel-row-link {
   display: flex;
   gap: 8px;
   flex-shrink: 0;
+}
+
+/* Сброс (.btn-secondary) и Сохранить (.btn-primary) были разной высоты —
+   у .btn-primary margin-top:20px (рассчитан на «кнопка последняя в
+   модале», тут её нет) плюс более крупный padding/шрифт по умолчанию.
+   Здесь обе — компактные кнопки одной высоты, а Сброс — деструктивным
+   текстом (без сплошной заливки: это малозаметное действие в узкой
+   плашке, а не основной сценарий модала, как Отмена в самой форме). */
+.unsaved-changes-nudge-actions .btn-primary {
+  margin-top: 0;
+  padding: 8px 14px;
+  font-size: calc(13px * var(--font-scale, 1));
+}
+
+.unsaved-changes-nudge-actions .btn-secondary {
+  color: var(--red);
 }
 
 .modal {

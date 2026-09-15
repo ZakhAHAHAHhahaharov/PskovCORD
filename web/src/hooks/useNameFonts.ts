@@ -33,11 +33,15 @@ function ensureFontFacesInjected(fonts: NameFont[]) {
     document.head.appendChild(styleEl)
   }
   for (const font of toAdd) {
+    // size-adjust ≠ 100 — только когда админ явно выставил его в карточке
+    // шрифта (см. accounts.models.NameFont.size_adjust): дефолт 100%
+    // ничего не меняет, декларация без него безопаснее в старых браузерах.
+    const sizeAdjust = font.size_adjust !== 100 ? ` size-adjust: ${font.size_adjust}%;` : ''
     styleEl.appendChild(
       document.createTextNode(
         `@font-face { font-family: 'pc-namefont-${font.id}'; ` +
           `src: url(${JSON.stringify(font.file)}) ${formatHint(font.file)}; ` +
-          `font-display: swap; }`,
+          `font-display: swap;${sizeAdjust} }`,
       ),
     )
     injectedIds.add(font.id)

@@ -22,7 +22,7 @@ class NameFontAdmin(admin.ModelAdmin):
     шрифта не требует Pillow-обработки перед сохранением, обычный FileField
     прекрасно сохраняется автосейвом ModelForm."""
 
-    list_display = ("label", "uploaded_by", "created_at")
+    list_display = ("label", "size_adjust", "uploaded_by", "created_at")
     search_fields = ("label",)
     readonly_fields = ("uploaded_by", "created_at")
 

@@ -66,6 +66,10 @@ export interface NameFont {
   label: string
   /** URL файла шрифта — подставляется в @font-face (см. useNameFonts). */
   file: string
+  /** CSS size-adjust в % (см. useNameFonts) — у рукописных/курсивных
+   * шрифтов x-height меньше, чем у гротесков, при том же номинальном
+   * размере, без этого они визуально выглядят мельче остальных. */
+  size_adjust: number
 }
 
 /** Свой профиль (/api/auth/me) — всё, включая личные настройки и баннер. */
