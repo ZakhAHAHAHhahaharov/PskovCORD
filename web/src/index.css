@@ -11030,17 +11030,20 @@ button.settings-row-clickable:hover .settings-row-label {
   color: var(--red);
 }
 
-/* Хеш коммита рядом с версией — чтобы можно было на глаз сверить со
-   стектрейсом в тикете, не переписывая версию из поля app_version вручную. */
 /* Видна только суперюзерам (see BugReportModal.tsx) — быстрый переход в
    Django-админку прямо из формы репорта, без запоминания /adminpskordpro/.
-   .btn-secondary — обычный серый, чтобы не спорить взглядом с основным
-   действием (Отправить) и деструктивным (Отмена) выше. */
+   Наверху модалки, а не среди Отправить/Отмена: это редкое действие не для
+   текущей задачи (репорт), а параллельное — не должно стоять в одном ряду
+   с основным потоком формы. .btn-secondary — обычный серый, чтобы не
+   спорить взглядом с этим потоком, когда он всё же виден. */
 .bug-report-admin-link {
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 6px;
+  width: 100%;
+  margin-bottom: 16px;
+  box-sizing: border-box;
   text-decoration: none;
 }
 
