@@ -11011,6 +11011,19 @@ button.settings-row-clickable:hover .settings-row-label {
   color: var(--red);
 }
 
+/* Хеш коммита рядом с версией — чтобы можно было на глаз сверить со
+   стектрейсом в тикете, не переписывая версию из поля app_version вручную. */
+.bug-report-version {
+  margin: 14px 0 0;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-color);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  text-align: center;
+  color: var(--text-faint);
+  user-select: text;
+}
+
 .bug-report-done {
   display: flex;
   flex-direction: column;

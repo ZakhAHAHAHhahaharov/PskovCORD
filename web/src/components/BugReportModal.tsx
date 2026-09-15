@@ -151,6 +151,8 @@ export default function BugReportModal({ onClose }: { onClose: () => void }) {
             {sending ? 'Отправляем…' : 'Отправить'}
           </button>
         </div>
+
+        {APP_VERSION && <p className="bug-report-version">{APP_VERSION}</p>}
       </div>
     </div>
   )
