@@ -105,6 +105,14 @@ export default function BugReportModal({ onClose }: { onClose: () => void }) {
         <button className="privacy-modal-close" title="Закрыть" onClick={onClose}>
           <X size={18} />
         </button>
+
+        {user?.is_superuser && (
+          <a className="btn-secondary bug-report-admin-link" href={ADMIN_PANEL_PATH} target="_blank" rel="noreferrer">
+            <ShieldCheck size={14} />
+            Админ-панель
+          </a>
+        )}
+
         <h2 className="modal-title">Сообщить о проблеме</h2>
 
         <label className="bug-report-label" htmlFor="bug-report-description">
@@ -161,12 +169,6 @@ export default function BugReportModal({ onClose }: { onClose: () => void }) {
           >
             Отмена
           </button>
-          {user?.is_superuser && (
-            <a className="btn-secondary bug-report-admin-link" href={ADMIN_PANEL_PATH} target="_blank" rel="noreferrer">
-              <ShieldCheck size={14} />
-              Админ-панель
-            </a>
-          )}
         </div>
 
         {/* В обращение (см. submit() выше) уезжает полный APP_VERSION —
