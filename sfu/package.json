@@ -14,12 +14,12 @@
   },
   "dependencies": {
     "jsonwebtoken": "^9.0.2",
-    "mediasoup": "^3.24.1",
+    "mediasoup": "^3.26.0",
     "ws": "^8.21.3"
   },
   "devDependencies": {
     "@types/jsonwebtoken": "^9.0.6",
-    "@types/node": "^26.2.0",
+    "@types/node": "^26.4.0",
     "@types/ws": "^8.5.10",
     "ts-node": "^10.9.2",
     "typescript": "^5.5.4"
