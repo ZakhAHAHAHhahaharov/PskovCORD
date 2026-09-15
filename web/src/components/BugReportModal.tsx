@@ -160,19 +160,13 @@ export default function BugReportModal({ onClose }: { onClose: () => void }) {
           >
             Отмена
           </button>
+          {user?.is_superuser && (
+            <a className="btn-secondary bug-report-admin-link" href={ADMIN_PANEL_PATH} target="_blank" rel="noreferrer">
+              <ShieldCheck size={14} />
+              Админ-панель
+            </a>
+          )}
         </div>
-
-        {user?.is_superuser && (
-          <a
-            className="bug-report-admin-link"
-            href={ADMIN_PANEL_PATH}
-            target="_blank"
-            rel="noreferrer"
-          >
-            <ShieldCheck size={14} />
-            Админ-панель
-          </a>
-        )}
 
         {APP_VERSION && <p className="bug-report-version">{APP_VERSION}</p>}
       </div>
