@@ -21,6 +21,10 @@ const APP_NAME: string = import.meta.env.VITE_APP_NAME || 'PskovCord'
 interface CallParticipant {
   id: number
   username: string
+  /** Приезжает только там, где ростер строится из полного профиля
+   * (dm_voice_peers → conversation.participants) — см. тот же комментарий у
+   * join_sound ниже. */
+  display_name?: string
   avatar_color: string
   avatar_image: string
   muted: boolean
@@ -102,7 +106,8 @@ export function useVoiceCall(
   } | null>(null)
 
   const dmRoster: VoiceRosterMember[] = Object.values(dmCallParticipants).map((p) => ({
-    id: p.id, username: p.username, avatar_color: p.avatar_color, avatar_image: p.avatar_image,
+    id: p.id, username: p.username, display_name: p.display_name,
+    avatar_color: p.avatar_color, avatar_image: p.avatar_image,
     muted: p.muted, deafened: p.deafened, sharing_screen: p.sharing_screen,
     name_font: p.name_font, name_effect: p.name_effect,
     name_color_1: p.name_color_1, name_color_2: p.name_color_2,

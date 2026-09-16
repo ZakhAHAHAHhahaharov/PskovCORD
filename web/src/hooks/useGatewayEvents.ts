@@ -20,6 +20,10 @@ import { useSettings } from '../settings'
 interface CallParticipant {
   id: number
   username: string
+  /** Приезжает только там, где ростер строится из полного профиля
+   * (dm_voice_peers → conversation.participants) — как и avatar_animated
+   * ниже. */
+  display_name?: string
   avatar_color: string
   avatar_image: string
   /** У аватара есть гифка — играет, пока участник говорит (см. avatarAnim.ts).
@@ -768,7 +772,7 @@ export function useGatewayEvents(params: UseGatewayEventsParams) {
           if (p) {
             const flags = peerFlags[id] ?? {}
             next[id] = {
-              id: p.id, username: p.username,
+              id: p.id, username: p.username, display_name: p.display_name,
               avatar_color: p.avatar_color, avatar_image: p.avatar_image,
               avatar_animated: p.avatar_animated,
               muted: !!flags.muted, deafened: !!flags.deafened,

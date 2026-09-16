@@ -9,6 +9,8 @@ import { useVoice } from '../voice'
 export interface ParticipantContextMenuMember {
   id: number
   username: string
+  display_name?: string
+  server_nickname?: string
   sharing_screen: boolean
   muted: boolean
   deafened: boolean
@@ -124,7 +126,9 @@ export default function ParticipantContextMenu({
       className="profile-popup participant-context-menu"
       style={{ left: target.x, top: target.y }}
     >
-      <div className="profile-popup-label">{nickname || member.username}</div>
+      <div className="profile-popup-label">
+        {nickname || member.server_nickname || member.display_name || member.username}
+      </div>
 
       <div className="settings-field participant-menu-volume">
         <div className="settings-field-header">
