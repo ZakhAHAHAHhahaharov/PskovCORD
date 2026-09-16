@@ -93,6 +93,13 @@ function computeGridLayout(
 export interface VoiceRosterMember {
   id: number
   username: string
+  /** Собственное отображаемое имя (см. accounts.models.User.display_name) —
+   * приоритет ниже никнейма на сервере, но выше username. Пусто — не задано. */
+  display_name?: string
+  /** Никнейм на сервере (см. Membership.nickname) — публичный, виден всем;
+   * есть только у участников голосового канала СЕРВЕРА, не у звонков в
+   * личке/группе. */
+  server_nickname?: string
   avatar_color: string
   avatar_image: string
   /** У аватара есть гифка — играет, пока участник говорит (см. avatarAnim.ts). */
@@ -190,7 +197,10 @@ function ParticipantTile({
     onContextMenu?.(point as unknown as ReactMouseEvent)
   })
   const nickname = useNickname(member.id)
-  const displayName = (allowNickname && nickname) || member.username
+  // Тот же приоритет, что и везде в приложении (см. UserName.tsx): мой
+  // приватный никнейм → никнейм на сервере → его display_name → username.
+  const displayName =
+    (allowNickname && nickname) || member.server_nickname || member.display_name || member.username
   return (
     <div
       // Индикатор "говорит" — зелёная рамка ВСЕЙ карточки (а не кольцо
@@ -427,7 +437,10 @@ export default function VoiceStage({
   // ChannelContextMenu), у звонков в личке/группе такого пункта меню нет.
   const namesHidden = roomKind === 'channel' && isHidden(Number(roomId))
   const displayRoster = namesHidden
-    ? roster.map((m) => ({ ...m, username: maskName(m.username) }))
+    // Маскируем и display_name/server_nickname — иначе они утекали бы прямо
+    // через приоритет отображаемого имени, оставляя маску только на username,
+    // который к этому моменту уже никто не показывает.
+    ? roster.map((m) => ({ ...m, username: maskName(m.username), display_name: '', server_nickname: '' }))
     : roster
 
   // mode:'screen' — развёрнута демонстрация экрана (видео/ожидание потока);
@@ -654,7 +667,7 @@ export default function VoiceStage({
       const nickname = nicknameStore.get(uid)
       if (nickname) return nickname
     }
-    return member.username
+    return member.server_nickname || member.display_name || member.username
   }
 
   // Сколько всего тайлов в сетке (участники + свой показ + чужие демки) —
@@ -1039,7 +1052,7 @@ function VoiceLanding({
       {roster.length > 0 ? (
         <div className="voice-landing-members">
           {roster.map((m) => {
-            const name = nicknameStore.get(m.id) || m.username
+            const name = nicknameStore.get(m.id) || m.server_nickname || m.display_name || m.username
             return (
               <button
                 key={m.id}

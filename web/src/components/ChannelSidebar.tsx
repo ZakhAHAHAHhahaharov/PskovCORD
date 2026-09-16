@@ -108,7 +108,7 @@ function VoiceStackedAvatars({
   return (
     <span className="voice-stack">
       {shown.map((m) => {
-        const name = nicknameStore.get(m.id) || m.username
+        const name = nicknameStore.get(m.id) || m.server_nickname || m.display_name || m.username
         return (
           <span className="voice-stack-item" key={m.id} title={name}>
             <Avatar
@@ -236,7 +236,9 @@ function VoiceUserRow({
   // allowNickname в VoiceStage.ParticipantTile: он раскрывал бы личность за
   // маской.
   const nickname = useNickname(m.id)
-  const displayName = (!masked && nickname) || (masked ? maskName(m.username) : m.username)
+  const displayName = masked
+    ? maskName(m.username)
+    : nickname || m.server_nickname || m.display_name || m.username
   return (
     <button
       type="button"
