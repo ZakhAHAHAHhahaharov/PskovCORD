@@ -21,7 +21,7 @@ ENV GITHUB_SHA=$GITHUB_SHA
 RUN npm run build
 
 # ---- этап 2: backend ----
-FROM python:3.14.6-slim
+FROM python:3.14.8-slim
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
